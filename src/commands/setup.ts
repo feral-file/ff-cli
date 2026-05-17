@@ -37,7 +37,7 @@ export const setupCommand = new Command('setup')
         process.exit(1);
       }
 
-      console.log(chalk.blue('\nFF1 Setup\n'));
+      console.log(chalk.blue('\nff-cli setup\n'));
 
       prompt = createPrompt();
       const ask = prompt.ask;

@@ -31,9 +31,9 @@ export const buildCommand = new Command('build')
         if (!stdin.trim()) {
           console.error(chalk.red('No parameters provided'));
           console.log(chalk.yellow('\nUsage:'));
-          console.log('  ff1 build params.json');
-          console.log('  cat params.json | ff1 build');
-          console.log('  echo \'{"requirements":[...]}\' | ff1 build');
+          console.log('  ff-cli build params.json');
+          console.log('  cat params.json | ff-cli build');
+          console.log('  echo \'{"requirements":[...]}\' | ff-cli build');
           process.exit(1);
         }
 

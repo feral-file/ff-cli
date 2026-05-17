@@ -1239,7 +1239,7 @@ export async function processIntentParserRequest(
 
         // Validate and confirm the playlist.
         // args.deviceName may be null/undefined/"null" when the model omits it;
-        // fall back to the CLI --device flag so `ff1 chat --device kitchen` works.
+        // fall back to the CLI --device flag so `ff-cli chat --device kitchen` works.
         const resolvedDeviceName =
           args.deviceName && args.deviceName !== 'null' ? args.deviceName : defaultDeviceName;
         const confirmation = await confirmPlaylistForSending(args.filePath, resolvedDeviceName);

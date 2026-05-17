@@ -210,7 +210,7 @@ export async function sendPlaylistToDevice({
         error: `Could not reach device "${deviceLabel}" at ${device.host}`,
         details:
           'Check that the device is powered on and reachable on your network. ' +
-          'If the device IP changed (e.g. after a factory reset), run: ff1 setup',
+          'If the device IP changed (e.g. after a factory reset), run: ff-cli setup',
       };
     }
 
@@ -250,7 +250,7 @@ export async function sendPlaylistToDevice({
         error: `Could not reach device "${deviceLabel}" at ${device.host}`,
         details:
           'Check that the device is powered on and reachable on your network. ' +
-          'If the device IP changed (e.g. after a factory reset), run: ff1 setup',
+          'If the device IP changed (e.g. after a factory reset), run: ff-cli setup',
       };
     }
 

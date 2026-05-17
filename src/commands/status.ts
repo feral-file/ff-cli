@@ -16,7 +16,7 @@ export const statusCommand = new Command('status')
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
-        console.log(chalk.dim('Run: ff1 setup'));
+        console.log(chalk.dim('Run: ff-cli setup'));
         process.exit(1);
       }
 
@@ -115,7 +115,7 @@ export const statusCommand = new Command('status')
           !status.ok && (!status.optional || Boolean((status as { invalid?: boolean }).invalid))
       );
       if (hasRequired) {
-        console.log(chalk.dim('\nRun: ff1 setup'));
+        console.log(chalk.dim('\nRun: ff-cli setup'));
         process.exit(1);
       }
     } catch (error) {

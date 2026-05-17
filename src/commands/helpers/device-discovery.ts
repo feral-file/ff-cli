@@ -17,7 +17,7 @@ export interface DeviceDiscoverySelection {
  * Run mDNS discovery and prompt the user to pick a device, fall back to
  * manual entry, or skip when an existing device is already configured.
  *
- * Shared between `ff1 setup` and `ff1 device add` so both flows present
+ * Shared between `ff-cli setup` and `ff-cli device add` so both flows present
  * the same selection UX and matching rules.
  */
 export async function discoverAndSelectDevice(
