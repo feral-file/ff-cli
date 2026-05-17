@@ -19,9 +19,13 @@ import * as logger from '../logger';
 
 const RASTER_BASE_URL = 'https://kit.raster.art';
 
+// CAIP-2 chain IDs for the chains the FF indexer supports.
+// Tezos mainnet's CAIP form uses the genesis block hash (NetXdQprcVkpaWU),
+// not the human-readable "tezos:mainnet" — Raster returns the hash form on
+// token rows and rejects "tezos:mainnet" with HTTP 400.
 const CAIP_TO_INDEXER_CHAIN: Record<string, 'ethereum' | 'tezos'> = {
   'eip155:1': 'ethereum',
-  'tezos:mainnet': 'tezos',
+  'tezos:NetXdQprcVkpaWU': 'tezos',
 };
 
 export type IndexerChain = 'ethereum' | 'tezos';
@@ -227,9 +231,9 @@ export async function resolveAddressToArtist(address: string): Promise<number | 
  * List tokens in a Raster artwork (series), one page at a time.
  *
  * Filters out tokens whose chain is not supported by the FF indexer
- * (anything other than `eip155:1` or `tezos:mainnet`) and reports the count
- * via `skippedUnsupported` so the caller can print a single warn-skip line
- * instead of one per token.
+ * (anything other than `eip155:1` or `tezos:NetXdQprcVkpaWU`) and reports
+ * the count via `skippedUnsupported` so the caller can print a single
+ * warn-skip line instead of one per token.
  *
  * Pagination: pass the returned `nextCursor` back as `options.cursor`.
  * `nextCursor` is `null` on the final page. Raster signals end-of-stream by

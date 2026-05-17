@@ -6,6 +6,7 @@ import { createPrompt, promptYesNo } from './helpers/prompt';
 import { parseFindInput } from '../utilities/marketplace-url';
 import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
+import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -104,6 +105,14 @@ export const findCommand = new Command('find')
 
       if (!Array.isArray(items) || items.length === 0) {
         console.error(chalk.red('No tokens could be indexed; cannot build playlist.'));
+        console.error(
+          chalk.dim(
+            '  The FF indexer may be under load when warming a series of previously-unseen tokens.'
+          )
+        );
+        console.error(
+          chalk.dim('  Try `--limit 5` first to warm the cache, then re-run without --limit.')
+        );
         process.exit(1);
       }
 
@@ -150,6 +159,14 @@ async function resolveToArtworkSummary(
   if (parsed.kind === 'ff-url') {
     const coords = await resolveFeralFileToken(parsed);
     return resolveCoordsToSummary(coords);
+  }
+  if (parsed.kind === 'objkt-alias') {
+    const contract = await resolveObjktAlias(parsed.alias);
+    return resolveCoordsToSummary({
+      chain: 'tezos',
+      contract,
+      tokenId: parsed.tokenId,
+    });
   }
   if (parsed.kind === 'address') {
     const artistId = await resolveAddressToArtist(parsed.address);

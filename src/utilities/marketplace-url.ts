@@ -32,6 +32,7 @@ export type ParsedFindInput =
   | { kind: 'token'; coords: TokenCoords; source: 'raw' | MarketplaceSource }
   | { kind: 'address'; chain: IndexerChain; address: string }
   | { kind: 'ff-url'; urlKind: FeralFileUrlKind; identifier: string }
+  | { kind: 'objkt-alias'; alias: string; tokenId: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -114,29 +115,38 @@ function normalizeContract(contract: string): string {
 
 /**
  * Objkt URL forms:
- *   objkt.com/tokens/{KT1...}/{tokenId}
- *   objkt.com/asset/{KT1...}/{tokenId}    (legacy; still redirects)
+ *   objkt.com/tokens/{KT1...}/{tokenId}        — raw FA contract
+ *   objkt.com/tokens/{alias}/{tokenId}         — collection alias (e.g. "hicetnunc")
+ *   objkt.com/asset/{KT1...}/{tokenId}         — legacy redirect
+ *
+ * Aliases are resolved to KT1 contracts via
+ * {@link ./objkt-marketplace#resolveObjktAlias} (separate file because the
+ * lookup is async).
  */
 export function parseObjkt(url: URL): ParsedFindInput {
-  const m = /^\/(?:tokens|asset)\/(KT[A-Za-z0-9]+)\/(\d+)\/?$/.exec(url.pathname);
-  if (m) {
+  const direct = /^\/(?:tokens|asset)\/(KT[A-Za-z0-9]+)\/(\d+)\/?$/.exec(url.pathname);
+  if (direct) {
     return {
       kind: 'token',
       source: 'objkt',
-      coords: { chain: 'tezos', contract: m[1], tokenId: m[2] },
+      coords: { chain: 'tezos', contract: direct[1], tokenId: direct[2] },
     };
+  }
+  const alias = /^\/(?:tokens|asset)\/([a-zA-Z][a-zA-Z0-9_-]*)\/(\d+)\/?$/.exec(url.pathname);
+  if (alias) {
+    return { kind: 'objkt-alias', alias: alias[1], tokenId: alias[2] };
   }
   if (url.pathname.startsWith('/collections/') || url.pathname.startsWith('/collection/')) {
     return {
       kind: 'unsupported',
       reason:
         'Objkt collection URLs are not yet supported in v1. Paste a specific token URL ' +
-        '(objkt.com/tokens/{contract}/{tokenId}) or use `tezos:{contract}:{tokenId}`.',
+        '(objkt.com/tokens/{contract-or-alias}/{tokenId}) or use `tezos:{contract}:{tokenId}`.',
     };
   }
   return {
     kind: 'unsupported',
-    reason: `Objkt URL not recognized: ${url.pathname}. Expected /tokens/{contract}/{tokenId}.`,
+    reason: `Objkt URL not recognized: ${url.pathname}. Expected /tokens/{contract-or-alias}/{tokenId}.`,
   };
 }
 
