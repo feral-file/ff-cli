@@ -10,7 +10,7 @@ import {
 
 // `config` is a single command with an action argument rather than a
 // commander subcommand group. Kept this way to preserve the existing
-// CLI surface (`ff1 config init|show|validate`) used in scripts.
+// CLI surface (`ff-cli config init|show|validate`) used in scripts.
 
 export const configCommand = new Command('config')
   .description('Manage configuration')
@@ -22,7 +22,7 @@ export const configCommand = new Command('config')
         const { userPath } = getConfigPaths();
         const configPath = await createSampleConfig(userPath);
         console.log(chalk.green(`Created ${configPath}`));
-        console.log(chalk.yellow('\nNext: ff1 setup\n'));
+        console.log(chalk.yellow('\nNext: ff-cli setup\n'));
       } else if (action === 'show') {
         const config = getConfig();
         console.log(chalk.blue('\nCurrent configuration\n'));

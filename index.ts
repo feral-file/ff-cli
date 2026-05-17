@@ -32,15 +32,15 @@ try {
 } catch {
   packageJsonPath = resolve(dirname(__filename), 'package.json');
 }
-const { version: packageVersion } = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+const { version: packageVersion, description: packageDescription } = JSON.parse(
+  readFileSync(packageJsonPath, 'utf8')
+);
 
 const program = new Command();
 
 program
   .name('ff-cli')
-  .description(
-    'CLI for building DP-1 playlists of digital art using AI (Claude, Grok, ChatGPT, Gemini)'
-  )
+  .description(packageDescription)
   .version(packageVersion)
   .addHelpText(
     'after',

@@ -19,7 +19,7 @@ deviceCommand
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
-        console.log(chalk.dim('Run: ff1 setup'));
+        console.log(chalk.dim('Run: ff-cli setup'));
         process.exit(1);
       }
 
@@ -28,7 +28,7 @@ deviceCommand
 
       if (devices.length === 0) {
         console.log(chalk.yellow('\nNo devices configured'));
-        console.log(chalk.dim('Run: ff1 device add'));
+        console.log(chalk.dim('Run: ff-cli device add'));
         console.log();
         return;
       }
@@ -81,7 +81,7 @@ deviceCommand
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
-        console.log(chalk.dim('Run: ff1 setup'));
+        console.log(chalk.dim('Run: ff-cli setup'));
         process.exit(1);
       }
 
@@ -178,7 +178,7 @@ deviceCommand
               `\nError: device name "${deviceName}" is already used by another device (${nameConflict.host}).`
             )
           );
-          console.error(chalk.dim('Use a different name or run "ff1 device remove" first.'));
+          console.error(chalk.dim('Use a different name or run "ff-cli device remove" first.'));
           closePrompt();
           process.exit(1);
         }
@@ -283,7 +283,7 @@ deviceCommand
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
-        console.log(chalk.dim('Run: ff1 setup'));
+        console.log(chalk.dim('Run: ff-cli setup'));
         process.exit(1);
       }
 
@@ -292,7 +292,7 @@ deviceCommand
 
       if (existingDevices.length === 0) {
         console.log(chalk.yellow('\nNo devices configured'));
-        console.log(chalk.dim('Run: ff1 device add\n'));
+        console.log(chalk.dim('Run: ff-cli device add\n'));
         process.exit(1);
       }
 

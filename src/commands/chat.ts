@@ -42,13 +42,13 @@ export const chatCommand = new Command('chat')
           validation.errors.forEach((error) => {
             console.error(chalk.red(`  • ${error}`));
           });
-          console.log(chalk.yellow('\nRun: ff1 setup\n'));
+          console.log(chalk.yellow('\nRun: ff-cli setup\n'));
           process.exit(1);
         }
 
         // Non-interactive mode: content was passed as a positional argument.
         if (content) {
-          console.log(chalk.blue('\nFF1 Chat (non-interactive)\n'));
+          console.log(chalk.blue('\nff-cli chat (non-interactive)\n'));
           console.log(chalk.dim(`Model: ${modelName}\n`));
           console.log(chalk.yellow('Request:'), content);
           console.log();
@@ -80,7 +80,7 @@ export const chatCommand = new Command('chat')
         }
 
         // Interactive mode.
-        console.log(chalk.blue('\nFF1 Chat\n'));
+        console.log(chalk.blue('\nff-cli chat\n'));
         console.log(chalk.dim('Describe the playlist you want. Ctrl+C to exit.'));
         console.log(chalk.dim(`Model: ${modelName}\n`));
         console.log(chalk.dim('Examples:'));
