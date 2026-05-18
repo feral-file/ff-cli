@@ -7,6 +7,7 @@ import { parseFindInput } from '../utilities/marketplace-url';
 import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
+import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -167,6 +168,10 @@ async function resolveToArtworkSummary(
       contract,
       tokenId: parsed.tokenId,
     });
+  }
+  if (parsed.kind === 'ab-collection') {
+    const coords = await resolveArtBlocksCollection(parsed.slug);
+    return resolveCoordsToSummary(coords);
   }
   if (parsed.kind === 'address') {
     const artistId = await resolveAddressToArtist(parsed.address);
