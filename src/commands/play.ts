@@ -17,7 +17,7 @@ export const playCommand = new Command('play')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
   .option(
     '--skip-verify',
-    'Skip DP-1 structure validation (parse/schema) before playing; use only when you accept malformed envelopes'
+    'Skip signature verification and auto-sign gating before playing; use only when you accept malformed envelopes'
   )
   .action(async (source: string, options: { device?: string; skipVerify?: boolean }) => {
     try {

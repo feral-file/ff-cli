@@ -158,6 +158,20 @@ export async function preparePlaylistForDelivery(
     return { valid: true, signed: false, playlist };
   }
 
+  const hasSignatureEnvelope =
+    Boolean((playlist as { signature?: unknown }).signature) ||
+    (Array.isArray((playlist as { signatures?: unknown }).signatures) &&
+      ((playlist as { signatures?: unknown }).signatures as unknown[]).some(Boolean));
+
+  if (hasSignatureEnvelope) {
+    return {
+      valid: false,
+      signed: false,
+      error: verified.error || 'Playlist signature verification failed',
+      details: verified.details,
+    };
+  }
+
   if (!allowSign) {
     return {
       valid: false,
@@ -168,6 +182,14 @@ export async function preparePlaylistForDelivery(
   }
 
   try {
+    if (!privateKey) {
+      return {
+        valid: false,
+        signed: false,
+        error: 'Cannot sign playlist for delivery: no playlist signing key is configured',
+      };
+    }
+
     const { signPlaylist } = await import('./playlist-signer.js');
     const signature = await signPlaylist(playlist as Record<string, unknown>, privateKey);
     const signedPlaylist = {

@@ -310,7 +310,7 @@ export async function buildPlaylist(
         console.log();
         return {
           success: true,
-          playlist: confirmation.playlist as Playlist,
+          playlist: deliveryResult.playlist as Playlist,
           action: 'send_playlist',
         };
       }
@@ -448,7 +448,7 @@ export async function buildPlaylist(
         console.log();
         return {
           success: true,
-          playlist: sendParams.playlist as Playlist,
+          playlist: deliveryResult.playlist as Playlist,
           action: 'send_playlist',
         };
       } else {
