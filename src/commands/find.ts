@@ -41,12 +41,10 @@ const RASTER_PAGE_SIZE = 100;
 const INDEXER_CONCURRENCY = 10;
 
 export const findCommand = new Command('find')
-  .description(
-    'Find an artwork on the web and build a DP-1 playlist (marketplace URL, chain:contract:tokenId, or artist address)'
-  )
+  .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'Marketplace URL (Objkt / fxhash / Art Blocks / Feral File), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / Feral File), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -64,9 +62,9 @@ export const findCommand = new Command('find')
         console.error(chalk.red('Could not understand input.'));
         console.error(
           chalk.dim(
-            'Supported: marketplace URL (Objkt / fxhash / Art Blocks / Feral File), ' +
-              '`ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, ' +
-              'or a wallet address (`0x...` or `tz1.../tz2.../tz3...`).'
+            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, Feral File. ' +
+              'Or: `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, ' +
+              'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
         );
         process.exit(1);

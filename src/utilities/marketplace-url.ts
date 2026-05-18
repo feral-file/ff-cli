@@ -24,7 +24,7 @@ export interface TokenCoords {
   tokenId: string;
 }
 
-export type MarketplaceSource = 'objkt' | 'artblocks' | 'fxhash' | 'feralfile';
+export type MarketplaceSource = 'objkt' | 'artblocks' | 'fxhash' | 'feralfile' | 'opensea';
 
 export type FeralFileUrlKind = 'artwork' | 'series' | 'show';
 
@@ -86,8 +86,8 @@ export function parseFindInput(input: string): ParsedFindInput | null {
 }
 
 /**
- * Dispatch a URL to the per-marketplace parser. Returns `null` when the
- * host is not one of the four supported marketplaces.
+ * Dispatch a URL to the per-host parser. Returns `null` when the host is
+ * not one of the supported sources.
  */
 export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
@@ -102,6 +102,9 @@ export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   }
   if (host === 'feralfile.com' || host.endsWith('.feralfile.com')) {
     return parseFeralFile(url);
+  }
+  if (host === 'opensea.io' || host.endsWith('.opensea.io')) {
+    return parseOpenSea(url);
   }
   return null;
 }
@@ -243,6 +246,51 @@ export function parseFxhash(url: URL): ParsedFindInput {
   return {
     kind: 'unsupported',
     reason: `fxhash URL not recognized: ${url.pathname}.`,
+  };
+}
+
+/**
+ * OpenSea URL forms:
+ *   opensea.io/assets/{chain}/{contract}/{tokenId}
+ *   opensea.io/item/{chain}/{contract}/{tokenId}    — newer naming
+ *   opensea.io/collection/{slug}                    — series slug (not yet)
+ *
+ * Only `ethereum` is in scope; other chains (matic, base, solana, etc.)
+ * fall outside the FF indexer's coverage. Token URLs resolve end-to-end only
+ * when Raster also indexes the underlying series — Raster's coverage of
+ * mainstream PFP collections (Azuki, BAYC, etc.) is partial.
+ */
+export function parseOpenSea(url: URL): ParsedFindInput {
+  const tokenMatch = /^\/(?:assets|item)\/([a-z_]+)\/(0x[a-fA-F0-9]{40})\/(\d+)\/?$/.exec(
+    url.pathname
+  );
+  if (tokenMatch) {
+    const chain = tokenMatch[1];
+    if (chain !== 'ethereum') {
+      return {
+        kind: 'unsupported',
+        reason:
+          `OpenSea ${chain} URLs aren't supported — ff-cli covers Ethereum and Tezos mainnet only. ` +
+          'Paste an Ethereum-chain OpenSea URL or a Tezos source (Objkt, fxhash).',
+      };
+    }
+    return {
+      kind: 'token',
+      source: 'opensea',
+      coords: { chain: 'ethereum', contract: tokenMatch[2].toLowerCase(), tokenId: tokenMatch[3] },
+    };
+  }
+  if (url.pathname.startsWith('/collection/')) {
+    return {
+      kind: 'unsupported',
+      reason:
+        'OpenSea `/collection/{slug}` URLs are not yet supported in v1. Paste a specific token ' +
+        'URL (opensea.io/assets/ethereum/{contract}/{tokenId}) or use `ethereum:{contract}:{tokenId}`.',
+    };
+  }
+  return {
+    kind: 'unsupported',
+    reason: `OpenSea URL not recognized: ${url.pathname}.`,
   };
 }
 
