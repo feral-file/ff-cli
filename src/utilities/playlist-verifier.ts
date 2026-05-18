@@ -149,24 +149,23 @@ export async function preparePlaylistForDelivery(
 ): Promise<{
   valid: boolean;
   signed: boolean;
+  status: 'verified' | 'signed' | 'failed';
   playlist?: unknown;
   error?: string;
   details?: Array<{ path: string; message: string }>;
 }> {
   const verified = await verifyPlaylist(playlist);
   if (verified.valid) {
-    return { valid: true, signed: false, playlist };
+    return { valid: true, signed: false, status: 'verified', playlist };
   }
 
-  const hasSignatureEnvelope =
-    Boolean((playlist as { signature?: unknown }).signature) ||
-    (Array.isArray((playlist as { signatures?: unknown }).signatures) &&
-      ((playlist as { signatures?: unknown }).signatures as unknown[]).some(Boolean));
+  const hasSignatureEnvelope = hasExistingSignatureEnvelope(playlist);
 
   if (hasSignatureEnvelope) {
     return {
       valid: false,
       signed: false,
+      status: 'failed',
       error: verified.error || 'Playlist signature verification failed',
       details: verified.details,
     };
@@ -176,6 +175,7 @@ export async function preparePlaylistForDelivery(
     return {
       valid: false,
       signed: false,
+      status: 'failed',
       error: verified.error,
       details: verified.details,
     };
@@ -186,6 +186,7 @@ export async function preparePlaylistForDelivery(
       return {
         valid: false,
         signed: false,
+        status: 'failed',
         error: 'Cannot sign playlist for delivery: no playlist signing key is configured',
       };
     }
@@ -200,12 +201,13 @@ export async function preparePlaylistForDelivery(
     const signedResult = await verifyPlaylist(signedPlaylist);
 
     if (signedResult.valid) {
-      return { valid: true, signed: true, playlist: signedPlaylist };
+      return { valid: true, signed: true, status: 'signed', playlist: signedPlaylist };
     }
 
     return {
       valid: false,
       signed: true,
+      status: 'failed',
       error: signedResult.error,
       details: signedResult.details,
     };
@@ -213,9 +215,28 @@ export async function preparePlaylistForDelivery(
     return {
       valid: false,
       signed: false,
+      status: 'failed',
       error: `Failed to sign playlist for delivery: ${(error as Error).message}`,
     };
   }
+}
+
+/**
+ * hasExistingSignatureEnvelope returns true when the playlist already carries
+ * either legacy `signature` or multi-signature `signatures` fields.
+ *
+ * The check is based on field presence, not truthiness, so broken envelopes
+ * still fail closed instead of being re-signed.
+ */
+function hasExistingSignatureEnvelope(playlist: unknown): boolean {
+  if (!playlist || typeof playlist !== 'object') {
+    return false;
+  }
+
+  return (
+    Object.prototype.hasOwnProperty.call(playlist, 'signature') ||
+    Object.prototype.hasOwnProperty.call(playlist, 'signatures')
+  );
 }
 
 async function parseDp1Playlist(playlist: unknown): Promise<{

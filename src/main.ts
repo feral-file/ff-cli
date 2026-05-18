@@ -90,6 +90,77 @@ export function resolveSendPlaylistDeviceName(
   return resolveEffectiveDeviceName(sanitized, cliDeviceName);
 }
 
+interface DeliveryGateDeps {
+  preparePlaylistForDelivery: typeof import('./utilities/playlist-verifier').preparePlaylistForDelivery;
+  sendToDevice: (
+    playlist: Playlist,
+    deviceName?: string
+  ) => Promise<{
+    success: boolean;
+    deviceName?: string;
+    device?: string;
+    error?: string;
+    details?: string;
+  }>;
+  privateKey?: string;
+  resolveDeviceName: (deviceName?: string) => string | undefined;
+}
+
+/**
+ * Prepare a playlist for device delivery and send it using the supplied transport.
+ *
+ * This helper keeps the send branches in `buildPlaylist` testable without
+ * duplicating the policy logic in tests. The helper deliberately accepts the
+ * delivery dependencies so the branch behavior can be exercised with a stubbed
+ * transport in unit tests.
+ */
+export async function sendPreparedPlaylistToDevice(
+  playlist: Playlist,
+  deps: DeliveryGateDeps
+): Promise<
+  | {
+      success: true;
+      playlist: Playlist;
+      deviceName?: string;
+      device?: string;
+      error?: string;
+    }
+  | {
+      success: false;
+      error: string;
+      playlist: null;
+    }
+> {
+  const deliveryResult = await deps.preparePlaylistForDelivery(playlist, true, deps.privateKey);
+  if (!deliveryResult.valid) {
+    return {
+      success: false,
+      error: deliveryResult.error || 'Failed to verify playlist before sending',
+      playlist: null,
+    };
+  }
+
+  const sendResult = await deps.sendToDevice(
+    deliveryResult.playlist as Playlist,
+    deps.resolveDeviceName()
+  );
+
+  if (sendResult.success) {
+    return {
+      success: true,
+      playlist: deliveryResult.playlist as Playlist,
+      deviceName: sendResult.deviceName,
+      device: sendResult.device,
+    };
+  }
+
+  return {
+    success: false,
+    error: sendResult.error || 'Failed to send playlist',
+    playlist: null,
+  };
+}
+
 /**
  * Validate and apply constraints to requirements
  *
@@ -278,29 +349,12 @@ export async function buildPlaylist(
         };
       }
 
-      const deliveryResult = await preparePlaylistForDelivery(
-        confirmation.playlist,
-        true,
-        privateKey
-      );
-      if (!deliveryResult.valid) {
-        console.log();
-        console.error(chalk.red('Send failed'));
-        if (deliveryResult.error) {
-          console.error(chalk.red(`  ${deliveryResult.error}`));
-        }
-        return {
-          success: false,
-          error: deliveryResult.error || 'Failed to verify playlist before sending',
-          playlist: null,
-          action: 'send_playlist',
-        };
-      }
-
-      const sendResult = await utilities.sendToDevice(
-        deliveryResult.playlist as Playlist,
-        confirmation.deviceName
-      );
+      const sendResult = await sendPreparedPlaylistToDevice(confirmation.playlist as Playlist, {
+        preparePlaylistForDelivery,
+        sendToDevice: utilities.sendToDevice,
+        privateKey,
+        resolveDeviceName: () => confirmation.deviceName,
+      });
 
       if (sendResult.success) {
         console.log(chalk.green('\nPlaylist sent'));
@@ -310,7 +364,7 @@ export async function buildPlaylist(
         console.log();
         return {
           success: true,
-          playlist: deliveryResult.playlist as Playlist,
+          playlist: sendResult.playlist,
           action: 'send_playlist',
         };
       }
@@ -406,39 +460,23 @@ export async function buildPlaylist(
       // Handle playlist sending directly
       const sendParams = params as Record<string, unknown>;
       const utilities = getUtilities();
-      const { preparePlaylistForDelivery } = await import('./utilities/playlist-verifier');
       const playlistConfig = getConfig().playlist;
       const privateKey = playlistConfig?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
 
       console.log();
       console.log(chalk.cyan('Sending to device'));
 
-      const deliveryResult = await preparePlaylistForDelivery(
-        sendParams.playlist as Playlist,
-        true,
-        privateKey
-      );
-      if (!deliveryResult.valid) {
-        console.log();
-        console.error(chalk.red('Send failed'));
-        if (deliveryResult.error) {
-          console.error(chalk.red(`  ${deliveryResult.error}`));
-        }
-        return {
-          success: false,
-          error: deliveryResult.error || 'Failed to verify playlist before sending',
-          playlist: null,
-          action: 'send_playlist',
-        };
-      }
-
-      const sendResult = await utilities.sendToDevice(
-        deliveryResult.playlist as Playlist,
-        resolveSendPlaylistDeviceName(
-          sendParams.deviceName as string | null | undefined,
-          defaultDeviceName
-        )
-      );
+      const sendResult = await sendPreparedPlaylistToDevice(sendParams.playlist as Playlist, {
+        preparePlaylistForDelivery: (await import('./utilities/playlist-verifier'))
+          .preparePlaylistForDelivery,
+        sendToDevice: utilities.sendToDevice,
+        privateKey,
+        resolveDeviceName: () =>
+          resolveSendPlaylistDeviceName(
+            sendParams.deviceName as string | null | undefined,
+            defaultDeviceName
+          ),
+      });
 
       if (sendResult.success) {
         console.log(chalk.green('\nPlaylist sent'));
@@ -448,7 +486,7 @@ export async function buildPlaylist(
         console.log();
         return {
           success: true,
-          playlist: deliveryResult.playlist as Playlist,
+          playlist: sendResult.playlist,
           action: 'send_playlist',
         };
       } else {

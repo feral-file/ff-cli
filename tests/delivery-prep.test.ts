@@ -86,4 +86,26 @@ describe('preparePlaylistForDelivery', () => {
     assert.equal(result.valid, false);
     assert.match(result.error ?? '', /signature verification failed/i);
   });
+
+  test('fails closed when signature is present but empty', async () => {
+    const playlist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const tampered = { ...playlist, signature: '' };
+
+    const result = await preparePlaylistForDelivery(tampered, true, makePrivateKeyBase64());
+
+    assert.equal(result.valid, false);
+    assert.equal(result.signed, false);
+    assert.match(result.error ?? '', /signature verification failed/i);
+  });
+
+  test('fails closed when signatures is present but empty', async () => {
+    const playlist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const tampered = { ...playlist, signatures: [] };
+
+    const result = await preparePlaylistForDelivery(tampered, true, makePrivateKeyBase64());
+
+    assert.equal(result.valid, false);
+    assert.equal(result.signed, false);
+    assert.match(result.error ?? '', /no signatures in document/i);
+  });
 });

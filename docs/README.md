@@ -138,7 +138,7 @@ Notes:
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
   - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`
-- `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; unsigned playlists are signed only when a signing key is configured and the playlist has no existing signature envelope; use `--skip-verify` to bypass the gate)
+- `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is eligible for auto-signing when a signing key is configured; use `--skip-verify` to bypass the gate)
   - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification and auto-sign gating; not recommended)
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload; unsigned playlists are signed only when a signing key is configured and the playlist has no existing signature envelope)
   - Options: `-s, --server <index>` (server index if multiple configured)
@@ -232,7 +232,7 @@ npm run dev -- validate playlist.json
 # Sign (uses key and role from config, or overrides via --key / --role)
 npm run dev -- sign playlist.json -o signed.json
 
-# Play on configured default device (validates DP-1 structure by default)
+# Play on configured default device (verifies playlists; only media URL fallbacks may be auto-signed)
 npm run dev -- play playlist.json
 
 # Play on a specific named device

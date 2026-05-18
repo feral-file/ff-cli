@@ -6,10 +6,22 @@ import {
   printPlaylistSourceLoadFailure,
   printPlaylistVerificationFailure,
 } from './helpers/playlist-display';
+import type { PlaySource } from '../utilities/playlist-source';
 
 // ff1-device is still CommonJS; require keeps the interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { sendPlaylistToDevice } = require('../utilities/ff1-device');
+
+/**
+ * shouldSignPlaylistForPlaySource returns true only for synthesized media URLs.
+ *
+ * Local playlist files and hosted playlist JSON must be verified and sent as-is.
+ * Only the media URL fallback is created by the CLI, so only that path may be
+ * auto-signed when signing is configured.
+ */
+export function shouldSignPlaylistForPlaySource(source: PlaySource): boolean {
+  return source.kind === 'media';
+}
 
 export const playCommand = new Command('play')
   .description('Play a playlist or media URL on an FF1 device')
@@ -33,6 +45,7 @@ export const playCommand = new Command('play')
       if (!options.skipVerify) {
         const playlistConfig = config.playlist;
         const privateKey = playlistConfig?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
+        const shouldSignForDelivery = shouldSignPlaylistForPlaySource(resolved);
         if (isPlaylistSource) {
           console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
         }
@@ -40,7 +53,7 @@ export const playCommand = new Command('play')
         const verifier = await import('../utilities/playlist-verifier');
         const verifyResult = await verifier.preparePlaylistForDelivery(
           resolved.playlist,
-          true,
+          shouldSignForDelivery,
           privateKey
         );
 
