@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -6,11 +7,17 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
 import { publishPlaylist } from '../src/utilities/playlist-publisher';
+import { signPlaylist } from '../src/utilities/playlist-signer';
 
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'ff1-publish-'));
+}
+
+function makePrivateKeyBase64(): string {
+  const { privateKey } = generateKeyPairSync('ed25519');
+  return privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
 }
 
 describe('publishPlaylist validation contract', () => {
@@ -56,6 +63,57 @@ describe('publishPlaylist validation contract', () => {
 
       assert.equal(result.success, false);
       assert.match(result.error ?? '', /signature verification failed/i);
+    } finally {
+      server.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('uploads a verified playlist after signature verification succeeds', async () => {
+    const dir = makeTempDir();
+    let deliveredBody = '';
+    const server = createServer((req, res) => {
+      req.setEncoding('utf-8');
+      req.on('data', (chunk) => {
+        deliveredBody += chunk;
+      });
+      req.on('end', () => {
+        res.writeHead(201, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ id: 'playlist-123' }));
+      });
+    });
+
+    try {
+      await new Promise<void>((resolve) => server.listen(0, resolve));
+      const address = server.address();
+      if (address === null || typeof address === 'string') {
+        throw new Error('Failed to start test server');
+      }
+
+      const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<
+        string,
+        unknown
+      >;
+      const privateKey = makePrivateKeyBase64();
+      const signature = await signPlaylist(basePlaylist, privateKey);
+      const playlist = { ...basePlaylist, signature: undefined, signatures: [signature] };
+      const path = join(dir, 'signed.json');
+      writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
+
+      const result = await publishPlaylist(path, `http://127.0.0.1:${address.port}`);
+
+      assert.equal(result.success, true);
+      assert.equal(result.playlistId, 'playlist-123');
+      assert.match(result.message ?? '', /Published to feed server/i);
+      assert.ok(deliveredBody, 'expected publish request body to be captured');
+
+      const delivered = JSON.parse(deliveredBody) as {
+        signatures?: unknown[];
+        signature?: unknown;
+      };
+      assert.equal(Array.isArray(delivered.signatures), true);
+      assert.ok((delivered.signatures?.length ?? 0) > 0);
+      assert.equal(delivered.signature, undefined);
     } finally {
       server.close();
       rmSync(dir, { recursive: true, force: true });
