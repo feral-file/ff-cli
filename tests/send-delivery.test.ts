@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
 import { sendPreparedPlaylistToDevice } from '../src/main';
+import { sendToDevice } from '../src/utilities';
 import { verifyPlaylist } from '../src/utilities/playlist-verifier';
 import { signPlaylist } from '../src/utilities/playlist-signer';
 
@@ -82,6 +83,16 @@ describe('sendPreparedPlaylistToDevice', () => {
 
     assert.equal(result.success, false);
     assert.equal(sendCalled, false);
+    assert.match(result.error ?? '', /signature verification failed/i);
+  });
+});
+
+describe('utilities.sendToDevice', () => {
+  test('rejects an unsigned playlist before reaching device transport', async () => {
+    const playlist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const result = await sendToDevice(playlist as never, 'kitchen');
+
+    assert.equal(result.success, false);
     assert.match(result.error ?? '', /signature verification failed/i);
   });
 });
