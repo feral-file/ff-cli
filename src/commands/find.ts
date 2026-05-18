@@ -37,6 +37,17 @@ interface FindOptions {
 
 type PostBuildAction = 'play' | 'publish' | 'skip';
 
+/**
+ * What resolves out of a `find` input.
+ *
+ * `series` — Raster knows the artwork; we'll enumerate every token in it.
+ * `single` — Raster doesn't index this token's series (returns 404); fall
+ *   back to a one-item playlist using the FF indexer for the pasted token.
+ */
+type ResolvedTarget =
+  | { kind: 'series'; summary: RasterArtworkSummary }
+  | { kind: 'single'; coords: TokenCoords };
+
 const RASTER_PAGE_SIZE = 100;
 const INDEXER_CONCURRENCY = 10;
 
@@ -74,19 +85,31 @@ export const findCommand = new Command('find')
         process.exit(1);
       }
 
-      const summary = await resolveToArtworkSummary(parsed, !!options.yes);
+      const target = await resolveTarget(parsed, !!options.yes);
 
-      console.log(chalk.cyan(formatSummaryLine(summary)));
+      if (target.kind === 'series') {
+        console.log(chalk.cyan(formatSummaryLine(target.summary)));
+      } else {
+        const { chain, contract, tokenId } = target.coords;
+        console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
+        console.log(
+          chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)")
+        );
+      }
       console.log();
 
+      const tokenCount = target.kind === 'series' ? target.summary.tokenCount : 1;
       const shouldBuild =
-        !!options.yes || !!options.output || (await confirmMakePlaylist(summary.tokenCount));
+        !!options.yes || !!options.output || (await confirmMakePlaylist(tokenCount));
       if (!shouldBuild) {
         console.log(chalk.dim('Cancelled.'));
         return;
       }
 
-      const tokens = await fetchTokens(summary, options.limit);
+      const tokens =
+        target.kind === 'series'
+          ? await fetchTokens(target.summary, options.limit)
+          : [target.coords];
       console.log(
         chalk.dim(
           `Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`
@@ -115,11 +138,8 @@ export const findCommand = new Command('find')
         process.exit(1);
       }
 
-      const artistLabel = summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
-      const playlist = await buildDP1Playlist({
-        items,
-        title: `${artistLabel} — ${summary.title}`,
-      });
+      const title = playlistTitleFor(target, items);
+      const playlist = await buildDP1Playlist({ items, title });
 
       const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
       await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
@@ -148,28 +168,24 @@ export const findCommand = new Command('find')
     }
   });
 
-async function resolveToArtworkSummary(
+async function resolveTarget(
   parsed: NonNullable<ReturnType<typeof parseFindInput>>,
   skipPrompt: boolean
-): Promise<RasterArtworkSummary> {
+): Promise<ResolvedTarget> {
   if (parsed.kind === 'token') {
-    return resolveCoordsToSummary(parsed.coords);
+    return resolveCoords(parsed.coords);
   }
   if (parsed.kind === 'ff-url') {
     const coords = await resolveFeralFileToken(parsed);
-    return resolveCoordsToSummary(coords);
+    return resolveCoords(coords);
   }
   if (parsed.kind === 'objkt-alias') {
     const contract = await resolveObjktAlias(parsed.alias);
-    return resolveCoordsToSummary({
-      chain: 'tezos',
-      contract,
-      tokenId: parsed.tokenId,
-    });
+    return resolveCoords({ chain: 'tezos', contract, tokenId: parsed.tokenId });
   }
   if (parsed.kind === 'ab-collection') {
     const coords = await resolveArtBlocksCollection(parsed.slug);
-    return resolveCoordsToSummary(coords);
+    return resolveCoords(coords);
   }
   if (parsed.kind === 'address') {
     const artistId = await resolveAddressToArtist(parsed.address);
@@ -184,15 +200,37 @@ async function resolveToArtworkSummary(
       throw new Error('Artist has no artworks indexed on Raster.');
     }
     const picked = await pickFromCatalog(catalog, skipPrompt);
-    return getArtworkSummary(picked.artworkId);
+    const summary = await getArtworkSummary(picked.artworkId);
+    return { kind: 'series', summary };
   }
   // `unsupported` is handled upstream; this branch keeps the type narrowing honest.
   throw new Error(`Unsupported parse result: ${parsed.kind}`);
 }
 
-async function resolveCoordsToSummary(coords: TokenCoords): Promise<RasterArtworkSummary> {
-  const { artworkId } = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
-  return getArtworkSummary(artworkId);
+/**
+ * Resolve on-chain coords to a target. If Raster doesn't index this token
+ * (404), fall back to single-token mode so we still build something playable.
+ */
+async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
+  const lookup = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  if (lookup === null) {
+    return { kind: 'single', coords };
+  }
+  const summary = await getArtworkSummary(lookup.artworkId);
+  return { kind: 'series', summary };
+}
+
+/**
+ * Build the playlist title. For series, "Artist — Series Title". For a
+ * one-item fallback, use the indexer's token name (already in the item)
+ * with a fall-through to coords if name is missing.
+ */
+function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string }>): string {
+  if (target.kind === 'series') {
+    const artistLabel = target.summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
+    return `${artistLabel} — ${target.summary.title}`;
+  }
+  return items[0]?.title ?? `Token ${target.coords.tokenId}`;
 }
 
 async function fetchTokens(
