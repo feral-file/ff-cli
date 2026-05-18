@@ -33,6 +33,7 @@ export type ParsedFindInput =
   | { kind: 'address'; chain: IndexerChain; address: string }
   | { kind: 'ff-url'; urlKind: FeralFileUrlKind; identifier: string }
   | { kind: 'objkt-alias'; alias: string; tokenId: string }
+  | { kind: 'ab-collection'; slug: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -152,11 +153,15 @@ export function parseObjkt(url: URL): ParsedFindInput {
 
 /**
  * Art Blocks URL forms:
- *   artblocks.io/token/{0xcontract}-{tokenId}                        (current)
- *   artblocks.io/marketplace/collections/{0xcontract}/tokens/{id}    (marketplace UI)
+ *   artblocks.io/token/{0xcontract}-{tokenId}                       — direct token
+ *   artblocks.io/marketplace/collections/{0xcontract}/tokens/{id}   — marketplace UI token
+ *   artblocks.io/collection/{slug}                                  — collection (series)
+ *   artblocks.io/collections/{slug}                                 — plural; 307→singular
  *
- * Project / series URLs (`/projects/{id}`, `/collections/{slug}`) are not
- * resolved in v1.
+ * Collection slugs are resolved to (contract, first_tokenId) via
+ * {@link ./ab-marketplace#resolveArtBlocksCollection} (one Hasura GraphQL
+ * call). `/projects/{id}` legacy URLs return 404 on artblocks.io and are
+ * surfaced as a clear unsupported message.
  */
 export function parseArtBlocks(url: URL): ParsedFindInput {
   let m = /^\/token\/(0x[a-fA-F0-9]{40})-(\d+)\/?$/.exec(url.pathname);
@@ -175,12 +180,16 @@ export function parseArtBlocks(url: URL): ParsedFindInput {
       coords: { chain: 'ethereum', contract: m[1].toLowerCase(), tokenId: m[2] },
     };
   }
-  if (url.pathname.startsWith('/projects/') || url.pathname.startsWith('/collections/')) {
+  m = /^\/collections?\/([a-z0-9][a-z0-9-]*)\/?$/.exec(url.pathname);
+  if (m) {
+    return { kind: 'ab-collection', slug: m[1] };
+  }
+  if (url.pathname.startsWith('/projects/')) {
     return {
       kind: 'unsupported',
       reason:
-        'Art Blocks project/collection URLs are not yet supported in v1. Paste a specific ' +
-        'token URL (artblocks.io/token/{contract}-{tokenId}) or use `ethereum:{contract}:{tokenId}`.',
+        'Art Blocks `/projects/{id}` URLs are legacy and no longer resolve on artblocks.io. ' +
+        'Paste the current `/collection/{slug}` URL or a specific token URL.',
     };
   }
   return {
