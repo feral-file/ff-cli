@@ -63,7 +63,10 @@ export const findCommand = new Command('find')
   .option('-d, --device <name>', 'Device to play on (used with --play; default: first configured)')
   .option('--publish', 'Publish the playlist to a configured feed server')
   .option('-s, --server <index>', 'Feed server index (used with --publish)')
-  .option('-y, --yes', 'Skip interactive prompts; default action is Play')
+  .option(
+    '-y, --yes',
+    'Skip interactive prompts; defaults to Play unless --output or --publish is set'
+  )
   .action(async (input: string, options: FindOptions) => {
     try {
       console.log(chalk.blue('\nFind on Feral File CLI\n'));
@@ -159,7 +162,7 @@ export const findCommand = new Command('find')
         if (action === 'play') {
           await doPlay(playlist, options.device);
         } else if (action === 'publish') {
-          await doPublish(outputPath, options.server);
+          await doPublish(outputPath, options.server, !!options.yes);
         }
       }
     } catch (error) {
@@ -233,13 +236,16 @@ function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string 
   return items[0]?.title ?? `Token ${target.coords.tokenId}`;
 }
 
-function parseLimitOption(limitStr: string | undefined): number {
+export function parseLimitOption(limitStr: string | undefined): number {
   if (limitStr === undefined) {
     return Number.POSITIVE_INFINITY;
   }
-  const n = Number.parseInt(limitStr, 10);
-  if (!Number.isFinite(n) || n < 1) {
-    throw new Error(`Invalid --limit value: ${limitStr}`);
+  // Strict integer parse: `Number('5abc')` is NaN, while `parseInt('5abc', 10)`
+  // returns 5 and silently truncates user input. Reject anything that isn't a
+  // clean positive integer.
+  const n = Number(limitStr);
+  if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+    throw new Error(`Invalid --limit value: ${limitStr} (expected a positive integer)`);
   }
   return n;
 }
@@ -323,7 +329,7 @@ async function confirmMakePlaylist(count: number, total: number): Promise<boolea
  * flag is set, fall back to --yes default (Play) or an interactive 3-way
  * prompt. Save is unconditional and already done before this is called.
  */
-async function decideActions(options: FindOptions): Promise<PostBuildAction[]> {
+export async function decideActions(options: FindOptions): Promise<PostBuildAction[]> {
   const flagActions: PostBuildAction[] = [];
   if (options.play) {
     flagActions.push('play');
@@ -344,6 +350,8 @@ async function decideActions(options: FindOptions): Promise<PostBuildAction[]> {
   }
   return [await promptNextAction()];
 }
+
+export type { FindOptions };
 
 async function promptNextAction(): Promise<PostBuildAction> {
   const prompt = createPrompt();
@@ -387,7 +395,11 @@ async function doPlay(playlist: Playlist, deviceName: string | undefined): Promi
   process.exitCode = 1;
 }
 
-async function doPublish(savedPath: string, serverArg: string | undefined): Promise<void> {
+async function doPublish(
+  savedPath: string,
+  serverArg: string | undefined,
+  nonInteractive: boolean
+): Promise<void> {
   console.log(chalk.blue('Publish to feed'));
   const { getFeedConfig } = await import('../config');
   const { publishPlaylist } = await import('../utilities/playlist-publisher');
@@ -404,6 +416,14 @@ async function doPublish(savedPath: string, serverArg: string | undefined): Prom
   if (feedConfig.baseURLs.length > 1) {
     if (serverArg !== undefined) {
       serverIndex = Number.parseInt(serverArg, 10);
+    } else if (nonInteractive) {
+      console.error(
+        chalk.red(
+          `Multiple feed servers configured (${feedConfig.baseURLs.length}); pass --server <index> when running with --yes.`
+        )
+      );
+      process.exitCode = 1;
+      return;
     } else {
       console.log(chalk.yellow(`Multiple feed servers configured:`));
       feedConfig.baseURLs.forEach((url, i) => {
