@@ -203,7 +203,10 @@ async function queryTokens(params = {}) {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      logger.error('[NFT Indexer] HTTP error response:', {
+      // Inside queryTokens — caller (queryTokenDataFromIndexer) falls back
+      // to the trigger-indexing path when this returns/throws. Demoting to
+      // debug so transient 502s don't flood stderr during recoverable runs.
+      logger.debug('[NFT Indexer] HTTP error response:', {
         status: response.status,
         body: errorBody.substring(0, 500),
       });
@@ -213,7 +216,7 @@ async function queryTokens(params = {}) {
     const result = await response.json();
 
     if (result.errors) {
-      logger.error('[NFT Indexer] GraphQL errors:', result.errors);
+      logger.debug('[NFT Indexer] GraphQL errors:', result.errors);
       throw new Error(`GraphQL errors: ${result.errors.map((e) => e.message).join(', ')}`);
     }
 
@@ -222,7 +225,7 @@ async function queryTokens(params = {}) {
     const tokens = tokenList?.items || [];
     return tokens;
   } catch (error) {
-    logger.error('[NFT Indexer] Failed to query tokens:', error.message);
+    logger.debug('[NFT Indexer] Failed to query tokens:', error.message);
     throw error;
   }
 }
@@ -240,7 +243,7 @@ async function queryTokenDataFromIndexer(tokenCID) {
     const tokens = await queryTokens({ token_cids: [tokenCID] });
     return tokens[0] || null;
   } catch (error) {
-    logger.error('[NFT Indexer] Failed to query token data:', error.message);
+    logger.debug('[NFT Indexer] Failed to query token data:', error.message);
     return null;
   }
 }
@@ -584,7 +587,7 @@ async function getNFTTokenInfoSingle(params, duration = 10, options = {}) {
       const indexResult = await triggerIndexingAsync(chain, contractAddress, tokenId);
 
       if (!indexResult.success) {
-        logger.error(`[NFT Indexer] Failed to trigger indexing:`, indexResult.error);
+        logger.debug(`[NFT Indexer] Failed to trigger indexing:`, indexResult.error);
         return {
           success: false,
           error: `Token not found and indexing failed: ${indexResult.error}`,
@@ -599,7 +602,7 @@ async function getNFTTokenInfoSingle(params, duration = 10, options = {}) {
       const pollResult = await pollForJobCompletion(indexResult.job_id, options.jobPoll ?? {});
 
       if (!pollResult.success) {
-        logger.error('[NFT Indexer] Job polling failed:', pollResult.error);
+        logger.debug('[NFT Indexer] Job polling failed:', pollResult.error);
         return {
           success: false,
           error: `Indexing job failed: ${pollResult.error}`,
@@ -650,7 +653,7 @@ async function getNFTTokenInfoSingle(params, duration = 10, options = {}) {
     const tokenData = mapIndexerDataToStandardFormat(indexerData, chain);
     return convertToDP1Item(tokenData, duration);
   } catch (error) {
-    logger.error(`[NFT Indexer] Error fetching token:`, error.message);
+    logger.debug(`[NFT Indexer] Error fetching token:`, error.message);
     return {
       success: false,
       error: error.message,
@@ -684,7 +687,7 @@ async function getNFTTokenInfoBatch(tokens, duration = 10) {
     const batchResults = await Promise.all(
       batch.map((token, idx) =>
         getNFTTokenInfoSingle(token, duration).catch((error) => {
-          logger.error(`[NFT Indexer] Token ${idx + 1} in batch failed:`, error.message);
+          logger.debug(`[NFT Indexer] Token ${idx + 1} in batch failed:`, error.message);
           return {
             success: false,
             error: error.message,
@@ -818,7 +821,7 @@ async function triggerIndexingAsync(chain, contractAddress, tokenId) {
       error: 'No job_id returned from triggerTokenIndexing',
     };
   } catch (error) {
-    logger.error('[NFT Indexer] Async indexing error:', error.message);
+    logger.debug('[NFT Indexer] Async indexing error:', error.message);
     return {
       success: false,
       error: error.message,
@@ -873,7 +876,7 @@ async function queryJobStatus(jobId) {
       error: 'No job status returned',
     };
   } catch (error) {
-    logger.error('[NFT Indexer] Failed to query job status:', error.message);
+    logger.debug('[NFT Indexer] Failed to query job status:', error.message);
     return {
       success: false,
       error: error.message,
@@ -958,7 +961,7 @@ async function pollForJobCompletion(jobId, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
   } catch (error) {
-    logger.error('[NFT Indexer] Error during job polling:', error.message);
+    logger.debug('[NFT Indexer] Error during job polling:', error.message);
     return {
       success: false,
       error: error.message,
@@ -1015,7 +1018,7 @@ async function pollForMediaAssets(tokenCID, options = {}) {
       await new Promise((resolve) => setTimeout(resolve, intervalMs));
     }
   } catch (error) {
-    logger.error('[NFT Indexer] Error during media assets polling:', error.message);
+    logger.debug('[NFT Indexer] Error during media assets polling:', error.message);
     return null;
   }
 }
