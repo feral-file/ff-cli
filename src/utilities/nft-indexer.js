@@ -922,9 +922,14 @@ async function pollForJobCompletion(jobId, options = {}) {
 
       const normalized = typeof status === 'string' ? status.toLowerCase() : '';
 
-      if (normalized === 'completed') {
+      // Indexer terminal-success states: both `completed` (older) and
+      // `succeeded` (current pgmq convention) appear in the wild. Accepting
+      // both prevents the CLI from polling-to-timeout on freshly-triggered
+      // tokens, which was masking as "No tokens could be indexed" on the
+      // first encounter while the underlying job had already finished.
+      if (normalized === 'completed' || normalized === 'succeeded') {
         const elapsedMs = Date.now() - startTime;
-        logger.info(`[NFT Indexer] ✓ Job completed after ${pollCount} polls (${elapsedMs}ms)`);
+        logger.info(`[NFT Indexer] ✓ Job ${normalized} after ${pollCount} polls (${elapsedMs}ms)`);
         return {
           success: true,
           completed: true,
