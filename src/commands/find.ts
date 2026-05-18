@@ -98,18 +98,18 @@ export const findCommand = new Command('find')
       }
       console.log();
 
-      const tokenCount = target.kind === 'series' ? target.summary.tokenCount : 1;
+      const limit = parseLimitOption(options.limit);
+      const seriesTotal = target.kind === 'series' ? target.summary.tokenCount : 1;
+      const willInclude = Math.min(seriesTotal, limit);
       const shouldBuild =
-        !!options.yes || !!options.output || (await confirmMakePlaylist(tokenCount));
+        !!options.yes || !!options.output || (await confirmMakePlaylist(willInclude, seriesTotal));
       if (!shouldBuild) {
         console.log(chalk.dim('Cancelled.'));
         return;
       }
 
       const tokens =
-        target.kind === 'series'
-          ? await fetchTokens(target.summary, options.limit)
-          : [target.coords];
+        target.kind === 'series' ? await fetchTokens(target.summary, limit) : [target.coords];
       console.log(
         chalk.dim(
           `Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`
@@ -233,15 +233,18 @@ function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string 
   return items[0]?.title ?? `Token ${target.coords.tokenId}`;
 }
 
-async function fetchTokens(
-  summary: RasterArtworkSummary,
-  limitStr: string | undefined
-): Promise<TokenCoords[]> {
-  const limit = limitStr ? Number.parseInt(limitStr, 10) : Number.POSITIVE_INFINITY;
-  if (!Number.isFinite(limit) && limitStr) {
+function parseLimitOption(limitStr: string | undefined): number {
+  if (limitStr === undefined) {
+    return Number.POSITIVE_INFINITY;
+  }
+  const n = Number.parseInt(limitStr, 10);
+  if (!Number.isFinite(n) || n < 1) {
     throw new Error(`Invalid --limit value: ${limitStr}`);
   }
+  return n;
+}
 
+async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promise<TokenCoords[]> {
   const collected: TokenCoords[] = [];
   let cursor: number | undefined;
   let skipped = 0;
@@ -303,13 +306,11 @@ async function pickFromCatalog(
   return catalog[index];
 }
 
-async function confirmMakePlaylist(tokenCount: number): Promise<boolean> {
+async function confirmMakePlaylist(count: number, total: number): Promise<boolean> {
+  const noun = total === 1 ? 'token' : 'tokens';
+  const label = count < total ? `${count} of ${total} ${noun}` : `${count} ${noun}`;
   const prompt = createPrompt();
-  const yes = await promptYesNo(
-    prompt.ask,
-    `Build playlist with ${tokenCount} token${tokenCount === 1 ? '' : 's'}?`,
-    true
-  );
+  const yes = await promptYesNo(prompt.ask, `Build playlist with ${label}?`, true);
   prompt.close();
   console.log();
   return yes;
