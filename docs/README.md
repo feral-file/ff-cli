@@ -178,8 +178,8 @@ npm run dev -- chat "From Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f7
 How it works (at a glance):
 
 - The intent parser maps your text to `requirements` (what to fetch) and `playlistSettings` (e.g., `durationPerItem`, `preserveOrder=false` for shuffle, `deviceName`, `feedServer`).
-- Deterministic tools fetch NFT metadata, build a DP‑1 playlist, and validate it.
-- If `deviceName` is present, the CLI will send the validated playlist to that FF1 device.
+- Deterministic tools fetch NFT metadata, build a DP‑1 playlist, and verify it.
+- If `deviceName` is present, the CLI will send the verified playlist to that FF1 device.
 - If `feedServer` is present (via "publish to my feed"), the CLI will publish the playlist to the selected feed server.
 
 Use `--model grok|gpt|gemini` to switch models, or set `defaultModel` in `config.json`.
