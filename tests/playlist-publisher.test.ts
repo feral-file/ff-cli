@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:http';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -7,7 +6,6 @@ import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
 import { publishPlaylist } from '../src/utilities/playlist-publisher';
-import { signPlaylist } from '../src/utilities/playlist-signer';
 
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
 
@@ -33,10 +31,6 @@ describe('publishPlaylist validation contract', () => {
 
   test('rejects a playlist with a broken signature envelope before upload', async () => {
     const dir = makeTempDir();
-    const { privateKey } = generateKeyPairSync('ed25519');
-    const privateKeyBase64 = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
-    const previousPk = process.env.PLAYLIST_PRIVATE_KEY;
-    process.env.PLAYLIST_PRIVATE_KEY = privateKeyBase64;
     const server = createServer((_req, res) => {
       res.writeHead(201, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ id: 'playlist-123' }));
@@ -54,8 +48,7 @@ describe('publishPlaylist validation contract', () => {
         string,
         unknown
       >;
-      const signature = await signPlaylist(basePlaylist, privateKeyBase64);
-      const playlist = { ...basePlaylist, signatures: [{ ...signature, sig: 'AAAA' }] };
+      const playlist = { ...basePlaylist, signatures: [{ sig: 'AAAA' }] };
       const path = join(dir, 'tampered.json');
       writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
 
@@ -64,11 +57,6 @@ describe('publishPlaylist validation contract', () => {
       assert.equal(result.success, false);
       assert.match(result.error ?? '', /signature verification failed/i);
     } finally {
-      if (previousPk === undefined) {
-        delete process.env.PLAYLIST_PRIVATE_KEY;
-      } else {
-        process.env.PLAYLIST_PRIVATE_KEY = previousPk;
-      }
       server.close();
       rmSync(dir, { recursive: true, force: true });
     }

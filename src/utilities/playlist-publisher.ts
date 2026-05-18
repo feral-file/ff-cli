@@ -1,8 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import fs from 'fs';
-import { getPlaylistConfig } from '../config';
 import type { Playlist } from '../types';
-import { preparePlaylistForDelivery } from './playlist-verifier';
+import { verifyPlaylist } from './playlist-verifier';
 
 interface PublishResult {
   success: boolean;
@@ -13,12 +12,12 @@ interface PublishResult {
 }
 
 /**
- * Publish a validated playlist to a DP-1 feed server
+ * Publish a verified playlist to a DP-1 feed server
  *
  * Flow:
  * 1. Read and parse playlist file
- * 2. Parse / structure validation via validatePlaylist (same as `validate`; not cryptographic verify)
- * 3. If valid, send the original playlist to feed server
+ * 2. Verify the playlist signature before upload
+ * 3. If valid, send the verified playlist to feed server
  * 4. Return result with playlist ID or error
  *
  * @param {string} filePath - Path to playlist JSON file
@@ -58,12 +57,8 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 2: Verify signature integrity before publishing. If the playlist is
-    // structurally valid but unsigned, we sign it with the configured key and
-    // verify again before upload.
-    const playlistConfig = getPlaylistConfig();
-    const privateKey = playlistConfig.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
-    const deliveryResult = await preparePlaylistForDelivery(playlist, true, privateKey);
+    // Step 2: Verify signature integrity before publishing.
+    const deliveryResult = await verifyPlaylist(playlist);
 
     if (!deliveryResult.valid) {
       return {
@@ -72,8 +67,6 @@ export async function publishPlaylist(
         message: deliveryResult.details?.map((d) => `  • ${d.path}: ${d.message}`).join('\n'),
       };
     }
-
-    playlist = deliveryResult.playlist as Playlist;
 
     // Step 3: Send validated playlist to feed server
     const headers: Record<string, string> = {

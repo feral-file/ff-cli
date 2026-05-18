@@ -5,9 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolvePlaySource } from '../src/utilities/playlist-source';
 import { validatePlaylist } from '../src/utilities/playlist-verifier';
-import { generateKeyPairSync } from 'node:crypto';
-import { signPlaylist } from '../src/utilities/playlist-signer';
-import { shouldSignPlaylistForPlaySource } from '../src/commands/play';
 
 const samplePlaylist = {
   dpVersion: '1.0.0',
@@ -49,7 +46,6 @@ describe('resolvePlaySource', () => {
       assert.equal(result.sourceType, 'file');
       assert.equal(result.source, path);
       assert.equal(result.playlist.id, 'test-playlist');
-      assert.equal(shouldSignPlaylistForPlaySource(result), false);
     }
   });
 
@@ -74,7 +70,6 @@ describe('resolvePlaySource', () => {
       if (result.kind === 'playlist') {
         assert.equal(result.sourceType, 'url');
         assert.equal(result.playlist.id, 'test-playlist');
-        assert.equal(shouldSignPlaylistForPlaySource(result), false);
       }
     } finally {
       global.fetch = original;
@@ -96,7 +91,6 @@ describe('resolvePlaySource', () => {
         assert.equal(result.source, 'https://example.com/clip.mp4');
         assert.equal(result.playlist.items.length, 1);
         assert.equal(result.playlist.items[0].duration, 7);
-        assert.equal(shouldSignPlaylistForPlaySource(result), true);
         const validated = await validatePlaylist(result.playlist);
         assert.equal(
           validated.valid,
@@ -129,30 +123,5 @@ describe('resolvePlaySource', () => {
 
     assert.equal(result.valid, false);
     assert.match(result.error ?? '', /items/i);
-  });
-
-  test('validatePlaylist accepts a parse-valid playlist even when signatures are bad', async () => {
-    const { privateKey } = generateKeyPairSync('ed25519');
-    const privateKeyBase64 = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
-    const sourcePlaylist = {
-      dpVersion: '1.1.0',
-      id: 'test-playlist',
-      title: 'signed',
-      items: [
-        {
-          id: 'item-1',
-          title: 'item one',
-          source: 'https://example.com/a.mp4',
-          duration: 5,
-          license: 'open',
-        },
-      ],
-    };
-
-    const signature = await signPlaylist(sourcePlaylist, privateKeyBase64);
-    const tampered = { ...sourcePlaylist, signatures: [{ ...signature, sig: 'AAAA' }] };
-
-    const result = await validatePlaylist(tampered);
-    assert.equal(result.valid, true);
   });
 });

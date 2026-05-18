@@ -138,9 +138,9 @@ Notes:
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
   - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`
-- `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is eligible for auto-signing when a signing key is configured; use `--skip-verify` to bypass the gate)
-  - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification and auto-sign gating; not recommended)
-- `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload; unsigned playlists are signed only when a signing key is configured and the playlist has no existing signature envelope)
+- `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
+  - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification; not recommended)
+- `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
   - Options: `-s, --server <index>` (server index if multiple configured)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
@@ -209,7 +209,7 @@ Publishing keywords: "publish", "publish to my feed", "push to feed", "send to f
 
 1. Detect the keyword and call `get_feed_servers`
 2. If multiple servers → ask which one to use
-3. Build → verify → publish automatically, and sign only when no existing signature envelope is present and signing is configured
+3. Build → verify → publish automatically
 4. Display playlist ID and server URL on success
 
 If all configured feed servers are unreachable, the CLI now reports a feed availability error instead of "playlist not found".
@@ -250,7 +250,7 @@ npm run dev -- play "https://cdn.example.com/playlist.json"
 # Play a media URL directly
 npm run dev -- play "https://example.com/video.mp4"
 
-# Skip signature verification and auto-sign gating only if you must send a non-conformant payload (not recommended)
+# Skip signature verification only if you must send a non-conformant payload (not recommended)
 npm run dev -- play playlist.json --skip-verify
 ```
 
@@ -280,8 +280,7 @@ npm run dev -- publish playlist.json -s 1
 The `publish` command:
 
 - Verifies playlist signatures before upload
-- Signs unsigned playlists only when signing is configured and no signature envelope exists yet
-- Fails closed on any existing but invalid signature envelope
+- Rejects unsigned or broken playlists
 - Shows interactive server selection if multiple are configured
 - Sends the verified playlist to the chosen feed server
 - Returns the playlist ID on success
