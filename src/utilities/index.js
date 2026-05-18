@@ -437,6 +437,8 @@ async function buildDP1Playlist(items, title, slug) {
  * This gateway verifies the playlist before any device transport happens.
  * Callers in the AI orchestrator and deterministic build path both route
  * through here, so the delivery policy stays consistent across the CLI.
+ * TODO: Propagate structured send failures consistently from every caller;
+ * buildPlaylistDirect currently preserves the pre-existing non-fatal behavior.
  *
  * @param {Object} playlist - DP1 playlist
  * @param {string} [deviceName] - Device name
@@ -490,6 +492,11 @@ function shuffleArray(array) {
 
 /**
  * Build playlist directly from requirements (deterministic, no AI)
+ *
+ * TODO: Treat requested device send and feed publish failures consistently.
+ * This function currently keeps the pre-existing main-branch behavior where
+ * send/publish failures are non-fatal to the playlist build; fix that in a
+ * dedicated follow-up when the command contract changes.
  *
  * @param {Object} params - Playlist parameters
  * @param {Array<Object>} params.requirements - Array of requirements
