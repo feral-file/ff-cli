@@ -79,10 +79,26 @@ function caipToIndexerChain(caip: string): IndexerChain | null {
   return CAIP_TO_INDEXER_CHAIN[caip] ?? null;
 }
 
+/**
+ * Thrown when Raster returns 404 for a requested path. Used as a soft signal
+ * by callers that have a fallback path (e.g. `find` falls back to a
+ * single-token playlist when Raster doesn't index the artwork).
+ */
+export class RasterNotFoundError extends Error {
+  readonly notFound = true as const;
+  constructor(path: string) {
+    super(`Raster: not found (${path})`);
+    this.name = 'RasterNotFoundError';
+  }
+}
+
 async function rasterFetch<T>(path: string): Promise<T> {
   const url = `${RASTER_BASE_URL}${path}`;
   logger.debug(`[Raster] GET ${url}`);
   const response = await fetch(url);
+  if (response.status === 404) {
+    throw new RasterNotFoundError(path);
+  }
   if (!response.ok) {
     const body = await response.text();
     throw new Error(
@@ -158,24 +174,31 @@ interface SearchResponse {
  * Resolve a token's on-chain coordinates to its Raster artwork (series) id.
  *
  * Accepts either a CAIP chain id (`eip155:1`) or human slug (`ethereum`) —
- * Raster handles both. The returned `artworkTitle` is taken from the lookup
- * response; call {@link getArtworkSummary} for the full series details
- * (artists, token count, platforms, etc.).
+ * Raster handles both. Returns `null` when Raster doesn't index this token
+ * (HTTP 404); callers can fall back to a single-token playlist in that case.
+ * Other Raster errors throw normally.
  */
 export async function resolveTokenToArtwork(
   chain: string,
   contract: string,
   tokenId: string
-): Promise<{ artworkId: number; artworkTitle: string }> {
+): Promise<{ artworkId: number; artworkTitle: string } | null> {
   const path =
     `/token/${encodeURIComponent(chain)}` +
     `/${encodeURIComponent(contract)}` +
     `/${encodeURIComponent(tokenId)}`;
-  const data = await rasterFetch<TokenLookupResponse>(path);
-  return {
-    artworkId: data.artwork.id,
-    artworkTitle: data.artwork.title,
-  };
+  try {
+    const data = await rasterFetch<TokenLookupResponse>(path);
+    return {
+      artworkId: data.artwork.id,
+      artworkTitle: data.artwork.title,
+    };
+  } catch (error) {
+    if (error instanceof RasterNotFoundError) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 /**
