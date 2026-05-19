@@ -22,8 +22,10 @@ let contractCalls: Array<{ address: string; limit: number }> = [];
 
 const originalQueryTokensByOwner = nftIndexer.queryTokensByOwner;
 const originalQueryTokensByContract = nftIndexer.queryTokensByContract;
+const originalGetNFTTokenInfoBatch = nftIndexer.getNFTTokenInfoBatch;
 const originalMapIndexerDataToStandardFormat = nftIndexer.mapIndexerDataToStandardFormat;
 const originalConvertToDP1Item = nftIndexer.convertToDP1Item;
+const originalFetch = globalThis.fetch;
 
 /**
  * Build a deterministic DP1 item from minimal token input.
@@ -75,13 +77,24 @@ beforeEach(() => {
     success: true,
     item: toItem(mapped.token),
   });
+
+  nftIndexer.getNFTTokenInfoBatch = async (
+    tokens: Array<{ contractAddress: string; tokenId: string }>,
+    duration: number
+  ) =>
+    tokens.map((token) => ({
+      ...toItem({ contract_address: token.contractAddress, token_id: token.tokenId }),
+      duration,
+    }));
 });
 
 afterEach(() => {
   nftIndexer.queryTokensByOwner = originalQueryTokensByOwner;
   nftIndexer.queryTokensByContract = originalQueryTokensByContract;
+  nftIndexer.getNFTTokenInfoBatch = originalGetNFTTokenInfoBatch;
   nftIndexer.mapIndexerDataToStandardFormat = originalMapIndexerDataToStandardFormat;
   nftIndexer.convertToDP1Item = originalConvertToDP1Item;
+  globalThis.fetch = originalFetch;
 });
 
 describe('queryRequirement owner-to-contract fallback', () => {
@@ -118,5 +131,42 @@ describe('queryRequirement owner-to-contract fallback', () => {
     assert.equal(ownerCalls.length, 1);
     assert.equal(contractCalls.length, 0);
     assert.deepEqual(items, []);
+  });
+});
+
+describe('queryRequirement Feral File artwork', () => {
+  test('resolves artwork identity and fetches the returned token id', async () => {
+    const calls: string[] = [];
+    globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+      calls.push(String(input));
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          result: {
+            id: 'public-artwork-id',
+            chain: 'ethereum',
+            contractAddress: '0xDB5f1aDCFFA1869B9711cBFBe3Bf46cc5d5319E5',
+            tokenID:
+              '92419109143972345096969611651362597777388673613154609693448331487805624917924',
+          },
+        }),
+      } as Response;
+    };
+
+    const items = await utilities.queryRequirement(
+      {
+        type: 'feral_file_artwork',
+        artworkId: 'public-artwork-id',
+      },
+      10
+    );
+
+    assert.deepEqual(calls, ['https://feralfile.com/api/artworks/public-artwork-id']);
+    assert.equal(items.length, 1);
+    assert.equal(
+      items[0].id,
+      'item-92419109143972345096969611651362597777388673613154609693448331487805624917924'
+    );
   });
 });

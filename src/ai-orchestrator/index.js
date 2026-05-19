@@ -133,7 +133,7 @@ const functionSchemas = [
     function: {
       name: 'query_requirement',
       description:
-        'Query data for a requirement. Supports build_playlist (blockchain NFTs), query_address (all NFTs from address), and fetch_feed (feed playlists) types.',
+        'Query data for a requirement. Supports build_playlist (blockchain NFTs), feral_file_artwork (Feral File artwork IDs/URLs), query_address (all NFTs from address), and fetch_feed (feed playlists) types.',
       parameters: {
         type: 'object',
         properties: {
@@ -144,7 +144,7 @@ const functionSchemas = [
             properties: {
               type: {
                 type: 'string',
-                enum: ['build_playlist', 'fetch_feed', 'query_address'],
+                enum: ['build_playlist', 'feral_file_artwork', 'fetch_feed', 'query_address'],
                 description: 'Type of requirement',
               },
               blockchain: {
@@ -163,6 +163,11 @@ const functionSchemas = [
                 items: {
                   type: 'string',
                 },
+              },
+              artworkId: {
+                type: 'string',
+                description:
+                  'Feral File public artwork id or /exhibitions/artwork/{id} URL (REQUIRED for feral_file_artwork)',
               },
               ownerAddress: {
                 type: 'string',
@@ -514,6 +519,8 @@ function buildOrchestratorSystemPrompt(params) {
     .map((req, i) => {
       if (req.type === 'fetch_feed') {
         return `${i + 1}. Fetch ${req.quantity || 5} items from playlist "${req.playlistName}"`;
+      } else if (req.type === 'feral_file_artwork') {
+        return `${i + 1}. Resolve Feral File artwork ${req.artworkId}`;
       } else if (req.type === 'query_address') {
         const quantityText =
           req.quantity === 'all' ? 'all ' : req.quantity ? req.quantity + ' random ' : 'all ';
@@ -572,6 +579,8 @@ KEY RULES
 DECISION LOOP
 1) For each requirement in order:
    - build_playlist: call query_requirement(requirement, duration=${playlistSettings.durationPerItem || 10}).
+     Returns array with minimal item data including id field. Collect the id values.
+   - feral_file_artwork: call query_requirement(requirement, duration=${playlistSettings.durationPerItem || 10}).
      Returns array with minimal item data including id field. Collect the id values.
    - query_address:
      • if ownerAddress endsWith .eth/.tez → resolve_domains([domain]); if resolved → use returned address; if not → mark failed and continue.
@@ -675,6 +684,8 @@ async function buildPlaylistWithAI(params, options = {}) {
       .map((req, i) => {
         if (req.type === 'fetch_feed') {
           return `${i + 1}. Fetch ${req.quantity || 5} items from playlist "${req.playlistName}"`;
+        } else if (req.type === 'feral_file_artwork') {
+          return `${i + 1}. Resolve Feral File artwork:\n   - artworkId: "${req.artworkId}"`;
         } else if (req.type === 'query_address') {
           const quantityDesc =
             req.quantity === 'all'
