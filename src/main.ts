@@ -90,6 +90,71 @@ export function resolveSendPlaylistDeviceName(
   return resolveEffectiveDeviceName(sanitized, cliDeviceName);
 }
 
+interface DeliveryGateDeps {
+  verifyPlaylist: typeof import('./utilities/playlist-verifier').verifyPlaylist;
+  sendToDevice: (
+    playlist: Playlist,
+    deviceName?: string
+  ) => Promise<{
+    success: boolean;
+    deviceName?: string;
+    device?: string;
+    error?: string;
+    details?: string;
+  }>;
+  resolveDeviceName: (deviceName?: string) => string | undefined;
+}
+
+/**
+ * Verify a playlist for device delivery and send it using the supplied transport.
+ *
+ * This helper keeps the send branches in `buildPlaylist` testable without
+ * duplicating the verification and transport wiring in tests.
+ */
+export async function sendPreparedPlaylistToDevice(
+  playlist: Playlist,
+  deps: DeliveryGateDeps
+): Promise<
+  | {
+      success: true;
+      playlist: Playlist;
+      deviceName?: string;
+      device?: string;
+      error?: string;
+    }
+  | {
+      success: false;
+      error: string;
+      playlist: null;
+    }
+> {
+  const verificationResult = await deps.verifyPlaylist(playlist);
+  if (!verificationResult.valid) {
+    return {
+      success: false,
+      error: verificationResult.error || 'Failed to verify playlist before sending',
+      playlist: null,
+    };
+  }
+
+  const sendResult = await deps.sendToDevice(playlist, deps.resolveDeviceName());
+
+  if (sendResult.success) {
+    return {
+      success: true,
+      playlist,
+      deviceName: sendResult.deviceName,
+      device: sendResult.device,
+    };
+  }
+
+  return {
+    success: false,
+    error: sendResult.error || 'Failed to send playlist',
+    playlist: null,
+  };
+}
+
 /**
  * Validate and apply constraints to requirements
  *
@@ -262,6 +327,7 @@ export async function buildPlaylist(
     if (sendMatch) {
       const deviceName = sendMatch[1]?.trim() || defaultDeviceName;
       const { confirmPlaylistForSending } = await import('./utilities/playlist-send');
+      const { verifyPlaylist } = await import('./utilities/playlist-verifier');
       const confirmation = await confirmPlaylistForSending(outputPath, deviceName);
       if (!confirmation.success) {
         if (confirmation.message) {
@@ -275,10 +341,11 @@ export async function buildPlaylist(
         };
       }
 
-      const sendResult = await utilities.sendToDevice(
-        confirmation.playlist as Playlist,
-        confirmation.deviceName
-      );
+      const sendResult = await sendPreparedPlaylistToDevice(confirmation.playlist as Playlist, {
+        verifyPlaylist,
+        sendToDevice: utilities.sendToDevice,
+        resolveDeviceName: () => confirmation.deviceName,
+      });
 
       if (sendResult.success) {
         console.log(chalk.green('\nPlaylist sent'));
@@ -288,7 +355,7 @@ export async function buildPlaylist(
         console.log();
         return {
           success: true,
-          playlist: confirmation.playlist as Playlist,
+          playlist: sendResult.playlist,
           action: 'send_playlist',
         };
       }
@@ -384,31 +451,22 @@ export async function buildPlaylist(
       // Handle playlist sending directly
       const sendParams = params as Record<string, unknown>;
       const utilities = getUtilities();
+      const { verifyPlaylist } = await import('./utilities/playlist-verifier');
 
       console.log();
       console.log(chalk.cyan('Sending to device'));
 
-      const sendResult = await utilities.sendToDevice(
-        sendParams.playlist as Playlist,
-        resolveSendPlaylistDeviceName(
-          sendParams.deviceName as string | null | undefined,
-          defaultDeviceName
-        )
-      );
+      const sendResult = await sendPreparedPlaylistToDevice(sendParams.playlist as Playlist, {
+        verifyPlaylist,
+        sendToDevice: utilities.sendToDevice,
+        resolveDeviceName: () =>
+          resolveSendPlaylistDeviceName(
+            sendParams.deviceName as string | null | undefined,
+            defaultDeviceName
+          ),
+      });
 
-      if (sendResult.success) {
-        console.log(chalk.green('\nPlaylist sent'));
-        if (sendResult.deviceName) {
-          console.log(chalk.dim(`  Device: ${sendResult.deviceName}`));
-        }
-        console.log();
-        return {
-          success: true,
-          playlist: sendParams.playlist as Playlist,
-          action: 'send_playlist',
-        };
-      } else {
-        // Send failed - return error without showing the playlist summary
+      if (!sendResult.success) {
         console.log();
         console.error(chalk.red('Send failed'));
         if (sendResult.error) {
@@ -421,6 +479,17 @@ export async function buildPlaylist(
           action: 'send_playlist',
         };
       }
+
+      console.log(chalk.green('\nPlaylist sent'));
+      if (sendResult.deviceName) {
+        console.log(chalk.dim(`  Device: ${sendResult.deviceName}`));
+      }
+      console.log();
+      return {
+        success: true,
+        playlist: sendResult.playlist,
+        action: 'send_playlist',
+      };
     }
 
     // Check if this is a publish_playlist action

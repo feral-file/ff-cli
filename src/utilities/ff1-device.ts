@@ -108,13 +108,13 @@ export function isTransientDeviceNetworkError(error: unknown): boolean {
  * @example
  * // Send to first device
  * const result = await sendPlaylistToDevice({
- *   playlist: { version: '1.0.0', title: 'My Collection', items: [...] }
+ *   playlist: { version: '1.1.0', title: 'My Collection', items: [...] }
  * });
  *
  * @example
  * // Send to specific device by name
  * const result = await sendPlaylistToDevice({
- *   playlist: { version: '1.0.0', title: 'My Collection', items: [...] },
+ *   playlist: { version: '1.1.0', title: 'My Collection', items: [...] },
  *   deviceName: 'Living Room Display'
  * });
  */

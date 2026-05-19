@@ -5,8 +5,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { resolvePlaySource } from '../src/utilities/playlist-source';
 import { validatePlaylist } from '../src/utilities/playlist-verifier';
-import { generateKeyPairSync } from 'node:crypto';
-import { signPlaylist } from '../src/utilities/playlist-signer';
 
 const samplePlaylist = {
   dpVersion: '1.0.0',
@@ -125,30 +123,5 @@ describe('resolvePlaySource', () => {
 
     assert.equal(result.valid, false);
     assert.match(result.error ?? '', /items/i);
-  });
-
-  test('validatePlaylist accepts a parse-valid playlist even when signatures are bad', async () => {
-    const { privateKey } = generateKeyPairSync('ed25519');
-    const privateKeyBase64 = privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
-    const sourcePlaylist = {
-      dpVersion: '1.1.0',
-      id: 'test-playlist',
-      title: 'signed',
-      items: [
-        {
-          id: 'item-1',
-          title: 'item one',
-          source: 'https://example.com/a.mp4',
-          duration: 5,
-          license: 'open',
-        },
-      ],
-    };
-
-    const signature = await signPlaylist(sourcePlaylist, privateKeyBase64);
-    const tampered = { ...sourcePlaylist, signatures: [{ ...signature, sig: 'AAAA' }] };
-
-    const result = await validatePlaylist(tampered);
-    assert.equal(result.valid, true);
   });
 });

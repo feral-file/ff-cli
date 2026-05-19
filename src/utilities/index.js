@@ -434,11 +434,44 @@ async function buildDP1Playlist(items, title, slug) {
 /**
  * Send playlist to FF1 device
  *
+ * This gateway verifies the playlist before any device transport happens.
+ * Callers in the AI orchestrator and deterministic build path both route
+ * through here, so the delivery policy stays consistent across the CLI.
+ * TODO: Propagate structured send failures consistently from every caller;
+ * buildPlaylistDirect currently preserves the pre-existing non-fatal behavior.
+ *
  * @param {Object} playlist - DP1 playlist
  * @param {string} [deviceName] - Device name
  * @returns {Promise<Object>} Result
  */
 async function sendToDevice(playlist, deviceName) {
+  const playlistVerifier = await import('./playlist-verifier');
+  const verifyPlaylist =
+    playlistVerifier.verifyPlaylist ||
+    (playlistVerifier.default && playlistVerifier.default.verifyPlaylist) ||
+    playlistVerifier.default;
+
+  if (typeof verifyPlaylist !== 'function') {
+    return {
+      success: false,
+      error: 'Playlist verifier is not available',
+    };
+  }
+
+  const verificationResult = await verifyPlaylist(playlist);
+
+  if (!verificationResult.valid) {
+    return {
+      success: false,
+      error: verificationResult.error || 'Failed to verify playlist before sending',
+      details: verificationResult.details
+        ? verificationResult.details
+            .map((detail) => `• ${detail.path}: ${detail.message}`)
+            .join('\n')
+        : undefined,
+    };
+  }
+
   const { sendPlaylistToDevice } = require('./functions');
   return await sendPlaylistToDevice({ playlist, deviceName });
 }
@@ -459,6 +492,11 @@ function shuffleArray(array) {
 
 /**
  * Build playlist directly from requirements (deterministic, no AI)
+ *
+ * TODO: Treat requested device send and feed publish failures consistently.
+ * This function currently keeps the pre-existing main-branch behavior where
+ * send/publish failures are non-fatal to the playlist build; fix that in a
+ * dedicated follow-up when the command contract changes.
  *
  * @param {Object} params - Playlist parameters
  * @param {Array<Object>} params.requirements - Array of requirements

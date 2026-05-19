@@ -10,7 +10,7 @@ const domainResolver = require('./domain-resolver');
 const logger = require('../logger');
 
 /**
- * Build DP1 v1.0.0 compliant playlist
+ * Build DP1 v1.1.0 compliant playlist
  *
  * This is the actual implementation called by AI orchestrator's function calling.
  * Uses core playlist-builder utilities.

@@ -10,6 +10,8 @@ import {
 // ff1-device is still CommonJS; require keeps the interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { sendPlaylistToDevice } = require('../utilities/ff1-device');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { signPlaylist } = require('../utilities/playlist-signer');
 
 export const playCommand = new Command('play')
   .description('Play a playlist or media URL on an FF1 device')
@@ -17,7 +19,7 @@ export const playCommand = new Command('play')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
   .option(
     '--skip-verify',
-    'Skip DP-1 structure validation (parse/schema) before playing; use only when you accept malformed envelopes'
+    'Skip signature verification and auto-sign gating before playing; use only when you accept malformed envelopes'
   )
   .action(async (source: string, options: { device?: string; skipVerify?: boolean }) => {
     try {
@@ -31,26 +33,68 @@ export const playCommand = new Command('play')
       console.log(chalk.blue('\nPlay on FF1\n'));
 
       if (!options.skipVerify) {
-        // Structure-only validation (same as `validate`, `verify`, send, and publish).
-        // Synthesized media-URL playlists are unsigned but parse as valid DP-1.
+        const playlistConfig = config.playlist;
+        const privateKey = playlistConfig?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
+        const { verifyPlaylist } = await import('../utilities/playlist-verifier');
+
         if (isPlaylistSource) {
-          console.log(chalk.cyan(`Validate playlist (${sourceLabel})`));
+          console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
         }
 
-        const verifier = await import('../utilities/playlist-verifier');
-        const { validatePlaylist } = verifier;
-        const validateResult = await validatePlaylist(resolved.playlist);
+        const verifyResult =
+          resolved.kind === 'media'
+            ? await (async () => {
+                try {
+                  if (!privateKey) {
+                    return {
+                      valid: false,
+                      error:
+                        'Cannot sign playlist for playback: no playlist signing key is configured',
+                    };
+                  }
 
-        if (!validateResult.valid) {
+                  const signature = await signPlaylist(resolved.playlist, privateKey);
+                  const signedPlaylist = {
+                    ...resolved.playlist,
+                    signature: undefined,
+                    signatures: [signature],
+                  };
+                  const signedVerification = await verifyPlaylist(signedPlaylist);
+                  if (signedVerification.valid) {
+                    resolved.playlist = signedPlaylist as typeof resolved.playlist;
+                    return { valid: true, playlist: signedPlaylist };
+                  }
+
+                  return {
+                    valid: false,
+                    error: signedVerification.error,
+                    details: signedVerification.details,
+                  };
+                } catch (error) {
+                  return {
+                    valid: false,
+                    error: `Failed to sign playlist for playback: ${(error as Error).message}`,
+                  };
+                }
+              })()
+            : await verifyPlaylist(resolved.playlist);
+
+        if (!verifyResult.valid) {
           printPlaylistVerificationFailure(
-            validateResult,
+            {
+              valid: false,
+              error: verifyResult.error,
+              details: verifyResult.details,
+            },
             isPlaylistSource ? `source: ${sourceLabel}` : undefined
           );
           process.exit(1);
         }
 
-        if (isPlaylistSource) {
-          console.log(chalk.green('✓ Validated\n'));
+        if (resolved.kind === 'media') {
+          console.log(chalk.green('✓ Signed and verified\n'));
+        } else if (isPlaylistSource) {
+          console.log(chalk.green('✓ Verified\n'));
         }
       }
 

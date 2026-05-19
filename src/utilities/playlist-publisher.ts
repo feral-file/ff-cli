@@ -1,6 +1,7 @@
 import axios, { AxiosError } from 'axios';
 import fs from 'fs';
 import type { Playlist } from '../types';
+import { verifyPlaylist } from './playlist-verifier';
 
 interface PublishResult {
   success: boolean;
@@ -11,12 +12,12 @@ interface PublishResult {
 }
 
 /**
- * Publish a validated playlist to a DP-1 feed server
+ * Publish a verified playlist to a DP-1 feed server
  *
  * Flow:
  * 1. Read and parse playlist file
- * 2. Parse / structure validation via validatePlaylist (same as `validate`; not cryptographic verify)
- * 3. If valid, send the original playlist to feed server
+ * 2. Verify the playlist signature before upload
+ * 3. If valid, send the verified playlist to feed server
  * 4. Return result with playlist ID or error
  *
  * @param {string} filePath - Path to playlist JSON file
@@ -56,15 +57,14 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 2: Parse / structure validation (use `verify` CLI for signature checks)
-    const { validatePlaylist } = await import('./playlist-verifier');
-    const validationResult = await validatePlaylist(playlist);
+    // Step 2: Verify signature integrity before publishing.
+    const deliveryResult = await verifyPlaylist(playlist);
 
-    if (!validationResult.valid) {
+    if (!deliveryResult.valid) {
       return {
         success: false,
-        error: `Playlist validation failed: ${validationResult.error}`,
-        message: validationResult.details?.map((d) => `  • ${d.path}: ${d.message}`).join('\n'),
+        error: `Playlist verification failed: ${deliveryResult.error}`,
+        message: deliveryResult.details?.map((d) => `  • ${d.path}: ${d.message}`).join('\n'),
       };
     }
 

@@ -60,10 +60,12 @@ Optional settings used where headless/browser‑like behavior is needed.
 
 Used for signing DP‑1 playlists.
 
-- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`.
+- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `send` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
   **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) pass the private key string through to **`dp1-js`** (`SignMultiEd25519`) without an extra decoding step in ff-cli. `dp1-js` recognizes **hex** (optional `0x`) or **base64** encodings of the PKCS#8 DER blob produced by the OpenSSL examples below, then loads the key for Ed25519. Use those formats; ff-cli does not add a separate normalizer ahead of the library.
+
 - `playlist.role` (string): DP-1 signing role that travels with the private key. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`).
+
 ### Generate an Ed25519 private key
 
 You can generate a key locally. The CLI accepts either base64 (preferred) or hex
