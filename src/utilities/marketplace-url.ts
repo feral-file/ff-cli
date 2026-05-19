@@ -24,7 +24,13 @@ export interface TokenCoords {
   tokenId: string;
 }
 
-export type MarketplaceSource = 'objkt' | 'artblocks' | 'fxhash' | 'feralfile' | 'opensea';
+export type MarketplaceSource =
+  | 'objkt'
+  | 'artblocks'
+  | 'fxhash'
+  | 'feralfile'
+  | 'opensea'
+  | 'superrare';
 
 export type FeralFileUrlKind = 'artwork' | 'series' | 'show';
 
@@ -34,6 +40,7 @@ export type ParsedFindInput =
   | { kind: 'ff-url'; urlKind: FeralFileUrlKind; identifier: string }
   | { kind: 'objkt-alias'; alias: string; tokenId: string }
   | { kind: 'ab-collection'; slug: string }
+  | { kind: 'fxhash-iteration'; slug: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -105,6 +112,9 @@ export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   }
   if (host === 'opensea.io' || host.endsWith('.opensea.io')) {
     return parseOpenSea(url);
+  }
+  if (host === 'superrare.com' || host.endsWith('.superrare.com')) {
+    return parseSuperRare(url);
   }
   return null;
 }
@@ -203,7 +213,8 @@ export function parseArtBlocks(url: URL): ParsedFindInput {
 
 /**
  * fxhash URL forms (Tezos):
- *   fxhash.xyz/gentk/FX1-{KT1...}-{tokenId}                  (current naming)
+ *   fxhash.xyz/gentk/FX1-{KT1...}-{tokenId}                  (canonical token URL)
+ *   fxhash.xyz/iteration/{slug}                              (current UI; resolves via fxhash API)
  *   fxhash.xyz/gentk/{numericId}                             (legacy — needs fxhash API)
  *   fxhash.xyz/generative/{slug}                             (series — not supported in v1)
  *
@@ -234,6 +245,10 @@ export function parseFxhash(url: URL): ParsedFindInput {
         'fxhash legacy numeric gentk URLs require an fxhash API lookup — not supported in v1. ' +
         'Paste the FX1-{contract}-{tokenId} form or use `tezos:{contract}:{tokenId}`.',
     };
+  }
+  const iter = /^\/iteration\/([a-z0-9][a-z0-9-]*)\/?$/.exec(url.pathname);
+  if (iter) {
+    return { kind: 'fxhash-iteration', slug: iter[1] };
   }
   if (url.pathname.startsWith('/generative/')) {
     return {
@@ -291,6 +306,34 @@ export function parseOpenSea(url: URL): ParsedFindInput {
   return {
     kind: 'unsupported',
     reason: `OpenSea URL not recognized: ${url.pathname}.`,
+  };
+}
+
+/**
+ * SuperRare URL forms (Ethereum-only platform):
+ *   superrare.com/artwork/eth/{contract}/{tokenId}
+ *   superrare.com/{artist}/{slug}                  — slug form, not supported in v1
+ *
+ * SuperRare's `/artwork/eth/...` URLs encode both the contract and tokenId
+ * directly, so no API call is needed. Token URLs resolve end-to-end only when
+ * Raster also indexes the underlying series; for 1/1 artworks the find flow
+ * falls through to a single-token playlist via the Raster 404 path.
+ */
+export function parseSuperRare(url: URL): ParsedFindInput {
+  const m = /^\/artwork\/eth\/(0x[a-fA-F0-9]{40})\/(\d+)\/?$/.exec(url.pathname);
+  if (m) {
+    return {
+      kind: 'token',
+      source: 'superrare',
+      coords: { chain: 'ethereum', contract: m[1].toLowerCase(), tokenId: m[2] },
+    };
+  }
+  return {
+    kind: 'unsupported',
+    reason:
+      `SuperRare URL not recognized: ${url.pathname}. Expected ` +
+      '/artwork/eth/{contract}/{tokenId}. For artist-slug URLs, paste the canonical ' +
+      '/artwork/eth/... form (the SuperRare detail page links it under the artwork title).',
   };
 }
 

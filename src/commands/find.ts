@@ -8,6 +8,7 @@ import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
+import { resolveFxhashIteration } from '../utilities/fxhash-marketplace';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -55,7 +56,7 @@ export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / Feral File), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -76,7 +77,7 @@ export const findCommand = new Command('find')
         console.error(chalk.red('Could not understand input.'));
         console.error(
           chalk.dim(
-            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, Feral File. ' +
+            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File. ' +
               'Or: `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, ' +
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
@@ -188,6 +189,10 @@ async function resolveTarget(
   }
   if (parsed.kind === 'ab-collection') {
     const coords = await resolveArtBlocksCollection(parsed.slug);
+    return resolveCoords(coords);
+  }
+  if (parsed.kind === 'fxhash-iteration') {
+    const coords = await resolveFxhashIteration(parsed.slug);
     return resolveCoords(coords);
   }
   if (parsed.kind === 'address') {

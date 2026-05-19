@@ -135,6 +135,20 @@ describe('parseFindInput', () => {
     assert.equal(r.coords.chain, 'tezos');
   });
 
+  test('fxhash /iteration/{slug} URL → fxhash-iteration kind (needs async resolve)', () => {
+    const r = parseFindInput('https://www.fxhash.xyz/iteration/garden-monoliths-215');
+    assert.equal(r?.kind, 'fxhash-iteration');
+    if (r?.kind !== 'fxhash-iteration') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'garden-monoliths-215');
+  });
+
+  test('fxhash /iteration/ bare (no slug) → unsupported', () => {
+    const r = parseFindInput('https://www.fxhash.xyz/iteration/');
+    assert.equal(r?.kind, 'unsupported');
+  });
+
   test('fxhash FX2 gentk → unsupported (EVM out of scope)', () => {
     const r = parseFindInput('https://www.fxhash.xyz/gentk/FX2-0xabc-12');
     assert.equal(r?.kind, 'unsupported');
@@ -175,6 +189,29 @@ describe('parseFindInput', () => {
   test('OpenSea collection URL → unsupported with hint', () => {
     const r = parseFindInput('https://opensea.io/collection/azuki');
     assert.equal(r?.kind, 'unsupported');
+  });
+
+  test('SuperRare /artwork/eth/{contract}/{tokenId} → token kind, source superrare', () => {
+    const r = parseFindInput(
+      'https://superrare.com/artwork/eth/0x3e930455dcBf4bC69DE9926bDAF8ef782398786f/1'
+    );
+    assert.equal(r?.kind, 'token');
+    if (r?.kind !== 'token') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.source, 'superrare');
+    assert.equal(r.coords.chain, 'ethereum');
+    assert.equal(r.coords.contract, '0x3e930455dcbf4bc69de9926bdaf8ef782398786f');
+    assert.equal(r.coords.tokenId, '1');
+  });
+
+  test('SuperRare artist-slug URL → unsupported with hint', () => {
+    const r = parseFindInput('https://superrare.com/louisdazy/disassociative-1');
+    assert.equal(r?.kind, 'unsupported');
+    if (r?.kind !== 'unsupported') {
+      throw new Error('narrowing');
+    }
+    assert.ok(r.reason.includes('/artwork/eth/'));
   });
 
   test('Feral File /exhibitions/artwork/{tokenId} → ff-url kind, urlKind artwork', () => {
