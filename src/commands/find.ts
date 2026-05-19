@@ -311,8 +311,10 @@ async function pickFromCatalog(
   const answer = await prompt.ask(`Pick one (0-${catalog.length - 1}, default 0): `);
   prompt.close();
   console.log();
-  const index = answer ? Number.parseInt(answer, 10) : 0;
-  if (!Number.isFinite(index) || index < 0 || index >= catalog.length) {
+  // Strict integer parse: Number.parseInt('5abc') silently returns 5; here we
+  // want '5abc' to be rejected outright. Same anti-pattern parseLimitOption fixes.
+  const index = answer ? Number(answer) : 0;
+  if (!Number.isInteger(index) || index < 0 || index >= catalog.length) {
     throw new Error(`Invalid selection: "${answer}"`);
   }
   return catalog[index];
@@ -418,11 +420,25 @@ async function doPublish(
     return;
   }
 
+  // Validate --server regardless of server count. parseInt('0abc') would
+  // silently truncate to 0 and route to a different server; with a single
+  // server configured the old code skipped --server validation entirely and
+  // accepted any garbage value while publishing to baseURLs[0].
   let serverIndex = 0;
-  if (feedConfig.baseURLs.length > 1) {
-    if (serverArg !== undefined) {
-      serverIndex = Number.parseInt(serverArg, 10);
-    } else if (nonInteractive) {
+  if (serverArg !== undefined) {
+    const n = Number(serverArg);
+    if (!Number.isInteger(n) || n < 0 || n >= feedConfig.baseURLs.length) {
+      console.error(
+        chalk.red(
+          `Invalid --server value: ${serverArg} (expected integer in 0..${feedConfig.baseURLs.length - 1})`
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
+    serverIndex = n;
+  } else if (feedConfig.baseURLs.length > 1) {
+    if (nonInteractive) {
       console.error(
         chalk.red(
           `Multiple feed servers configured (${feedConfig.baseURLs.length}); pass --server <index> when running with --yes.`
@@ -430,26 +446,26 @@ async function doPublish(
       );
       process.exitCode = 1;
       return;
-    } else {
-      console.log(chalk.yellow(`Multiple feed servers configured:`));
-      feedConfig.baseURLs.forEach((url, i) => {
-        console.log(chalk.cyan(`  ${i}: ${url}`));
-      });
-      const prompt = createPrompt();
-      const answer = await prompt.ask('Select server (0-based index): ');
-      prompt.close();
-      console.log();
-      serverIndex = Number.parseInt(answer, 10);
     }
-  }
-  if (
-    !Number.isFinite(serverIndex) ||
-    serverIndex < 0 ||
-    serverIndex >= feedConfig.baseURLs.length
-  ) {
-    console.error(chalk.red(`Invalid server index: ${serverArg ?? serverIndex}`));
-    process.exitCode = 1;
-    return;
+    console.log(chalk.yellow(`Multiple feed servers configured:`));
+    feedConfig.baseURLs.forEach((url, i) => {
+      console.log(chalk.cyan(`  ${i}: ${url}`));
+    });
+    const prompt = createPrompt();
+    const answer = await prompt.ask('Select server (0-based index): ');
+    prompt.close();
+    console.log();
+    const n = Number(answer);
+    if (!Number.isInteger(n) || n < 0 || n >= feedConfig.baseURLs.length) {
+      console.error(
+        chalk.red(
+          `Invalid selection: ${answer} (expected integer in 0..${feedConfig.baseURLs.length - 1})`
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
+    serverIndex = n;
   }
 
   const serverUrl = feedConfig.baseURLs[serverIndex];
