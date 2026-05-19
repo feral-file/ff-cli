@@ -111,13 +111,15 @@ OUTPUT CONTRACT
 
 REQUIREMENT TYPES (BUILD)
 - build_playlist: { type, blockchain: "ethereum"|"tezos", contractAddress, tokenIds?: string[], quantity?: number, source?: string }
-- feral_file_artwork: { type, artworkId } for Feral File artwork URLs or public artwork ids.
   • USE THIS when user mentions "contract" with a quantity: "N items from [blockchain] contract [address]"
   • tokenIds is OPTIONAL - omit it when user wants random tokens from a contract
   • Examples:
     - "tokens 1, 2, 3 from contract 0x123" → build_playlist with tokenIds: ["1", "2", "3"]
     - "100 items from ethereum contract 0xABC" → build_playlist with quantity: 100, NO tokenIds
     - "50 random tokens from tezos contract KT1..." → build_playlist with quantity: 50, NO tokenIds
+- feral_file_artwork: { type, artworkId } for Feral File artwork URLs or public artwork ids.
+  • USE THIS only for feralfile.com/exhibitions/artwork URLs or explicit Feral File public artwork ids
+  • Do not use this for ordinary blockchain contract prompts
 - query_address: { type, ownerAddress: 0x…|tz…|domain.eth|domain.tez, quantity?: number | "all" }
   • USE THIS for owner/wallet addresses WITHOUT the word "contract"
   • Patterns: "N items from [address]", "NFTs from [address]", "tokens owned by [address]"
