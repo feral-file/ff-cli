@@ -64,7 +64,7 @@ type ResolvedTarget =
   | { kind: 'single'; coords: TokenCoords };
 
 const RASTER_PAGE_SIZE = 100;
-const INDEXER_CONCURRENCY = 10;
+const INDEXER_DISPLAY_DURATION_SECONDS = 10;
 
 export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
@@ -140,7 +140,7 @@ export const findCommand = new Command('find')
           contractAddress: t.contract,
           tokenId: t.tokenId,
         })),
-        INDEXER_CONCURRENCY
+        INDEXER_DISPLAY_DURATION_SECONDS
       );
 
       if (!Array.isArray(items) || items.length === 0) {
@@ -263,6 +263,25 @@ export function parseLimitOption(limitStr: string | undefined): number {
     throw new Error(`Invalid --limit value: ${limitStr} (expected a positive integer)`);
   }
   return n;
+}
+
+/**
+ * parseServerIndexOption validates a zero-based feed server selection without
+ * parseInt-style prefix truncation. Publishing to the wrong configured feed is
+ * worse than rejecting a malformed flag, so explicit and prompted server
+ * values must be whole-number indexes inside the configured server list.
+ */
+export function parseServerIndexOption(serverArg: string, serverCount: number): number {
+  const serverIndex = Number(serverArg);
+  if (
+    !Number.isFinite(serverIndex) ||
+    !Number.isInteger(serverIndex) ||
+    serverIndex < 0 ||
+    serverIndex >= serverCount
+  ) {
+    throw new Error(`Invalid server index: ${serverArg}`);
+  }
+  return serverIndex;
 }
 
 async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promise<TokenCoords[]> {
@@ -534,10 +553,16 @@ async function doPublish(
   }
 
   let serverIndex = 0;
-  if (feedConfig.baseURLs.length > 1) {
-    if (serverArg !== undefined) {
-      serverIndex = Number.parseInt(serverArg, 10);
-    } else if (nonInteractive) {
+  if (serverArg !== undefined) {
+    try {
+      serverIndex = parseServerIndexOption(serverArg, feedConfig.baseURLs.length);
+    } catch (error) {
+      console.error(chalk.red((error as Error).message));
+      process.exitCode = 1;
+      return;
+    }
+  } else if (feedConfig.baseURLs.length > 1) {
+    if (nonInteractive) {
       console.error(
         chalk.red(
           `Multiple feed servers configured (${feedConfig.baseURLs.length}); pass --server <index> when running with --yes.`
@@ -554,17 +579,14 @@ async function doPublish(
       const answer = await prompt.ask('Select server (0-based index): ');
       prompt.close();
       console.log();
-      serverIndex = Number.parseInt(answer, 10);
+      try {
+        serverIndex = parseServerIndexOption(answer, feedConfig.baseURLs.length);
+      } catch (error) {
+        console.error(chalk.red((error as Error).message));
+        process.exitCode = 1;
+        return;
+      }
     }
-  }
-  if (
-    !Number.isFinite(serverIndex) ||
-    serverIndex < 0 ||
-    serverIndex >= feedConfig.baseURLs.length
-  ) {
-    console.error(chalk.red(`Invalid server index: ${serverArg ?? serverIndex}`));
-    process.exitCode = 1;
-    return;
   }
 
   const serverUrl = feedConfig.baseURLs[serverIndex];

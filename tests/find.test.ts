@@ -16,6 +16,7 @@ import { parseFindInput } from '../src/utilities/marketplace-url';
 import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
 import {
   parseLimitOption,
+  parseServerIndexOption,
   decideActions,
   prepareGeneratedPlaylistForPlayback,
   doPlay,
@@ -335,6 +336,29 @@ describe('parseLimitOption', () => {
 
   test('empty string → throws', () => {
     assert.throws(() => parseLimitOption(''), /Invalid --limit/);
+  });
+});
+
+describe('parseServerIndexOption', () => {
+  test('zero-based integer string → server index', () => {
+    assert.equal(parseServerIndexOption('0', 2), 0);
+    assert.equal(parseServerIndexOption('1', 2), 1);
+  });
+
+  test('prefix-numeric value rejects instead of truncating', () => {
+    assert.throws(() => parseServerIndexOption('1abc', 3), /Invalid server index/);
+  });
+
+  test('decimal value rejects instead of truncating', () => {
+    assert.throws(() => parseServerIndexOption('1.5', 3), /Invalid server index/);
+  });
+
+  test('out-of-range value rejects', () => {
+    assert.throws(() => parseServerIndexOption('2', 2), /Invalid server index/);
+  });
+
+  test('negative value rejects', () => {
+    assert.throws(() => parseServerIndexOption('-1', 2), /Invalid server index/);
   });
 });
 
