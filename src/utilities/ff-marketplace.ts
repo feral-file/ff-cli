@@ -1,20 +1,20 @@
 /**
  * Feral File marketplace resolver.
  *
- * Artwork URLs use the self-describing `/api/artworks/{id}` endpoint (one GET
- * returning chain, contract, and the on-chain tokenID — including the swapped
- * tokenID case where the public URL id differs from the on-chain id). That
- * path lives in {@link ./feral-file-artwork#resolveFeralFileArtwork}; this
- * module only forwards to it for the `artwork` URL kind.
+ * Both artwork and series URLs go through the self-describing
+ * `/api/artworks/{id}` endpoint (one GET returning chain, contract, and the
+ * on-chain tokenID — including the swapped tokenID case where the public
+ * URL id differs from the on-chain id). Series URLs add one extra hop:
+ * resolve the series slug, then look up its first artwork, then hand that
+ * artwork id to `resolveFeralFileArtwork`. The exhibition's contract list is
+ * not consulted — exhibitions can host multiple series across multiple
+ * contracts, so picking-first would silently route a Tezos series to an
+ * Ethereum sibling contract on the same exhibition.
  *
- * Series URLs still require the artwork → series → exhibition walk because
- * the public API has no equivalent self-describing series endpoint yet. For
- * multi-token series we return one representative token — the Raster
- * reverse-lookup in the caller resolves to the series and enumerates the
- * rest. We deliberately do not exhaust pages here.
+ * Show URLs are rejected: a single exhibition spans multiple series, which
+ * is wider than v1 supports.
  */
 import * as logger from '../logger';
-import type { IndexerChain } from './raster-client';
 import type { TokenCoords, FeralFileUrlKind } from './marketplace-url';
 import { resolveFeralFileArtwork } from './feral-file-artwork';
 
@@ -35,15 +35,6 @@ interface ArtworksByQueryResponse {
   }>;
 }
 
-interface ExhibitionResponse {
-  result: {
-    contracts: Array<{
-      blockchainType: string;
-      address: string;
-    }>;
-  };
-}
-
 async function ffFetch<T>(path: string): Promise<T> {
   const url = `${FF_API_BASE}${path}`;
   logger.debug(`[FF API] GET ${url}`);
@@ -57,41 +48,10 @@ async function ffFetch<T>(path: string): Promise<T> {
   return (await response.json()) as T;
 }
 
-function ffChainToIndexer(blockchainType: string): IndexerChain | null {
-  const normalized = blockchainType.toLowerCase();
-  if (normalized === 'ethereum' || normalized === 'tezos') {
-    return normalized;
-  }
-  return null;
-}
-
-function pickSupportedContract(contracts: Array<{ blockchainType: string; address: string }>): {
-  chain: IndexerChain;
-  address: string;
-} {
-  for (const c of contracts) {
-    const chain = ffChainToIndexer(c.blockchainType);
-    if (chain) {
-      return {
-        chain,
-        address: chain === 'ethereum' ? c.address.toLowerCase() : c.address,
-      };
-    }
-  }
-  const seen = contracts.map((c) => c.blockchainType).join(', ') || 'none';
-  throw new Error(
-    `Feral File: no Ethereum or Tezos contract found for this exhibition (saw: ${seen}). ` +
-      'The FF indexer in ff-cli covers eth + tezos mainnet only.'
-  );
-}
-
 /**
- * Resolve a parsed Feral File URL to on-chain token coordinates.
- *
- * For series URLs, returns the first token in the series — the Raster
- * reverse-lookup in the caller resolves to the series and enumerates the
- * rest. `show` URLs are rejected: a single exhibition spans multiple series,
- * which is wider than v1 supports.
+ * Resolve a parsed Feral File URL to on-chain token coordinates. For series
+ * URLs we return one representative token; the Raster reverse-lookup in the
+ * caller resolves to the series and enumerates the rest.
  */
 export async function resolveFeralFileToken(parsed: {
   urlKind: FeralFileUrlKind;
@@ -111,9 +71,8 @@ export async function resolveFeralFileToken(parsed: {
 }
 
 async function resolveFromArtworkID(publicArtworkId: string): Promise<TokenCoords> {
-  // /api/artworks/{id} now returns chain + contractAddress + tokenID directly,
-  // including the swapped-id case where the public URL id != on-chain tokenID.
-  // Trust the response's tokenID; the URL id is only useful for the lookup.
+  // /api/artworks/{id} returns chain + contractAddress + on-chain tokenID
+  // directly, including the swapped-id case where URL id != on-chain id.
   const { chain, contractAddress, tokenId } = await resolveFeralFileArtwork(publicArtworkId);
   return {
     chain,
@@ -143,9 +102,8 @@ async function resolveFromSeriesSlug(slug: string): Promise<TokenCoords> {
   if (!artworks.result || artworks.result.length === 0) {
     throw new Error(`Feral File: series "${slug}" has no artworks.`);
   }
-  const representativeTokenId = artworks.result[0].id;
-
-  const exhibition = await ffFetch<ExhibitionResponse>(`/exhibitions/${picked.exhibitionID}`);
-  const { chain, address } = pickSupportedContract(exhibition.result.contracts);
-  return { chain, contract: address, tokenId: representativeTokenId };
+  // Hand the representative artwork's public id to the canonical resolver so
+  // we get the right (chain, contract, on-chain tokenID) for THIS series —
+  // not whatever picking-first off the exhibition's contract list returned.
+  return resolveFromArtworkID(artworks.result[0].id);
 }
