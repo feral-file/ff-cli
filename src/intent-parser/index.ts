@@ -117,6 +117,9 @@ REQUIREMENT TYPES (BUILD)
     - "tokens 1, 2, 3 from contract 0x123" → build_playlist with tokenIds: ["1", "2", "3"]
     - "100 items from ethereum contract 0xABC" → build_playlist with quantity: 100, NO tokenIds
     - "50 random tokens from tezos contract KT1..." → build_playlist with quantity: 50, NO tokenIds
+- feral_file_artwork: { type, artworkId } for Feral File artwork URLs or public artwork ids.
+  • USE THIS only for feralfile.com/exhibitions/artwork URLs or explicit Feral File public artwork ids
+  • Do not use this for ordinary blockchain contract prompts
 - query_address: { type, ownerAddress: 0x…|tz…|domain.eth|domain.tez, quantity?: number | "all" }
   • USE THIS for owner/wallet addresses WITHOUT the word "contract"
   • Patterns: "N items from [address]", "NFTs from [address]", "tokens owned by [address]"
@@ -148,6 +151,10 @@ EXAMPLES (build_playlist - contract addresses)
 - "create a playlist of 100 items from ethereum contract 0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270" → \`build_playlist\` { blockchain: "ethereum", contractAddress: "0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270", quantity: 100 }
 - "100 random tokens from tezos contract KT1abc" → \`build_playlist\` { blockchain: "tezos", contractAddress: "KT1abc", quantity: 100 }
 - "get 50 from contract 0xDEF" → \`build_playlist\` { blockchain: "ethereum", contractAddress: "0xDEF", quantity: 50 }
+
+EXAMPLES (feral_file_artwork - public artwork URLs)
+- "build a playlist from https://feralfile.com/exhibitions/artwork/abc123" → \`feral_file_artwork\` { artworkId: "abc123" }
+- "play Feral File artwork f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf" → \`feral_file_artwork\` { artworkId: "f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf" }
 
 EXAMPLES (fetch_feed)
 - "Pick 3 artworks from Social Codes and 2 from a2p. Mix them up." → \`fetch_feed\` { playlistName: "Social Codes", quantity: 3 } + \`fetch_feed\` { playlistName: "a2p", quantity: 2 }, and set \`playlistSettings.preserveOrder\` = false
@@ -266,22 +273,22 @@ const intentParserFunctionSchemas: OpenAI.Chat.ChatCompletionTool[] = [
     function: {
       name: 'parse_requirements',
       description:
-        'Parse validated and complete requirements. Only call this when you have all required information for each requirement: blockchain, contract address, token IDs, and source.',
+        'Parse validated and complete requirements. Only call this when you have all required information for each requirement, such as blockchain/contract/token IDs, Feral File artwork id, feed playlist name, or owner address.',
       parameters: {
         type: 'object',
         properties: {
           requirements: {
             type: 'array',
             description:
-              'Array of parsed requirements. Each can be either build_playlist (specific NFTs), fetch_feed (feed playlist), or query_address (all NFTs from address)',
+              'Array of parsed requirements. Each can be build_playlist (specific NFTs), feral_file_artwork (Feral File public artwork id or URL), fetch_feed (feed playlist), or query_address (all NFTs from address)',
             items: {
               type: 'object',
               properties: {
                 type: {
                   type: 'string',
-                  enum: ['build_playlist', 'fetch_feed', 'query_address'],
+                  enum: ['build_playlist', 'feral_file_artwork', 'fetch_feed', 'query_address'],
                   description:
-                    'Type of requirement: build_playlist (specific NFTs), fetch_feed (feed playlist), or query_address (all NFTs from address)',
+                    'Type of requirement: build_playlist (specific NFTs), feral_file_artwork (Feral File artwork), fetch_feed (feed playlist), or query_address (all NFTs from address)',
                 },
                 blockchain: {
                   type: 'string',
@@ -299,6 +306,11 @@ const intentParserFunctionSchemas: OpenAI.Chat.ChatCompletionTool[] = [
                   items: {
                     type: 'string',
                   },
+                },
+                artworkId: {
+                  type: 'string',
+                  description:
+                    'Feral File public artwork id or artwork URL - only for feral_file_artwork type',
                 },
                 ownerAddress: {
                   type: 'string',

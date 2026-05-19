@@ -70,11 +70,34 @@ npm run dev -- build examples/params-example.json -o playlist.json
 cat examples/params-example.json | npm run dev -- build -o playlist.json
 ```
 
+Build from a Feral File public artwork id or artwork URL:
+
+```bash
+cat > /tmp/ff-artwork.json <<'JSON'
+{
+  "requirements": [
+    {
+      "type": "feral_file_artwork",
+      "artworkId": "https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf"
+    }
+  ],
+  "playlistSettings": {
+    "title": "Feral File Artwork"
+  }
+}
+JSON
+
+npm run dev -- build /tmp/ff-artwork.json -o playlist.json
+```
+
 ## AI‑Orchestrated Deterministic Flow (prompts)
 
 ```bash
 # Show tool‑call progress and validation
 npm run dev -- chat "Build a playlist of my works from reas.eth plus 3 from Unsupervised" -v -o playlist.json
+
+# Build from a Feral File artwork URL
+npm run dev -- chat "Build a playlist from https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf" -v -o playlist.json
 
 # Switch model if desired
 npm run dev -- chat "Build playlist from Ethereum address 0xaeE022552B539dB18297D7481b6D547C622488B3 and 2 from Unsupervised" --model gpt -v

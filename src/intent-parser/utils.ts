@@ -53,6 +53,10 @@ export function applyConstraints(params: RequirementParams, config: Config): Req
       if (!r.playlistName) {
         throw new Error(`Requirement ${index + 1}: playlistName is required for fetch_feed`);
       }
+    } else if (r.type === 'feral_file_artwork') {
+      if (!r.artworkId) {
+        throw new Error(`Requirement ${index + 1}: artworkId is required for feral_file_artwork`);
+      }
     } else {
       throw new Error(`Requirement ${index + 1}: invalid type "${r.type}"`);
     }
@@ -81,9 +85,9 @@ export function applyConstraints(params: RequirementParams, config: Config): Req
 
   // Note: No cap needed - registry system handles large playlists efficiently
   // Full items are stored in memory, only IDs are sent to AI model
-  const hasAllQuantity = params.requirements.some((r) => r.quantity === 'all');
+  const hasAllQuantity = params.requirements.some((r) => 'quantity' in r && r.quantity === 'all');
   const totalRequested = params.requirements.reduce((sum, r) => {
-    if (typeof r.quantity === 'number') {
+    if ('quantity' in r && typeof r.quantity === 'number') {
       return sum + r.quantity;
     }
     return sum;

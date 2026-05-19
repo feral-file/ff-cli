@@ -275,8 +275,16 @@ async function queryTokensByAddress(ownerAddress, quantity, duration = 10, optio
  * @returns {Promise<Array>} Array of DP1 playlist items
  */
 async function queryRequirement(requirement, duration = 10) {
-  const { type, blockchain, contractAddress, tokenIds, ownerAddress, playlistName, quantity } =
-    requirement;
+  const {
+    type,
+    blockchain,
+    contractAddress,
+    tokenIds,
+    ownerAddress,
+    playlistName,
+    quantity,
+    artworkId,
+  } = requirement;
 
   // Handle query_address type
   if (type === 'query_address') {
@@ -339,6 +347,19 @@ async function queryRequirement(requirement, duration = 10) {
       );
       return [];
     }
+  }
+
+  if (type === 'feral_file_artwork') {
+    console.log(chalk.cyan(`Resolving Feral File artwork ${artworkId}...`));
+    const { parseFeralFileArtworkId, resolveFeralFileArtwork } = require('./feral-file-artwork');
+    const coords = await resolveFeralFileArtwork(parseFeralFileArtworkId(artworkId));
+    const items = await nftIndexer.getNFTTokenInfoBatch([coords], duration);
+    if (items.length > 0) {
+      console.log(chalk.green(`✓ Got ${items.length} item(s)`));
+    } else {
+      console.log(chalk.yellow('   No items found for Feral File artwork'));
+    }
+    return items;
   }
 
   // Handle build_playlist type (original NFT querying logic)

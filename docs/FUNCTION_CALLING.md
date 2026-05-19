@@ -24,8 +24,9 @@ Key files:
 Defined in `src/ai-orchestrator/index.js` as tool schemas for OpenAI‑compatible clients.
 
 - `query_requirement(requirement, duration)`
-  - Types: `build_playlist`, `fetch_feed`, `query_address`
+  - Types: `build_playlist`, `feral_file_artwork`, `fetch_feed`, `query_address`
   - For `build_playlist`: requires `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
+  - For `feral_file_artwork`: requires `artworkId`, either a Feral File public artwork id or `/exhibitions/artwork/{id}` URL
   - For `query_address`: requires `ownerAddress`, optional `quantity` (random selection)
   - For `fetch_feed`: requires `playlistName`, `quantity`
 
@@ -65,6 +66,7 @@ Two options are available:
 {
   "requirements": [
     { "type": "fetch_feed", "playlistName": "Social Codes", "quantity": 3 },
+    { "type": "feral_file_artwork", "artworkId": "https://feralfile.com/exhibitions/artwork/..." },
     {
       "type": "build_playlist",
       "blockchain": "ethereum",

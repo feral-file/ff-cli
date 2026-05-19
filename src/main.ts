@@ -180,6 +180,13 @@ export function validateRequirements(requirements: Requirement[]): Requirement[]
       };
     }
 
+    if (req.type === 'feral_file_artwork') {
+      if (!req.artworkId) {
+        throw new Error(`Requirement ${index + 1}: artworkId is required for feral_file_artwork`);
+      }
+      return req;
+    }
+
     // Query address requirement
     if (req.type === 'query_address') {
       // Query all NFTs from an owner address

@@ -116,7 +116,16 @@ export interface FetchFeedRequirement {
   quantity?: number | string;
 }
 
-export type Requirement = BuildPlaylistRequirement | QueryAddressRequirement | FetchFeedRequirement;
+export interface FeralFileArtworkRequirement {
+  type: 'feral_file_artwork';
+  artworkId: string;
+}
+
+export type Requirement =
+  | BuildPlaylistRequirement
+  | QueryAddressRequirement
+  | FetchFeedRequirement
+  | FeralFileArtworkRequirement;
 
 export interface BuildPlaylistParams {
   requirements: Requirement[];
