@@ -350,7 +350,10 @@ export function parseSuperRare(url: URL): ParsedFindInput {
  * Tracked for collapse to a single GET in feral-file/ff-exhibition#3039.
  */
 export function parseFeralFile(url: URL): ParsedFindInput {
-  let m = /^\/exhibitions\/artwork\/(\d+)\/?$/.exec(url.pathname);
+  // Public artwork ids may be numeric (legacy: URL id == on-chain tokenID) or
+  // hex hashes (swapped-id editions). Accept any URL-safe alphanumeric form;
+  // the FF API rejects unknown ids cleanly downstream.
+  let m = /^\/exhibitions\/artwork\/([A-Za-z0-9]+)\/?$/.exec(url.pathname);
   if (m) {
     return { kind: 'ff-url', urlKind: 'artwork', identifier: m[1] };
   }

@@ -224,6 +224,18 @@ describe('parseFindInput', () => {
     assert.equal(r.identifier, '12345');
   });
 
+  test('Feral File /exhibitions/artwork/{hex-id} → ff-url (swapped-id form)', () => {
+    const r = parseFindInput(
+      'https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf'
+    );
+    assert.equal(r?.kind, 'ff-url');
+    if (r?.kind !== 'ff-url') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.urlKind, 'artwork');
+    assert.equal(r.identifier, 'f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf');
+  });
+
   test('Feral File /exhibitions/series/{slug} → ff-url kind, urlKind series', () => {
     const r = parseFindInput('https://feralfile.com/exhibitions/series/some-slug');
     assert.equal(r?.kind, 'ff-url');
