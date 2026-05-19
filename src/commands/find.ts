@@ -8,6 +8,7 @@ import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
+import { getConfig } from '../config';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -24,6 +25,8 @@ import { sendPlaylistToDevice } from '../utilities/ff1-device';
 const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { buildDP1Playlist } = require('../utilities/playlist-builder');
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { signPlaylist } = require('../utilities/playlist-signer');
 
 interface FindOptions {
   output?: string;
@@ -36,6 +39,18 @@ interface FindOptions {
 }
 
 type PostBuildAction = 'play' | 'publish' | 'skip';
+
+interface PlaylistVerificationResult {
+  valid: boolean;
+  playlist?: Playlist;
+  error?: string;
+  details?: Array<{ path: string; message: string }>;
+}
+
+interface FindPlayDeps {
+  preparePlaylistForPlayback?: (playlist: Playlist) => Promise<PlaylistVerificationResult>;
+  sendPlaylistToDevice?: typeof sendPlaylistToDevice;
+}
 
 /**
  * What resolves out of a `find` input.
@@ -374,9 +389,27 @@ async function promptNextAction(): Promise<PostBuildAction> {
   throw new Error(`Unrecognized choice: "${answer}". Use P, S, or L.`);
 }
 
-async function doPlay(playlist: Playlist, deviceName: string | undefined): Promise<void> {
+/**
+ * doPlay prepares a generated `find` playlist for FF1 playback and sends only
+ * a verified envelope to the selected device.
+ */
+export async function doPlay(
+  playlist: Playlist,
+  deviceName: string | undefined,
+  deps: FindPlayDeps = {}
+): Promise<void> {
   console.log(chalk.blue('Play on FF1'));
-  const result = await sendPlaylistToDevice({ playlist, deviceName });
+  const preparePlaylistForPlayback =
+    deps.preparePlaylistForPlayback ?? prepareGeneratedPlaylistForPlayback;
+  const prepared = await preparePlaylistForPlayback(playlist);
+  if (!prepared.valid || !prepared.playlist) {
+    printFindPlaybackPreparationFailure(prepared);
+    process.exitCode = 1;
+    return;
+  }
+
+  const send = deps.sendPlaylistToDevice ?? sendPlaylistToDevice;
+  const result = await send({ playlist: prepared.playlist, deviceName });
   if (result.success) {
     console.log(chalk.green('✓ Playing'));
     if (result.deviceName) {
@@ -393,6 +426,94 @@ async function doPlay(playlist: Playlist, deviceName: string | undefined): Promi
     console.error(chalk.dim(`  Details: ${result.details}`));
   }
   process.exitCode = 1;
+}
+
+/**
+ * prepareGeneratedPlaylistForPlayback enforces the same fail-closed delivery
+ * contract as `play` for CLI-generated playlists. `find` can build a playlist
+ * without a signing key, but it must not send that unsigned envelope to an FF1
+ * device; when a key is available, sign and verify the generated playlist
+ * before transport.
+ */
+export async function prepareGeneratedPlaylistForPlayback(
+  playlist: Playlist,
+  deps: {
+    getPrivateKey?: () => string | undefined;
+    signPlaylist?: typeof signPlaylist;
+    verifyPlaylist?: (playlist: Playlist) => Promise<PlaylistVerificationResult>;
+  } = {}
+): Promise<PlaylistVerificationResult> {
+  const { verifyPlaylist } = deps.verifyPlaylist
+    ? { verifyPlaylist: deps.verifyPlaylist }
+    : await import('../utilities/playlist-verifier');
+
+  const verified = await verifyPlaylist(playlist);
+  if (verified.valid) {
+    return { valid: true, playlist };
+  }
+
+  if (hasSignatureMaterial(playlist)) {
+    return verified;
+  }
+
+  const privateKey =
+    deps.getPrivateKey !== undefined
+      ? deps.getPrivateKey()
+      : (getConfig().playlist?.privateKey ?? process.env.PLAYLIST_PRIVATE_KEY);
+  if (!privateKey) {
+    return {
+      valid: false,
+      error: 'Cannot sign playlist for playback: no playlist signing key is configured',
+    };
+  }
+
+  try {
+    const signer = deps.signPlaylist ?? signPlaylist;
+    const signature = await signer(playlist, privateKey);
+    const signedPlaylist = {
+      ...playlist,
+      signature: undefined,
+      signatures: [signature],
+    } as Playlist;
+    const signedVerification = await verifyPlaylist(signedPlaylist);
+    if (signedVerification.valid) {
+      return { valid: true, playlist: signedPlaylist };
+    }
+    return {
+      valid: false,
+      error: signedVerification.error,
+      details: signedVerification.details,
+    };
+  } catch (error) {
+    return {
+      valid: false,
+      error: `Failed to sign playlist for playback: ${(error as Error).message}`,
+    };
+  }
+}
+
+function hasSignatureMaterial(playlist: Playlist): boolean {
+  const candidate = playlist as Playlist & { signature?: unknown; signatures?: unknown[] };
+  return Boolean(
+    candidate.signature || (Array.isArray(candidate.signatures) && candidate.signatures.length > 0)
+  );
+}
+
+function printFindPlaybackPreparationFailure(result: PlaylistVerificationResult): void {
+  console.error(chalk.red('\nCannot play generated playlist:'), result.error);
+
+  if (result.details && result.details.length > 0) {
+    console.log(chalk.yellow('\n   Validation errors:'));
+    result.details.forEach((detail) => {
+      console.log(chalk.yellow(`     • ${detail.path}: ${detail.message}`));
+    });
+  }
+
+  console.log(
+    chalk.yellow(
+      '\n   Configure playlist.privateKey or PLAYLIST_PRIVATE_KEY, then rerun find --play.\n'
+    )
+  );
 }
 
 async function doPublish(

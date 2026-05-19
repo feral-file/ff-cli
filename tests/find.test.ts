@@ -11,9 +11,15 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import type { Playlist } from '../src/types';
 import { parseFindInput } from '../src/utilities/marketplace-url';
 import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
-import { parseLimitOption, decideActions } from '../src/commands/find';
+import {
+  parseLimitOption,
+  decideActions,
+  prepareGeneratedPlaylistForPlayback,
+  doPlay,
+} from '../src/commands/find';
 
 describe('parseFindInput', () => {
   test('Ethereum wallet address → address kind', () => {
@@ -458,3 +464,102 @@ describe('decideActions', () => {
     assert.deepEqual(actions, ['publish']);
   });
 });
+
+describe('find playback signing gate', () => {
+  test('prepareGeneratedPlaylistForPlayback fails unsigned generated playlists without a signing key', async () => {
+    let signCalled = false;
+    const result = await prepareGeneratedPlaylistForPlayback(makeUnsignedPlaylist(), {
+      getPrivateKey: () => undefined,
+      signPlaylist: async () => {
+        signCalled = true;
+        throw new Error('sign should not be called without a key');
+      },
+      verifyPlaylist: async () => ({
+        valid: false,
+        error: 'Playlist signature verification failed',
+      }),
+    });
+
+    assert.equal(result.valid, false);
+    assert.match(result.error ?? '', /no playlist signing key is configured/i);
+    assert.equal(signCalled, false);
+  });
+
+  test('doPlay fails before device transport when generated playlist cannot be signed', async () => {
+    const previousExitCode = process.exitCode;
+    let sendCalled = false;
+    process.exitCode = undefined;
+
+    try {
+      await doPlay(makeUnsignedPlaylist(), 'studio', {
+        preparePlaylistForPlayback: async () => ({
+          valid: false,
+          error: 'Cannot sign playlist for playback: no playlist signing key is configured',
+        }),
+        sendPlaylistToDevice: async () => {
+          sendCalled = true;
+          return { success: true };
+        },
+      });
+
+      assert.equal(sendCalled, false);
+      assert.equal(process.exitCode, 1);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  test('doPlay signs, verifies, and sends the signed generated playlist', async () => {
+    const previousExitCode = process.exitCode;
+    let signedPayload: Playlist | undefined;
+    process.exitCode = undefined;
+
+    try {
+      await doPlay(makeUnsignedPlaylist(), 'studio', {
+        preparePlaylistForPlayback: async (playlist) => ({
+          valid: true,
+          playlist: {
+            ...playlist,
+            signatures: [{ role: 'creator', publicKey: 'pub', sig: 'sig' }],
+          } as unknown as Playlist,
+        }),
+        sendPlaylistToDevice: async ({ playlist, deviceName }) => {
+          assert.equal(deviceName, 'studio');
+          signedPayload = playlist;
+          return { success: true, deviceName, device: 'http://127.0.0.1:1111' };
+        },
+      });
+
+      const signatures = (signedPayload as unknown as { signatures?: unknown[] })?.signatures;
+      assert.equal(Array.isArray(signatures), true);
+      assert.equal(signatures?.length, 1);
+      assert.equal(process.exitCode, undefined);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+});
+
+function makeUnsignedPlaylist(): Playlist {
+  return {
+    id: 'find-playback-test',
+    title: 'Find Playback Test',
+    slug: 'find-playback-test',
+    created: '2026-05-19T00:00:00.000Z',
+    dpVersion: '1.1.0',
+    items: [
+      {
+        id: 'item-1',
+        title: 'Item 1',
+        source: {
+          type: 'url',
+          url: 'https://example.com/item-1.mp4',
+        },
+        display: {
+          duration: 10,
+        },
+        created: '2026-05-19T00:00:00.000Z',
+      },
+    ],
+  } as unknown as Playlist;
+}

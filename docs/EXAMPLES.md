@@ -16,6 +16,32 @@ npm run dev -- config init
 npm run dev -- config validate
 ```
 
+## Find Artwork URLs
+
+`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or a wallet address into a playable DP-1 playlist. The focus is computational and generative art; PFP collections and pre-ERC-721 contracts have limits noted below.
+
+```bash
+# Paste a URL and play it on your FF1
+npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+
+# Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
+
+# Feral File artwork
+npm run dev -- find https://feralfile.com/exhibitions/artwork/54927077953071573898060197382410853987230099039252111790486496240282061669504 --play
+
+# Save without playing
+npm run dev -- find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 --output send-receive.json
+```
+
+Sources: Art Blocks, Objkt, fxhash, OpenSea, Feral File, raw on-chain coords, wallet addresses. Run `npm run dev -- find --help` for the full input list.
+
+Known limitations:
+
+- **CryptoPunks (original)** do not index because the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)).
+- **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series because Raster's curation is effectively the series allowlist.
+- **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)); retry or use `--limit N`.
+
 ## OpenClaw skill prompt
 
 If you want OpenClaw to run ff-cli end-to-end without confirmation, start from:
