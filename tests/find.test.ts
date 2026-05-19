@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseFindInput } from '../src/utilities/marketplace-url';
+import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
 import { parseLimitOption, decideActions } from '../src/commands/find';
 
 describe('parseFindInput', () => {
@@ -177,7 +178,7 @@ describe('parseFindInput', () => {
     assert.equal(r?.kind, 'unsupported');
   });
 
-  test('Feral File /exhibitions/artwork/{tokenId} → ff-url kind, urlKind artwork', () => {
+  test('Feral File /exhibitions/artwork/{id} → ff-url kind, urlKind artwork', () => {
     const r = parseFindInput('https://feralfile.com/exhibitions/artwork/12345');
     assert.equal(r?.kind, 'ff-url');
     if (r?.kind !== 'ff-url') {
@@ -185,6 +186,18 @@ describe('parseFindInput', () => {
     }
     assert.equal(r.urlKind, 'artwork');
     assert.equal(r.identifier, '12345');
+  });
+
+  test('Feral File swapped artwork IDs can be non-numeric public tokens', () => {
+    const r = parseFindInput(
+      'https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf'
+    );
+    assert.equal(r?.kind, 'ff-url');
+    if (r?.kind !== 'ff-url') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.urlKind, 'artwork');
+    assert.equal(r.identifier, 'f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf');
   });
 
   test('Feral File /exhibitions/series/{slug} → ff-url kind, urlKind series', () => {
@@ -215,6 +228,72 @@ describe('parseFindInput', () => {
 
   test('URL from an unrecognized host → null', () => {
     assert.equal(parseFindInput('https://example.com/foo'), null);
+  });
+});
+
+describe('resolveFeralFileToken', () => {
+  test('artwork URL resolves from one self-describing artwork API call', async () => {
+    await withMockFetch(async (calls) => {
+      const coords = await resolveFeralFileToken({
+        urlKind: 'artwork',
+        identifier: 'f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf',
+      });
+
+      assert.deepEqual(calls, [
+        'https://feralfile.com/api/artworks/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf',
+      ]);
+      assert.deepEqual(coords, {
+        chain: 'ethereum',
+        contract: '0xdb5f1adcffa1869b9711cbfbe3bf46cc5d5319e5',
+        tokenId: '92419109143972345096969611651362597777388673613154609693448331487805624917924',
+      });
+    });
+  });
+
+  test('series URL uses artwork list identity without exhibition contract walk', async () => {
+    await withMockFetch(async (calls) => {
+      const coords = await resolveFeralFileToken({
+        urlKind: 'series',
+        identifier: 'e-volved-formula-02-u9c',
+      });
+
+      assert.deepEqual(calls, [
+        'https://feralfile.com/api/series?slug=e-volved-formula-02-u9c',
+        'https://feralfile.com/api/artworks?seriesID=a2ec59c2-a56e-488c-9fdf-a67e04117337',
+      ]);
+      assert.deepEqual(coords, {
+        chain: 'ethereum',
+        contract: '0xffe213c3faa18b4b80ac1658c363d471dc745886',
+        tokenId: '54927077953071573898060197382410853987230099039252111790486496240282061669504',
+      });
+    });
+  });
+
+  test('series URL rejects duplicate slug matches instead of guessing', async () => {
+    await withMockFetch(
+      async () => {
+        await assert.rejects(
+          resolveFeralFileToken({
+            urlKind: 'series',
+            identifier: 'duplicate-slug',
+          }),
+          /matched 2 series/
+        );
+      },
+      { duplicateSeriesSlug: true }
+    );
+  });
+
+  test('artwork identity requires tokenID so swapped IDs cannot index the wrong token', async () => {
+    await withMockFetch(
+      async () => {
+        await assert.rejects(
+          resolveFeralFileToken({ urlKind: 'artwork', identifier: '12345' }),
+          /missing tokenID/
+        );
+      },
+      { omitArtworkTokenID: true }
+    );
   });
 });
 
@@ -252,6 +331,96 @@ describe('parseLimitOption', () => {
     assert.throws(() => parseLimitOption(''), /Invalid --limit/);
   });
 });
+
+interface MockFetchOptions {
+  duplicateSeriesSlug?: boolean;
+  omitArtworkTokenID?: boolean;
+}
+
+async function withMockFetch(
+  run: (calls: string[]) => Promise<void>,
+  options: MockFetchOptions = {}
+): Promise<void> {
+  const originalFetch = globalThis.fetch;
+  const calls: string[] = [];
+  globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith('/api/series?slug=e-volved-formula-02-u9c')) {
+      return jsonResponse({
+        result: [
+          {
+            id: 'a2ec59c2-a56e-488c-9fdf-a67e04117337',
+            exhibitionID: '796f9fd9-d405-451c-a584-d9f21222c6dd',
+            slug: 'e-volved-formula-02-u9c',
+          },
+        ],
+      });
+    }
+    if (url.endsWith('/api/series?slug=duplicate-slug')) {
+      return jsonResponse({
+        result: options.duplicateSeriesSlug
+          ? [
+              {
+                id: 'first-series-id',
+                exhibitionID: 'first-exhibition-id',
+                slug: 'duplicate-slug',
+              },
+              {
+                id: 'second-series-id',
+                exhibitionID: 'second-exhibition-id',
+                slug: 'duplicate-slug',
+              },
+            ]
+          : [],
+      });
+    }
+    if (url.endsWith('/api/artworks?seriesID=a2ec59c2-a56e-488c-9fdf-a67e04117337')) {
+      return jsonResponse({
+        result: [
+          {
+            id: '54927077953071573898060197382410853987230099039252111790486496240282061669504',
+            seriesID: 'a2ec59c2-a56e-488c-9fdf-a67e04117337',
+            chain: 'ethereum',
+            contractAddress: '0xFfE213c3faA18B4B80aC1658C363D471dC745886',
+            tokenID:
+              '54927077953071573898060197382410853987230099039252111790486496240282061669504',
+          },
+        ],
+      });
+    }
+    if (url.includes('/api/artworks/')) {
+      return jsonResponse({
+        result: {
+          id: 'f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf',
+          seriesID: '1b1ffd48-5fc2-4d19-a563-364e00ddfb01',
+          chain: 'ethereum',
+          contractAddress: '0xDB5f1aDCFFA1869B9711cBFBe3Bf46cc5d5319E5',
+          ...(options.omitArtworkTokenID
+            ? {}
+            : {
+                tokenID:
+                  '92419109143972345096969611651362597777388673613154609693448331487805624917924',
+              }),
+        },
+      });
+    }
+    return new Response('not found', { status: 404, statusText: 'Not Found' });
+  };
+
+  try {
+    await run(calls);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
+}
 
 describe('decideActions', () => {
   test('--play alone → [play]', async () => {

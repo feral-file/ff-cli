@@ -1,12 +1,10 @@
 /**
  * Feral File marketplace resolver.
  *
- * The FF public API (`feralfile.com/api`) does not expose `chain` or
- * `contractAddress` on the artwork record, so resolving an FF URL to
- * on-chain coordinates requires walking artwork → series → exhibition →
- * contract. This module isolates that walk; when the API fix in
- * feral-file/ff-exhibition#3039 ships, the artwork path collapses to a
- * single GET and this file shrinks.
+ * The FF public API (`feralfile.com/api`) exposes self-describing artwork
+ * identity: `chain`, `contractAddress`, and `tokenID`. Keep resolution on that
+ * public contract so external consumers and the CLI do not need to duplicate
+ * Feral File's internal artwork → series → exhibition data model.
  *
  * For series URLs (multi-token), we return one representative token —
  * the Raster reverse-lookup in the caller resolves to the series and
@@ -20,18 +18,7 @@ import type { TokenCoords, FeralFileUrlKind } from './marketplace-url';
 const FF_API_BASE = 'https://feralfile.com/api';
 
 interface ArtworkByIdResponse {
-  result: {
-    id: string;
-    seriesID: string;
-  };
-}
-
-interface SeriesByIdResponse {
-  result: {
-    id: string;
-    exhibitionID: string;
-    onchainID: string;
-  };
+  result: ArtworkIdentity;
 }
 
 interface SeriesByQueryResponse {
@@ -43,19 +30,15 @@ interface SeriesByQueryResponse {
 }
 
 interface ArtworksByQueryResponse {
-  result: Array<{
-    id: string;
-    seriesID: string;
-  }>;
+  result: ArtworkIdentity[];
 }
 
-interface ExhibitionResponse {
-  result: {
-    contracts: Array<{
-      blockchainType: string;
-      address: string;
-    }>;
-  };
+interface ArtworkIdentity {
+  id: string;
+  seriesID: string;
+  chain?: string;
+  contractAddress?: string;
+  tokenID?: string;
 }
 
 async function ffFetch<T>(path: string): Promise<T> {
@@ -77,26 +60,6 @@ function ffChainToIndexer(blockchainType: string): IndexerChain | null {
     return normalized;
   }
   return null;
-}
-
-function pickSupportedContract(contracts: Array<{ blockchainType: string; address: string }>): {
-  chain: IndexerChain;
-  address: string;
-} {
-  for (const c of contracts) {
-    const chain = ffChainToIndexer(c.blockchainType);
-    if (chain) {
-      return {
-        chain,
-        address: chain === 'ethereum' ? c.address.toLowerCase() : c.address,
-      };
-    }
-  }
-  const seen = contracts.map((c) => c.blockchainType).join(', ') || 'none';
-  throw new Error(
-    `Feral File: no Ethereum or Tezos contract found for this exhibition (saw: ${seen}). ` +
-      'The FF indexer in ff-cli covers eth + tezos mainnet only.'
-  );
 }
 
 /**
@@ -126,12 +89,7 @@ export async function resolveFeralFileToken(parsed: {
 
 async function resolveFromArtworkID(tokenId: string): Promise<TokenCoords> {
   const artwork = await ffFetch<ArtworkByIdResponse>(`/artworks/${tokenId}`);
-  const series = await ffFetch<SeriesByIdResponse>(`/series/${artwork.result.seriesID}`);
-  const exhibition = await ffFetch<ExhibitionResponse>(
-    `/exhibitions/${series.result.exhibitionID}`
-  );
-  const { chain, address } = pickSupportedContract(exhibition.result.contracts);
-  return { chain, contract: address, tokenId };
+  return artworkIdentityToCoords(artwork.result, `/artworks/${tokenId}`);
 }
 
 async function resolveFromSeriesSlug(slug: string): Promise<TokenCoords> {
@@ -139,12 +97,10 @@ async function resolveFromSeriesSlug(slug: string): Promise<TokenCoords> {
   if (!series.result || series.result.length === 0) {
     throw new Error(`Feral File: no series found for slug "${slug}".`);
   }
-  // Slug collisions across exhibitions are documented in ff-exhibition#3039.
-  // Take the first record; the user can pass the artwork URL directly to disambiguate.
   if (series.result.length > 1) {
-    logger.warn(
-      `[FF API] Slug "${slug}" matched ${series.result.length} series across exhibitions; ` +
-        'taking the first. Pass /exhibitions/artwork/{tokenId} to disambiguate.'
+    throw new Error(
+      `Feral File: slug "${slug}" matched ${series.result.length} series. ` +
+        'Paste a specific /exhibitions/artwork/{id} URL to disambiguate.'
     );
   }
   const picked = series.result[0];
@@ -155,9 +111,37 @@ async function resolveFromSeriesSlug(slug: string): Promise<TokenCoords> {
   if (!artworks.result || artworks.result.length === 0) {
     throw new Error(`Feral File: series "${slug}" has no artworks.`);
   }
-  const representativeTokenId = artworks.result[0].id;
+  return artworkIdentityToCoords(artworks.result[0], `/artworks?seriesID=${picked.id}`);
+}
 
-  const exhibition = await ffFetch<ExhibitionResponse>(`/exhibitions/${picked.exhibitionID}`);
-  const { chain, address } = pickSupportedContract(exhibition.result.contracts);
-  return { chain, contract: address, tokenId: representativeTokenId };
+/**
+ * artworkIdentityToCoords converts the public Feral File artwork identity
+ * fields into the coordinate shape expected by Raster and the FF indexer.
+ *
+ * `id` is not always the on-chain token ID: swapped artworks can be addressed
+ * by a public swap token while `tokenID` carries the actual on-chain token.
+ * Require `tokenID` explicitly so an API regression fails loudly instead of
+ * silently indexing the wrong token.
+ */
+function artworkIdentityToCoords(artwork: ArtworkIdentity, sourcePath: string): TokenCoords {
+  const chain = ffChainToIndexer(artwork.chain ?? '');
+  if (!chain) {
+    throw new Error(
+      `Feral File: artwork identity from ${sourcePath} has unsupported or missing chain ` +
+        `"${artwork.chain ?? 'missing'}". The FF indexer in ff-cli covers eth + tezos mainnet only.`
+    );
+  }
+  if (!artwork.contractAddress) {
+    throw new Error(`Feral File: artwork identity from ${sourcePath} is missing contractAddress.`);
+  }
+  if (!artwork.tokenID) {
+    throw new Error(`Feral File: artwork identity from ${sourcePath} is missing tokenID.`);
+  }
+
+  return {
+    chain,
+    contract:
+      chain === 'ethereum' ? artwork.contractAddress.toLowerCase() : artwork.contractAddress,
+    tokenId: artwork.tokenID,
+  };
 }

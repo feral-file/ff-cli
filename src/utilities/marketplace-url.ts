@@ -9,11 +9,10 @@
  * The unified entry point is {@link parseFindInput}. Per-marketplace parsers
  * are exposed for unit testing.
  *
- * Series URLs (fxhash `/generative/...`, Feral File `/artworks/...`,
- * Art Blocks `/projects/...`) are recognized but not resolved in v1 — they
- * require a per-marketplace API call to derive a representative token. The
- * parser returns an `unsupported` result with a clear reason so the caller
- * can surface guidance instead of a generic "could not parse" error.
+ * Some series URLs resolve asynchronously through a source-specific API call
+ * to derive a representative token. Unsupported series forms return a clear
+ * reason so the caller can surface guidance instead of a generic "could not
+ * parse" error.
  */
 
 import type { IndexerChain } from './raster-client';
@@ -297,17 +296,16 @@ export function parseOpenSea(url: URL): ParsedFindInput {
 /**
  * Feral File URL forms (source of truth: feralfile-client app-routing
  * + collection-routing modules):
- *   /exhibitions/artwork/{tokenId}       — single artwork by on-chain tokenId
+ *   /exhibitions/artwork/{id}            — single artwork by public artwork id
  *   /exhibitions/series/{slug}           — series detail (multi-token)
  *   /exhibitions/shows/{slug}            — full exhibition (multiple series)
  *
- * These URLs do not include `chain` or `contract`; FF API walks are required
- * to derive them. The parser stays sync — it returns an `ff-url` marker that
- * the caller resolves asynchronously via `ff-marketplace#resolveFeralFileToken`.
- * Tracked for collapse to a single GET in feral-file/ff-exhibition#3039.
+ * The parser stays sync — it returns an `ff-url` marker that the caller
+ * resolves asynchronously via `ff-marketplace#resolveFeralFileToken`, where
+ * Feral File's public artwork identity fields provide the on-chain coords.
  */
 export function parseFeralFile(url: URL): ParsedFindInput {
-  let m = /^\/exhibitions\/artwork\/(\d+)\/?$/.exec(url.pathname);
+  let m = /^\/exhibitions\/artwork\/([A-Za-z0-9]+)\/?$/.exec(url.pathname);
   if (m) {
     return { kind: 'ff-url', urlKind: 'artwork', identifier: m[1] };
   }
@@ -323,6 +321,6 @@ export function parseFeralFile(url: URL): ParsedFindInput {
     kind: 'unsupported',
     reason:
       `Feral File URL not recognized: ${url.pathname}. Supported: ` +
-      '/exhibitions/artwork/{tokenId}, /exhibitions/series/{slug}, /exhibitions/shows/{slug}.',
+      '/exhibitions/artwork/{id}, /exhibitions/series/{slug}, /exhibitions/shows/{slug}.',
   };
 }
