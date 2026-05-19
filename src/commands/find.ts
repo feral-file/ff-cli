@@ -50,7 +50,6 @@ type ResolvedTarget =
   | { kind: 'single'; coords: TokenCoords };
 
 const RASTER_PAGE_SIZE = 100;
-const INDEXER_CONCURRENCY = 10;
 
 export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
@@ -120,13 +119,15 @@ export const findCommand = new Command('find')
         )
       );
 
+      // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
+      // display seconds), not concurrency — concurrency is hardcoded inside.
+      // Omit it so the default (10s) applies; no misleading constant on this side.
       const items = await getNFTTokenInfoBatch(
         tokens.map((t) => ({
           chain: t.chain,
           contractAddress: t.contract,
           tokenId: t.tokenId,
-        })),
-        INDEXER_CONCURRENCY
+        }))
       );
 
       if (!Array.isArray(items) || items.length === 0) {
