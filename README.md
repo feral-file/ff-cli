@@ -44,6 +44,32 @@ ff-cli config init
 ff-cli config validate
 ```
 
+## Find an artwork
+
+`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or a wallet address into a playable DP-1 playlist. The focus is computational and generative art; PFP collections and pre-ERC-721 contracts have limits noted below.
+
+```bash
+# Most satisfying: paste a URL, play it on your FF1
+ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+
+# Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
+
+# Feral File artwork (public id can be hex or numeric — both forms resolve via /api/artworks)
+ff-cli find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --play
+
+# Save without playing
+ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 --output send-receive.json
+```
+
+Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{slug}`, and project pages `/project/{slug}` / `/generative/{slug}`), OpenSea, SuperRare, Feral File, Neort (`/art/{id}`), raw on-chain coords, wallet addresses. Run `ff-cli find --help` for the full input list.
+
+**Known limitations**
+
+- **CryptoPunks (original)** don't index — the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)).
+- **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series — Raster's curation is effectively the series allowlist.
+- **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)) — retry clears or use `--limit N`.
+
 ## Dev Quick Start
 
 **Set your LLM API key first (default Claude):** `export ANTHROPIC_API_KEY='sk-ant-your-api-key-here'`

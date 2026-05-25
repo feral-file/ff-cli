@@ -7,6 +7,8 @@
  * endpoint instead of reconstructing contract identity from exhibition internals.
  */
 
+import { USER_AGENT } from './user-agent';
+
 export interface FeralFileArtworkTokenCoords {
   chain: 'ethereum' | 'tezos';
   contractAddress: string;
@@ -43,7 +45,9 @@ export async function resolveFeralFileArtwork(
   }
 
   const url = `https://feralfile.com/api/artworks/${encodeURIComponent(normalizedArtworkId)}`;
-  const response = await fetchImpl(url);
+  const response = await fetchImpl(url, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  });
   const body = (await response.json()) as FeralFileArtworkResponse;
 
   if (!response.ok) {
