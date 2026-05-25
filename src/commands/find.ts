@@ -602,7 +602,7 @@ async function runNeortFind(id: string, options: FindOptions): Promise<void> {
   const actions = await decideActions(options);
   for (const action of actions) {
     if (action === 'play') {
-      await doPlay(playlist, options.device);
+      await doPlay(playlist, options.device, !!options.skipVerify);
     } else if (action === 'publish') {
       await doPublish(outputPath, options.server, !!options.yes);
     }
