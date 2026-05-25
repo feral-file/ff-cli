@@ -2,7 +2,7 @@
  * Marketplace URL parser for `ff-cli find`.
  *
  * Accepts user input in any of these forms and returns a normalized result:
- *  - Marketplace token URL (Objkt, fxhash, Art Blocks, Feral File)
+ *  - Marketplace token URL (Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort)
  *  - Raw on-chain coordinates: "ethereum:0xabc...:123" / "tezos:KT1...:456"
  *  - Wallet address: 0x{40-hex} (Ethereum) or tz1/tz2/tz3{33} (Tezos)
  *
@@ -30,7 +30,8 @@ export type MarketplaceSource =
   | 'fxhash'
   | 'feralfile'
   | 'opensea'
-  | 'superrare';
+  | 'superrare'
+  | 'neort';
 
 export type FeralFileUrlKind = 'artwork' | 'series' | 'show';
 
@@ -41,6 +42,8 @@ export type ParsedFindInput =
   | { kind: 'objkt-alias'; alias: string; tokenId: string }
   | { kind: 'ab-collection'; slug: string }
   | { kind: 'fxhash-iteration'; slug: string }
+  | { kind: 'fxhash-project'; slug: string }
+  | { kind: 'neort-art'; id: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -115,6 +118,9 @@ export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   }
   if (host === 'superrare.com' || host.endsWith('.superrare.com')) {
     return parseSuperRare(url);
+  }
+  if (host === 'neort.io' || host.endsWith('.neort.io')) {
+    return parseNeort(url);
   }
   return null;
 }
@@ -214,9 +220,15 @@ export function parseArtBlocks(url: URL): ParsedFindInput {
 /**
  * fxhash URL forms (Tezos):
  *   fxhash.xyz/gentk/FX1-{KT1...}-{tokenId}                  (canonical token URL)
- *   fxhash.xyz/iteration/{slug}                              (current UI; resolves via fxhash API)
+ *   fxhash.xyz/iteration/{slug}                              (single iteration; resolves via fxhash API)
+ *   fxhash.xyz/project/{slug}                                (series; current UI form)
+ *   fxhash.xyz/generative/{slug}                             (series; legacy URL form, both supported)
  *   fxhash.xyz/gentk/{numericId}                             (legacy — needs fxhash API)
- *   fxhash.xyz/generative/{slug}                             (series — not supported in v1)
+ *
+ * Series URLs (`/project/`, `/generative/`) resolve to the project's first
+ * minted iteration via `generativeToken(slug:)`; Raster then enumerates the
+ * rest of the series. EVM-only projects won't be found on the Tezos GraphQL
+ * endpoint and surface as a clean "slug not found" error.
  *
  * EVM (FX2-prefixed) gentks are not in scope: the FF indexer does not index
  * fxhash's EVM contracts in v1.
@@ -250,13 +262,9 @@ export function parseFxhash(url: URL): ParsedFindInput {
   if (iter) {
     return { kind: 'fxhash-iteration', slug: iter[1] };
   }
-  if (url.pathname.startsWith('/generative/')) {
-    return {
-      kind: 'unsupported',
-      reason:
-        'fxhash series URLs (`/generative/...`) are not yet supported in v1. Paste a specific ' +
-        'token URL.',
-    };
+  const project = /^\/(?:project|generative)\/([a-z0-9][a-z0-9-]*)\/?$/.exec(url.pathname);
+  if (project) {
+    return { kind: 'fxhash-project', slug: project[1] };
   }
   return {
     kind: 'unsupported',
@@ -312,12 +320,18 @@ export function parseOpenSea(url: URL): ParsedFindInput {
 /**
  * SuperRare URL forms (Ethereum-only platform):
  *   superrare.com/artwork/eth/{contract}/{tokenId}
- *   superrare.com/{artist}/{slug}                  — slug form, not supported in v1
+ *   superrare.com/collection/{contract}             — per-artist contract page, not supported in v1
+ *   superrare.com/{artist}/{slug}                   — slug form, not supported in v1
  *
  * SuperRare's `/artwork/eth/...` URLs encode both the contract and tokenId
  * directly, so no API call is needed. Token URLs resolve end-to-end only when
  * Raster also indexes the underlying series; for 1/1 artworks the find flow
  * falls through to a single-token playlist via the Raster 404 path.
+ *
+ * `/collection/{contract}` URLs on SuperRare point to a per-artist contract
+ * (each SuperRare artist mints from their own ERC-721). There is no direct
+ * contract→series mapping in Raster, so this is surfaced as a specific
+ * unsupported message rather than the generic "URL not recognized" fall-through.
  */
 export function parseSuperRare(url: URL): ParsedFindInput {
   const m = /^\/artwork\/eth\/(0x[a-fA-F0-9]{40})\/(\d+)\/?$/.exec(url.pathname);
@@ -328,12 +342,41 @@ export function parseSuperRare(url: URL): ParsedFindInput {
       coords: { chain: 'ethereum', contract: m[1].toLowerCase(), tokenId: m[2] },
     };
   }
+  if (/^\/collection\/(0x[a-fA-F0-9]{40})\/?$/.test(url.pathname)) {
+    return {
+      kind: 'unsupported',
+      reason:
+        'SuperRare `/collection/{contract}` URLs (per-artist contract pages) are not yet ' +
+        'supported in v1. Paste a specific token URL ' +
+        '(superrare.com/artwork/eth/{contract}/{tokenId}) or use ' +
+        '`ethereum:{contract}:{tokenId}`.',
+    };
+  }
   return {
     kind: 'unsupported',
     reason:
       `SuperRare URL not recognized: ${url.pathname}. Expected ` +
       '/artwork/eth/{contract}/{tokenId}. For artist-slug URLs, paste the canonical ' +
       '/artwork/eth/... form (the SuperRare detail page links it under the artwork title).',
+  };
+}
+
+/**
+ * Neort URL forms (off-chain code-art platform):
+ *   neort.io/art/{id}     — art detail page; id is opaque alphanumeric (~20 chars)
+ *
+ * Neort items are not on-chain, so the find flow handles them specially:
+ * resolve via Neort's public API and build a DP-1 item directly with
+ * `provenance.offChainURI`, bypassing Raster + FF indexer entirely.
+ */
+export function parseNeort(url: URL): ParsedFindInput {
+  const m = /^\/art\/([a-zA-Z0-9]+)\/?$/.exec(url.pathname);
+  if (m) {
+    return { kind: 'neort-art', id: m[1] };
+  }
+  return {
+    kind: 'unsupported',
+    reason: `Neort URL not recognized: ${url.pathname}. Expected /art/{id}.`,
   };
 }
 

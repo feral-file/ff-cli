@@ -62,7 +62,7 @@ ff-cli find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6
 ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 --output send-receive.json
 ```
 
-Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...` and live `/iteration/{slug}`), OpenSea, SuperRare, Feral File, raw on-chain coords, wallet addresses. Run `ff-cli find --help` for the full input list.
+Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{slug}`, and project pages `/project/{slug}` / `/generative/{slug}`), OpenSea, SuperRare, Feral File, Neort (`/art/{id}`), raw on-chain coords, wallet addresses. Run `ff-cli find --help` for the full input list.
 
 **Known limitations**
 

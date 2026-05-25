@@ -13,6 +13,7 @@
 
 import * as logger from '../logger';
 import type { TokenCoords } from './marketplace-url';
+import { USER_AGENT } from './user-agent';
 
 const AB_GRAPHQL = 'https://artblocks-mainnet.hasura.app/v1/graphql';
 
@@ -44,7 +45,7 @@ export async function resolveArtBlocksCollection(slug: string): Promise<TokenCoo
     '}';
   const response = await fetch(AB_GRAPHQL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { slug } }),
   });
   if (!response.ok) {

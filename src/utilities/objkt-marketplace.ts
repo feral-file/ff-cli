@@ -11,6 +11,7 @@
  */
 
 import * as logger from '../logger';
+import { USER_AGENT } from './user-agent';
 
 const OBJKT_GRAPHQL = 'https://data.objkt.com/v3/graphql';
 
@@ -31,7 +32,7 @@ export async function resolveObjktAlias(alias: string): Promise<string> {
   const query = 'query ($path: String!) { fa(where: { path: { _eq: $path } }) { contract } }';
   const response = await fetch(OBJKT_GRAPHQL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { path: alias } }),
   });
   if (!response.ok) {

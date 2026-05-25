@@ -16,6 +16,7 @@
  */
 
 import * as logger from '../logger';
+import { USER_AGENT } from './user-agent';
 
 const RASTER_BASE_URL = 'https://kit.raster.art';
 
@@ -95,7 +96,9 @@ export class RasterNotFoundError extends Error {
 async function rasterFetch<T>(path: string): Promise<T> {
   const url = `${RASTER_BASE_URL}${path}`;
   logger.debug(`[Raster] GET ${url}`);
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  });
   if (response.status === 404) {
     throw new RasterNotFoundError(path);
   }

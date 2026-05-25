@@ -8,7 +8,9 @@ import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
-import { resolveFxhashIteration } from '../utilities/fxhash-marketplace';
+import { resolveFxhashIteration, resolveFxhashProject } from '../utilities/fxhash-marketplace';
+import { resolveNeortArt } from '../utilities/neort-marketplace';
+import type { NeortArt } from '../utilities/neort-marketplace';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -24,7 +26,7 @@ import { sendPlaylistToDevice } from '../utilities/ff1-device';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { buildDP1Playlist } = require('../utilities/playlist-builder');
+const { buildDP1Playlist, buildUrlItem } = require('../utilities/playlist-builder');
 
 interface FindOptions {
   output?: string;
@@ -55,7 +57,7 @@ export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -76,7 +78,7 @@ export const findCommand = new Command('find')
         console.error(chalk.red('Could not understand input.'));
         console.error(
           chalk.dim(
-            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File. ' +
+            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort. ' +
               'Or: `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, ' +
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
@@ -86,6 +88,13 @@ export const findCommand = new Command('find')
       if (parsed.kind === 'unsupported') {
         console.error(chalk.red(parsed.reason));
         process.exit(1);
+      }
+
+      // Neort is off-chain; its items skip Raster + FF indexer entirely and
+      // build a DP-1 entry directly from Neort's API response.
+      if (parsed.kind === 'neort-art') {
+        await runNeortFind(parsed.id, options);
+        return;
       }
 
       const target = await resolveTarget(parsed, !!options.yes);
@@ -194,6 +203,10 @@ async function resolveTarget(
   }
   if (parsed.kind === 'fxhash-iteration') {
     const coords = await resolveFxhashIteration(parsed.slug);
+    return resolveCoords(coords);
+  }
+  if (parsed.kind === 'fxhash-project') {
+    const coords = await resolveFxhashProject(parsed.slug);
     return resolveCoords(coords);
   }
   if (parsed.kind === 'address') {
@@ -488,4 +501,46 @@ async function doPublish(
     console.error(chalk.dim(`  ${result.message}`));
   }
   process.exitCode = 1;
+}
+
+/**
+ * Neort flow. Off-chain platform with no on-chain coords, so we bypass
+ * Raster + FF indexer and construct a single-item DP-1 playlist directly
+ * from Neort's API response using the off-chain `provenance.offChainURI`
+ * shape produced by `buildUrlItem`.
+ */
+async function runNeortFind(id: string, options: FindOptions): Promise<void> {
+  const art: NeortArt = await resolveNeortArt(id);
+  const artistLabel = art.artistName || 'Unknown artist';
+  console.log(chalk.cyan(`Neort — ${artistLabel} — ${art.title}`));
+  console.log(
+    chalk.dim('  (Off-chain platform; building a one-item playlist directly from Neort.)')
+  );
+  console.log();
+
+  const shouldBuild = !!options.yes || !!options.output || (await confirmMakePlaylist(1, 1));
+  if (!shouldBuild) {
+    console.log(chalk.dim('Cancelled.'));
+    return;
+  }
+
+  const item = buildUrlItem(art.assetUrl, 10, { title: art.title });
+  const playlistTitle = `${artistLabel} — ${art.title}`;
+  const playlist = await buildDP1Playlist({ items: [item], title: playlistTitle });
+
+  const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
+  await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
+
+  console.log(chalk.green(`✓ Playlist saved to ${outputPath}`));
+  console.log(chalk.dim('  1 item'));
+  console.log();
+
+  const actions = await decideActions(options);
+  for (const action of actions) {
+    if (action === 'play') {
+      await doPlay(playlist, options.device);
+    } else if (action === 'publish') {
+      await doPublish(outputPath, options.server, !!options.yes);
+    }
+  }
 }

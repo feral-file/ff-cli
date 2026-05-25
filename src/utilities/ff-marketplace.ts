@@ -17,6 +17,7 @@
 import * as logger from '../logger';
 import type { TokenCoords, FeralFileUrlKind } from './marketplace-url';
 import { resolveFeralFileArtwork } from './feral-file-artwork';
+import { USER_AGENT } from './user-agent';
 
 const FF_API_BASE = 'https://feralfile.com/api';
 
@@ -38,7 +39,9 @@ interface ArtworksByQueryResponse {
 async function ffFetch<T>(path: string): Promise<T> {
   const url = `${FF_API_BASE}${path}`;
   logger.debug(`[FF API] GET ${url}`);
-  const response = await fetch(url);
+  const response = await fetch(url, {
+    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  });
   if (!response.ok) {
     const body = await response.text();
     throw new Error(

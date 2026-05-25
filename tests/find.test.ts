@@ -159,9 +159,22 @@ describe('parseFindInput', () => {
     assert.equal(r?.kind, 'unsupported');
   });
 
-  test('fxhash generative URL (series) → unsupported', () => {
-    const r = parseFindInput('https://www.fxhash.xyz/generative/slug');
-    assert.equal(r?.kind, 'unsupported');
+  test('fxhash /generative/{slug} URL → fxhash-project kind (needs async resolve)', () => {
+    const r = parseFindInput('https://www.fxhash.xyz/generative/garden-monoliths');
+    assert.equal(r?.kind, 'fxhash-project');
+    if (r?.kind !== 'fxhash-project') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'garden-monoliths');
+  });
+
+  test('fxhash /project/{slug} URL → fxhash-project kind (current UI form)', () => {
+    const r = parseFindInput('https://www.fxhash.xyz/project/garden-monoliths');
+    assert.equal(r?.kind, 'fxhash-project');
+    if (r?.kind !== 'fxhash-project') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'garden-monoliths');
   });
 
   test('OpenSea Ethereum token URL → token kind, source opensea', () => {
@@ -211,6 +224,45 @@ describe('parseFindInput', () => {
     if (r?.kind !== 'unsupported') {
       throw new Error('narrowing');
     }
+    assert.ok(r.reason.includes('/artwork/eth/'));
+  });
+
+  test('Neort /art/{id} URL → neort-art kind', () => {
+    const r = parseFindInput('https://neort.io/art/ce3lvgkn70rlpj69ccc0');
+    assert.equal(r?.kind, 'neort-art');
+    if (r?.kind !== 'neort-art') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.id, 'ce3lvgkn70rlpj69ccc0');
+  });
+
+  test('Neort /art/{id} URL with query params → neort-art kind (params ignored)', () => {
+    const r = parseFindInput('https://neort.io/art/ce3lvgkn70rlpj69ccc0?index=-1&origin=');
+    assert.equal(r?.kind, 'neort-art');
+    if (r?.kind !== 'neort-art') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.id, 'ce3lvgkn70rlpj69ccc0');
+  });
+
+  test('Neort root URL → unsupported with /art/{id} hint', () => {
+    const r = parseFindInput('https://neort.io/');
+    assert.equal(r?.kind, 'unsupported');
+    if (r?.kind !== 'unsupported') {
+      throw new Error('narrowing');
+    }
+    assert.ok(r.reason.includes('/art/'));
+  });
+
+  test('SuperRare /collection/{contract} URL → unsupported with specific message', () => {
+    const r = parseFindInput(
+      'https://superrare.com/collection/0x3e930455dcBf4bC69DE9926bDAF8ef782398786f'
+    );
+    assert.equal(r?.kind, 'unsupported');
+    if (r?.kind !== 'unsupported') {
+      throw new Error('narrowing');
+    }
+    assert.ok(r.reason.includes('/collection/'));
     assert.ok(r.reason.includes('/artwork/eth/'));
   });
 
