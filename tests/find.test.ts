@@ -352,6 +352,18 @@ describe('parseLimitOption', () => {
   test('empty string → throws', () => {
     assert.throws(() => parseLimitOption(''), /Invalid --limit/);
   });
+
+  test('1024 (DP-1 max) → accepted', () => {
+    assert.equal(parseLimitOption('1024'), 1024);
+  });
+
+  test('1025 (one over DP-1 max) → throws with spec reference', () => {
+    assert.throws(() => parseLimitOption('1025'), /exceeds DP-1 playlist max of 1024/);
+  });
+
+  test('5000 (well over DP-1 max) → throws', () => {
+    assert.throws(() => parseLimitOption('5000'), /exceeds DP-1 playlist max/);
+  });
 });
 
 describe('decideActions', () => {

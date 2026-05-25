@@ -36,7 +36,16 @@ interface FindOptions {
   device?: string;
   publish?: boolean;
   server?: string;
+  skipVerify?: boolean;
 }
+
+/**
+ * Maximum item count for a single DP-1 playlist (v1.1 spec). Build paths
+ * that exceed this would silently produce a playlist that `validateDP1Playlist`
+ * rejects — so cap implicitly here and surface an actionable warning, and
+ * reject explicit `--limit > MAX` outright.
+ */
+const DP1_MAX_ITEMS = 1024;
 
 type PostBuildAction = 'play' | 'publish' | 'skip';
 
@@ -68,6 +77,10 @@ export const findCommand = new Command('find')
   .option(
     '-y, --yes',
     'Skip interactive prompts; defaults to Play unless --output or --publish is set'
+  )
+  .option(
+    '--skip-verify',
+    'Skip signature verification before --play (mirrors `ff-cli play --skip-verify`)'
   )
   .action(async (input: string, options: FindOptions) => {
     try {
@@ -110,8 +123,22 @@ export const findCommand = new Command('find')
       }
       console.log();
 
-      const limit = parseLimitOption(options.limit);
+      const userLimit = parseLimitOption(options.limit);
       const seriesTotal = target.kind === 'series' ? target.summary.tokenCount : 1;
+      // Implicit cap: no --limit + series > 1024 → cap to DP-1 max with a
+      // clear warning. Explicit `--limit > 1024` was already rejected by
+      // parseLimitOption, so reaching here means either capped-by-default or
+      // the user picked a value within spec.
+      const limit = Math.min(userLimit, DP1_MAX_ITEMS);
+      if (userLimit === Number.POSITIVE_INFINITY && seriesTotal > DP1_MAX_ITEMS) {
+        console.log(
+          chalk.yellow(
+            `Series has ${seriesTotal} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
+              `Building with the first ${DP1_MAX_ITEMS} — pass \`--limit N\` (≤ ${DP1_MAX_ITEMS}) for fewer.`
+          )
+        );
+        console.log();
+      }
       const willInclude = Math.min(seriesTotal, limit);
       const shouldBuild =
         !!options.yes || !!options.output || (await confirmMakePlaylist(willInclude, seriesTotal));
@@ -171,7 +198,7 @@ export const findCommand = new Command('find')
       const actions = await decideActions(options);
       for (const action of actions) {
         if (action === 'play') {
-          await doPlay(playlist, options.device);
+          await doPlay(playlist, options.device, !!options.skipVerify);
         } else if (action === 'publish') {
           await doPublish(outputPath, options.server, !!options.yes);
         }
@@ -265,6 +292,11 @@ export function parseLimitOption(limitStr: string | undefined): number {
   const n = Number(limitStr);
   if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
     throw new Error(`Invalid --limit value: ${limitStr} (expected a positive integer)`);
+  }
+  if (n > DP1_MAX_ITEMS) {
+    throw new Error(
+      `Invalid --limit value: ${n} exceeds DP-1 playlist max of ${DP1_MAX_ITEMS} items.`
+    );
   }
   return n;
 }
@@ -395,7 +427,39 @@ async function promptNextAction(): Promise<PostBuildAction> {
   throw new Error(`Unrecognized choice: "${answer}". Use P, S, or L.`);
 }
 
-async function doPlay(playlist: Playlist, deviceName: string | undefined): Promise<void> {
+async function doPlay(
+  playlist: Playlist,
+  deviceName: string | undefined,
+  skipVerify: boolean
+): Promise<void> {
+  // Match `ff-cli play`'s verification gate: signed playlists are verified
+  // before device delivery; the same surface that play surfaces failures.
+  // `buildDP1Playlist` signs when a playlist private key is configured and
+  // silently continues unsigned otherwise — so when no key is set, the user
+  // sees an actionable error here instead of an unverifiable playlist on
+  // the wall.
+  if (!skipVerify) {
+    const { verifyPlaylist } = await import('../utilities/playlist-verifier');
+    console.log(chalk.cyan('Verify playlist'));
+    const verifyResult = await verifyPlaylist(playlist);
+    if (!verifyResult.valid) {
+      console.error(chalk.red('Playlist verification failed:'), verifyResult.error);
+      if (verifyResult.details && verifyResult.details.length > 0) {
+        for (const d of verifyResult.details) {
+          console.error(chalk.dim(`  ${d.path}: ${d.message}`));
+        }
+      }
+      console.error(
+        chalk.dim(
+          '  Tip: configure a playlist signing key (config or PLAYLIST_PRIVATE_KEY), ' +
+            'or pass --skip-verify to bypass.'
+        )
+      );
+      process.exitCode = 1;
+      return;
+    }
+    console.log(chalk.green('✓ Verified\n'));
+  }
   console.log(chalk.blue('Play on FF1'));
   const result = await sendPlaylistToDevice({ playlist, deviceName });
   if (result.success) {
