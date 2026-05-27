@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+#
+# flamingo-playlists.sh — build one DP-1 playlist per series ("channel")
+# from a curated subset of the Flamingo DAO collection.
+#
+# Each entry in INPUTS is anything `ff-cli find` accepts:
+#   - marketplace URL (Art Blocks, Objkt, fxhash, OpenSea, SuperRare, FF, Neort)
+#   - raw on-chain coords `ethereum:{contract}:{tokenId}` / `tezos:...`
+#   - wallet address (`0x…` / `tz1…`) — picks one artwork from that artist's
+#     Raster catalog; not useful for a *collector* address like Flamingo's.
+#
+# Notes from the ff-cli README:
+#   - CryptoPunks (original) don't index — pre-ERC-721 contract.
+#   - Mainstream PFPs (BAYC, Azuki, Pudgy Penguins, etc.) build a one-item
+#     playlist instead of a series.
+#   - DP-1 playlists cap at 1024 items; the indexer can 502 on burst load, so
+#     a smaller --limit is friendlier on first run.
+#
+# Usage:
+#   ./flamingo-playlists.sh                # writes to ./playlists/
+#   ./flamingo-playlists.sh /tmp/flamingo  # custom output dir
+#   LIMIT=10 ./flamingo-playlists.sh       # cap each series at 10 items
+
+set -euo pipefail
+
+OUT_DIR="${1:-./playlists}"
+LIMIT="${LIMIT:-50}"
+
+mkdir -p "$OUT_DIR"
+
+# Starter list — edit to match what flamingodao.xyz actually shows.
+# These are well-known historical Flamingo holdings biased toward
+# computational / generative art that plays well on an Art Computer.
+INPUTS=(
+  # Art Blocks Curated
+  "https://www.artblocks.io/collection/chromie-squiggle-by-snowfro"
+  "https://www.artblocks.io/collection/fidenza-by-tyler-hobbs"
+  "https://www.artblocks.io/collection/ringers-by-dmitri-cherniak"
+  "https://www.artblocks.io/collection/the-eternal-pump-by-dmitri-cherniak"
+  "https://www.artblocks.io/collection/meridian-by-matt-deslauriers"
+
+  # Autoglyphs (Larva Labs) — fully on-chain generative
+  "ethereum:0xd4e4078ca3495de5b1d4db434bebc5a986197782:1"
+
+  # Add confirmed Flamingo series here.
+)
+
+failed=()
+for input in "${INPUTS[@]}"; do
+  slug=$(printf '%s' "$input" \
+    | sed -E 's#^https?://(www\.)?##; s#[^A-Za-z0-9._-]+#-#g; s#^-+|-+$##g')
+  out="$OUT_DIR/${slug}.json"
+
+  printf '\n→ %s\n' "$input"
+  if ff-cli find "$input" --output "$out" --limit "$LIMIT" --yes; then
+    printf '  ✓ %s\n' "$out"
+  else
+    printf '  ✗ failed\n' >&2
+    failed+=("$input")
+  fi
+done
+
+printf '\nDone. Playlists in %s\n' "$OUT_DIR"
+if (( ${#failed[@]} > 0 )); then
+  printf 'Failed inputs:\n' >&2
+  printf '  %s\n' "${failed[@]}" >&2
+  exit 1
+fi
