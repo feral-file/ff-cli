@@ -28,21 +28,26 @@ LIMIT="${LIMIT:-50}"
 
 mkdir -p "$OUT_DIR"
 
-# Starter list — edit to match what flamingodao.xyz actually shows.
-# These are well-known historical Flamingo holdings biased toward
-# computational / generative art that plays well on an Art Computer.
+# Curated "Flamingo-spirit" list — series that are well-documented Flamingo
+# holdings (per public reporting / past auctions) and that display well on an
+# Art Computer. This is not a live read of their wallet; swap entries as needed.
+#
+# Bias: generative / computational. PFPs and Punks are skipped — Punks don't
+# index (pre-ERC-721) and PFPs build a one-item playlist instead of a series.
 INPUTS=(
-  # Art Blocks Curated
+  # Art Blocks Curated — the bulk of Flamingo's generative thesis.
+  # Ringers #109 and Fidenza #313 are two of the most famous pieces they've held.
   "https://www.artblocks.io/collection/chromie-squiggle-by-snowfro"
   "https://www.artblocks.io/collection/fidenza-by-tyler-hobbs"
   "https://www.artblocks.io/collection/ringers-by-dmitri-cherniak"
   "https://www.artblocks.io/collection/the-eternal-pump-by-dmitri-cherniak"
   "https://www.artblocks.io/collection/meridian-by-matt-deslauriers"
+  "https://www.artblocks.io/collection/subscapes-by-matt-deslauriers"
+  "https://www.artblocks.io/collection/anticyclone-by-william-mapan"
+  "https://www.artblocks.io/collection/memories-of-qilin-by-emily-xie"
 
-  # Autoglyphs (Larva Labs) — fully on-chain generative
+  # Autoglyphs (Larva Labs) — fully on-chain generative SVG, foundational.
   "ethereum:0xd4e4078ca3495de5b1d4db434bebc5a986197782:1"
-
-  # Add confirmed Flamingo series here.
 )
 
 failed=()
