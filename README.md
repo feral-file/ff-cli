@@ -70,6 +70,20 @@ Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{sl
 - **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series — Raster's curation is effectively the series allowlist.
 - **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)) — retry clears or use `--limit N`.
 
+## Use with Claude Code
+
+ff-cli ships a [Claude Code](https://docs.claude.com/en/docs/claude-code) skill at `skills/ff-control/SKILL.md`. Install it once:
+
+```bash
+git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
+  && mkdir -p ~/.claude/skills \
+  && cp -r /tmp/ff-cli/skills/ff-control ~/.claude/skills/
+```
+
+Claude Code will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The skill validates config, builds, validates the playlist, and sends or publishes — reporting the failing command + exit code if anything breaks. Full prompt and exact flow: [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
+
+For Codex, Cursor, OpenCode, or any other agent, paste the body of `skills/ff-control/SKILL.md` into your project's `AGENTS.md` (or equivalent system-prompt slot).
+
 ## Dev Quick Start
 
 **Set your LLM API key first (default Claude):** `export ANTHROPIC_API_KEY='sk-ant-your-api-key-here'`

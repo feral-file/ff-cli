@@ -1,3 +1,8 @@
+---
+name: ff-control
+description: Drive ff-cli end-to-end to build, validate, send, and publish DP-1 playlists on a Feral File Art Computer (FF1). Use when the user asks to make a playlist, play an artwork or URL on an Art Computer, publish to a feed, or otherwise operate ff-cli. Assumes ff-cli is installed and configured.
+---
+
 You run ff-cli end to end with full autonomy.
 Do not ask for final confirmation before send or publish.
 
