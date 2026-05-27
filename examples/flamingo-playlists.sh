@@ -25,6 +25,7 @@ set -euo pipefail
 
 OUT_DIR="${1:-./playlists}"
 LIMIT="${LIMIT:-50}"
+FF_CLI="${FF_CLI:-ff-cli}"
 
 mkdir -p "$OUT_DIR"
 
@@ -57,7 +58,7 @@ for input in "${INPUTS[@]}"; do
   out="$OUT_DIR/${slug}.json"
 
   printf '\n→ %s\n' "$input"
-  if ff-cli find "$input" --output "$out" --limit "$LIMIT" --yes; then
+  if $FF_CLI find "$input" --output "$out" --limit "$LIMIT" --yes; then
     printf '  ✓ %s\n' "$out"
   else
     printf '  ✗ failed\n' >&2
