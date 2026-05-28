@@ -82,7 +82,17 @@ git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
 
 Claude Code will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The skill validates config, builds, validates the playlist, and sends or publishes — reporting the failing command + exit code if anything breaks. Full prompt and exact flow: [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
 
-For Codex, Cursor, OpenCode, or any other agent, paste the body of `skills/ff-control/SKILL.md` into your project's `AGENTS.md` (or equivalent system-prompt slot).
+## Use with Codex
+
+ff-cli ships the same `ff-control` skill in Codex's native skill format. Install it once:
+
+```bash
+git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
+  && mkdir -p ~/.codex/skills \
+  && cp -r /tmp/ff-cli/skills/ff-control ~/.codex/skills/
+```
+
+Codex will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The installed skill is `skills/ff-control/SKILL.md`, so the execution flow stays defined in one place. Codex metadata and exact flow: [`skills/ff-control/agents/openai.yaml`](./skills/ff-control/agents/openai.yaml), [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
 
 ## Dev Quick Start
 

@@ -1,0 +1,8 @@
+interface:
+  display_name: "ff-control"
+  short_description: "Build, validate, play, and publish DP-1 playlists"
+  brand_color: "#111111"
+  default_prompt: "Use $ff-control to build, validate, play, or publish a DP-1 playlist with ff-cli."
+
+policy:
+  allow_implicit_invocation: true
