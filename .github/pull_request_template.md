@@ -14,7 +14,7 @@ Why should we land this now?
 
 ## Documentation impact
 
-- [ ] CLI surface changed (added/removed/renamed a command, flag, or argument) → updated [`feral-file/docs`](https://github.com/feral-file/docs) (`docs/api-reference/cli.md`, and any mentions under `docs/dp1-protocol/`, `docs/llm-agents/`)
+- [ ] CLI surface changed (added/removed/renamed a command, flag, or argument) → updated [`feral-file/docs`](https://github.com/feral-file/docs) (`docs/ff-cli/index.md`, and any mentions in `docs/agents/index.md`)
 - [ ] Config schema changed → updated `docs/CONFIGURATION.md` and the public docs as needed
 - [ ] No user-facing change — docs updates not required
 
