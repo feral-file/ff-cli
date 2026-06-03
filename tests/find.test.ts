@@ -254,6 +254,38 @@ describe('parseFindInput', () => {
     assert.ok(r.reason.includes('/art/'));
   });
 
+  test('Verse item URL → token kind, source verse', () => {
+    const r = parseFindInput(
+      'https://verse.works/items/ethereum/0x23b72f7458a204446983f544d655df10f70533e9/139'
+    );
+    assert.equal(r?.kind, 'token');
+    if (r?.kind !== 'token') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.source, 'verse');
+    assert.equal(r.coords.chain, 'ethereum');
+    assert.equal(r.coords.contract, '0x23b72f7458a204446983f544d655df10f70533e9');
+    assert.equal(r.coords.tokenId, '139');
+  });
+
+  test('Verse series URL → verse-series kind', () => {
+    const r = parseFindInput('https://verse.works/series/quantizer-by-harm-van-den-dorpel');
+    assert.equal(r?.kind, 'verse-series');
+    if (r?.kind !== 'verse-series') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'quantizer-by-harm-van-den-dorpel');
+  });
+
+  test('Verse unsupported item chain → unsupported with chain hint', () => {
+    const r = parseFindInput('https://verse.works/items/base/0xabc/1');
+    assert.equal(r?.kind, 'unsupported');
+    if (r?.kind !== 'unsupported') {
+      throw new Error('narrowing');
+    }
+    assert.ok(r.reason.includes('base'));
+  });
+
   test('SuperRare /collection/{contract} URL → unsupported with specific message', () => {
     const r = parseFindInput(
       'https://superrare.com/collection/0x3e930455dcBf4bC69DE9926bDAF8ef782398786f'

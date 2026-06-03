@@ -2,7 +2,7 @@
  * Marketplace URL parser for `ff-cli find`.
  *
  * Accepts user input in any of these forms and returns a normalized result:
- *  - Marketplace token URL (Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort)
+ *  - Marketplace token URL (Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort, Verse)
  *  - Raw on-chain coordinates: "ethereum:0xabc...:123" / "tezos:KT1...:456"
  *  - Wallet address: 0x{40-hex} (Ethereum) or tz1/tz2/tz3{33} (Tezos)
  *
@@ -31,7 +31,8 @@ export type MarketplaceSource =
   | 'feralfile'
   | 'opensea'
   | 'superrare'
-  | 'neort';
+  | 'neort'
+  | 'verse';
 
 export type FeralFileUrlKind = 'artwork' | 'series' | 'show';
 
@@ -44,6 +45,7 @@ export type ParsedFindInput =
   | { kind: 'fxhash-iteration'; slug: string }
   | { kind: 'fxhash-project'; slug: string }
   | { kind: 'neort-art'; id: string }
+  | { kind: 'verse-series'; slug: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -121,6 +123,9 @@ export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   }
   if (host === 'neort.io' || host.endsWith('.neort.io')) {
     return parseNeort(url);
+  }
+  if (host === 'verse.works' || host.endsWith('.verse.works')) {
+    return parseVerse(url);
   }
   return null;
 }
@@ -377,6 +382,46 @@ export function parseNeort(url: URL): ParsedFindInput {
   return {
     kind: 'unsupported',
     reason: `Neort URL not recognized: ${url.pathname}. Expected /art/{id}.`,
+  };
+}
+
+/**
+ * Verse URL forms:
+ *   verse.works/items/ethereum/{contract}/{tokenId}  — direct Ethereum token
+ *   verse.works/series/{slug}                        — series page
+ *
+ * Verse item pages expose the on-chain coordinates directly in the path. Series
+ * pages do not include a JSON API in the public URL, but they render edition
+ * links with the same `/items/ethereum/...` shape; the async resolver fetches
+ * the series page and extracts a representative token for Raster enumeration.
+ */
+export function parseVerse(url: URL): ParsedFindInput {
+  let m = /^\/items\/ethereum\/(0x[a-fA-F0-9]{40})\/(\d+)\/?$/.exec(url.pathname);
+  if (m) {
+    return {
+      kind: 'token',
+      source: 'verse',
+      coords: { chain: 'ethereum', contract: m[1].toLowerCase(), tokenId: m[2] },
+    };
+  }
+  m = /^\/items\/([^/]+)\//.exec(url.pathname);
+  if (m) {
+    return {
+      kind: 'unsupported',
+      reason:
+        `Verse ${m[1]} item URLs are not supported — ff-cli covers Ethereum and Tezos mainnet only. ` +
+        'Paste an Ethereum Verse item URL or raw `ethereum:{contract}:{tokenId}` coordinates.',
+    };
+  }
+  m = /^\/series\/([A-Za-z0-9][A-Za-z0-9_-]*)\/?$/.exec(url.pathname);
+  if (m) {
+    return { kind: 'verse-series', slug: m[1] };
+  }
+  return {
+    kind: 'unsupported',
+    reason:
+      `Verse URL not recognized: ${url.pathname}. Expected ` +
+      '/items/ethereum/{contract}/{tokenId} or /series/{slug}.',
   };
 }
 

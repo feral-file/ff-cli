@@ -146,6 +146,10 @@ Notes:
   - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`
 - `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
   - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification; not recommended)
+- `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist
+  - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
+  - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
+  - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes`, `--skip-verify`
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
   - Options: `-s, --server <index>` (server index if multiple configured)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device

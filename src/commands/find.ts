@@ -11,6 +11,7 @@ import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
 import { resolveFxhashIteration, resolveFxhashProject } from '../utilities/fxhash-marketplace';
 import { resolveNeortArt } from '../utilities/neort-marketplace';
 import type { NeortArt } from '../utilities/neort-marketplace';
+import { resolveVerseSeries } from '../utilities/verse-marketplace';
 import {
   resolveTokenToArtwork,
   getArtworkSummary,
@@ -66,7 +67,7 @@ export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -91,7 +92,7 @@ export const findCommand = new Command('find')
         console.error(chalk.red('Could not understand input.'));
         console.error(
           chalk.dim(
-            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort. ' +
+            'Supported URLs: Objkt, fxhash, Art Blocks, OpenSea, SuperRare, Feral File, Neort, Verse. ' +
               'Or: `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, ' +
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
@@ -234,6 +235,10 @@ async function resolveTarget(
   }
   if (parsed.kind === 'fxhash-project') {
     const coords = await resolveFxhashProject(parsed.slug);
+    return resolveCoords(coords);
+  }
+  if (parsed.kind === 'verse-series') {
+    const coords = await resolveVerseSeries(parsed.slug);
     return resolveCoords(coords);
   }
   if (parsed.kind === 'address') {
