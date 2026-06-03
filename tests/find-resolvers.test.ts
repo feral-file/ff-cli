@@ -20,6 +20,7 @@ import { resolveObjktAlias } from '../src/utilities/objkt-marketplace';
 import { resolveFxhashIteration, resolveFxhashProject } from '../src/utilities/fxhash-marketplace';
 import { resolveNeortArt } from '../src/utilities/neort-marketplace';
 import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
+import { resolveVerseSeries } from '../src/utilities/verse-marketplace';
 import { resolveTokenToArtwork, listArtworkTokens } from '../src/utilities/raster-client';
 
 type FetchFn = typeof global.fetch;
@@ -466,6 +467,40 @@ describe('resolveNeortArt', () => {
     await assert.rejects(
       () => withMockedFetch(mock, () => resolveNeortArt('broken123')),
       /no playable asset/
+    );
+  });
+});
+
+describe('resolveVerseSeries', () => {
+  test('happy: series page → first Ethereum edition link coords', async () => {
+    const mock = (async () =>
+      new Response(
+        '<html><a href="/items/ethereum/0x23b72f7458a204446983f544d655df10f70533e9/139">Quantizer</a></html>',
+        { status: 200, headers: { 'Content-Type': 'text/html' } }
+      )) as FetchFn;
+
+    const coords = await withMockedFetch(mock, () =>
+      resolveVerseSeries('quantizer-by-harm-van-den-dorpel')
+    );
+    assert.equal(coords.chain, 'ethereum');
+    assert.equal(coords.contract, '0x23b72f7458a204446983f544d655df10f70533e9');
+    assert.equal(coords.tokenId, '139');
+  });
+
+  test('series page with no Ethereum edition links → throws with item URL hint', async () => {
+    const mock = (async () =>
+      new Response('<html>No items yet</html>', { status: 200 })) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveVerseSeries('empty-series')),
+      /specific Verse item URL/
+    );
+  });
+
+  test('HTTP error → throws with status', async () => {
+    const mock = (async () => new Response('Not found', { status: 404 })) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveVerseSeries('does-not-exist')),
+      /404/
     );
   });
 });
