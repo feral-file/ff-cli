@@ -191,6 +191,50 @@ test('mapIndexerDataToStandardFormat: handles missing display gracefully', () =>
   assert.equal(out.token.metadata.artistName, '');
 });
 
+test('mapIndexerDataToStandardFormat: infers erc721 for ethereum tokens and preserves it in DP1 output', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  const tokenRow = mockTokenRow({
+    contract_address: '0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb',
+    token_number: '7804',
+  });
+
+  const out = mapIndexerDataToStandardFormat(tokenRow, 'ethereum');
+  assert.equal(out.success, true);
+  if (!('token' in out) || !out.token) {
+    assert.fail('expected token on success');
+  }
+  assert.equal(out.token.standard, 'erc721');
+
+  const dp1 = convertToDP1Item(out, 10);
+  assert.equal(dp1.success, true);
+  if (!('item' in dp1) || !dp1.item) {
+    assert.fail('expected item on success');
+  }
+  assert.equal(dp1.item.provenance.contract.standard, 'erc721');
+});
+
+test('mapIndexerDataToStandardFormat: infers fa2 for Tezos KT contracts and preserves it in DP1 output', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  const tokenRow = mockTokenRow({
+    contract_address: 'KT1abcdef1234567890abcdef1234567890abcdef',
+    token_number: '42',
+  });
+
+  const out = mapIndexerDataToStandardFormat(tokenRow, 'tezos');
+  assert.equal(out.success, true);
+  if (!('token' in out) || !out.token) {
+    assert.fail('expected token on success');
+  }
+  assert.equal(out.token.standard, 'fa2');
+
+  const dp1 = convertToDP1Item(out, 10);
+  assert.equal(dp1.success, true);
+  if (!('item' in dp1) || !dp1.item) {
+    assert.fail('expected item on success');
+  }
+  assert.equal(dp1.item.provenance.contract.standard, 'fa2');
+});
+
 test('mapIndexerDataToStandardFormat: returns error for null indexerData', () => {
   const { mapIndexerDataToStandardFormat } = nftIndexer;
   const out = mapIndexerDataToStandardFormat(null, 'ethereum');
