@@ -26,7 +26,7 @@ Flow:
 5) If requested, run:
    - send: `ff-cli send playlist.json` (or with `-d "Device Name"`)
    - if send fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), try one automatic host-shell fallback:
-     `ssh -o BatchMode=yes -o ConnectTimeout=5 localhost "cd ~/.openclaw/workspace && ff-cli send playlist.json -d <device>"`
+     `ssh -o BatchMode=yes -o ConnectTimeout=5 localhost "cd ~/.openclaw/moz && ff-cli send playlist.json -d <device>"`
    - if fallback succeeds, report success and stop
    - if fallback fails, print exactly one handoff line and nothing else: `RUN_LOCAL: ff-cli send playlist.json -d <device>`
    - do not suggest tunnels, IP changes, network debugging, or extra steps
