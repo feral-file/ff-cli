@@ -354,6 +354,7 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
   const artistName = extractArtistName(display.artists);
   const name = display.name || `Token #${indexerData.token_number}`;
   const description = display.description || '';
+  const standard = detectTokenStandard(chain, indexerData.contract_address);
 
   return {
     success: true,
@@ -361,6 +362,7 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
       chain,
       contractAddress: indexerData.contract_address,
       tokenId: indexerData.token_number,
+      standard,
       name,
       description,
       image: {
@@ -487,7 +489,7 @@ function convertToDP1Item(tokenData, duration = 10) {
       type: 'onChain',
       contract: {
         chain: chainMap[token.chain.toLowerCase()] || 'other',
-        standard: 'other',
+        standard: token.standard || detectTokenStandard(token.chain, token.contractAddress),
         address: token.contractAddress,
         tokenId: String(token.tokenId),
       },
