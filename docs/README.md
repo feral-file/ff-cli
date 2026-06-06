@@ -18,7 +18,7 @@ npm i -g @feralfile/cli
 curl -fsSL https://feralfile.com/ff-cli-install | bash
 ```
 
-Installs a prebuilt binary for macOS/Linux (no Node.js required).
+Installs a prebuilt bundle for macOS/Linux. Node.js 22 or newer must still be available in `PATH`; the bundle avoids a global npm install, not the Node runtime requirement.
 
 ## Configure
 

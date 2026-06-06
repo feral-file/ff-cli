@@ -8,6 +8,7 @@ import { getConfig, listAvailableModels } from '../config';
 import { ensureConfigFile, isMissingConfigValue, readConfigFile } from './helpers/config-files';
 import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
+import { configuredFF1Devices } from '../utilities/config-placeholders';
 import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
@@ -158,7 +159,12 @@ export const setupCommand = new Command('setup')
         };
       }
 
-      const existingDevices = config.ff1Devices?.devices || [];
+      const configuredDevices = configuredFF1Devices(config.ff1Devices?.devices || []);
+      const existingDevices = configuredDevices;
+      // Drop bundled example rows before discovery. Otherwise setup sees the
+      // sample placeholder as an existing device and lets users skip the device
+      // prompt without ever configuring a usable FF1 host.
+      config.ff1Devices = { devices: configuredDevices };
 
       if (existingDevices.length > 0) {
         console.log(
@@ -245,7 +251,7 @@ export const setupCommand = new Command('setup')
 
       const hasApiKey = !isMissingConfigValue(config.models[selectedModel]?.apiKey);
       const hasSigningKey = !isMissingConfigValue(config.playlist?.privateKey || '');
-      const hasDevice = Boolean(config.ff1Devices?.devices?.[0]?.host);
+      const hasDevice = configuredFF1Devices(config.ff1Devices?.devices || []).length > 0;
 
       if (!hasSigningKey || !hasDevice) {
         console.log(chalk.yellow('\nNext steps:'));

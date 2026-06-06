@@ -8,6 +8,7 @@ import {
 import { getPlaylistConfig } from '../config';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
+import { configuredFF1Devices } from '../utilities/config-placeholders';
 
 export const statusCommand = new Command('status')
   .description('Show configuration status')
@@ -35,6 +36,7 @@ export const statusCommand = new Command('status')
       const playlistKeyError =
         playlistKeyMaterial.length > 0 ? validatePlaylistPrivateKey(playlistKeyMaterial) : null;
       const hasPlaylistSigningKey = playlistKeyMaterial.length > 0 && playlistKeyError === null;
+      const configuredDevices = configuredFF1Devices(config.ff1Devices?.devices || []);
       let hasValidPlaylistRole = false;
       let playlistRoleDetail: string | undefined;
       let playlistRoleError: string | undefined;
@@ -79,14 +81,11 @@ export const statusCommand = new Command('status')
           hint: ' (used when signing playlists)',
         },
         {
-          label: `FF1 devices (${config.ff1Devices?.devices?.length || 0})`,
-          ok:
-            (config.ff1Devices?.devices?.length || 0) > 0 &&
-            (config.ff1Devices?.devices || []).every((d) => !isMissingConfigValue(d.host)),
+          label: `FF1 devices (${configuredDevices.length})`,
+          ok: configuredDevices.length > 0,
           detail:
-            (config.ff1Devices?.devices || [])
-              .map((d) => `${d.name || 'unnamed'} → ${d.host}`)
-              .join(', ') || undefined,
+            configuredDevices.map((d) => `${d.name || 'unnamed'} → ${d.host}`).join(', ') ||
+            undefined,
         },
       ];
 

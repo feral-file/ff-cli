@@ -1,21 +1,7 @@
 import { promises as fs } from 'fs';
 import { createSampleConfig, getConfigPaths } from '../../config';
 import type { Config } from '../../types';
-
-// Treat any value containing the YOUR_/your_ placeholder pattern as missing,
-// since createSampleConfig writes those literal placeholders into new files
-// and we should not let the user proceed with an unfilled value.
-const placeholderPattern = /YOUR_|your_/;
-
-/**
- * Whether a config value is unset or still holds a sample placeholder.
- */
-export function isMissingConfigValue(value?: string | null): boolean {
-  if (!value) {
-    return true;
-  }
-  return placeholderPattern.test(value);
-}
+export { isMissingConfigValue } from '../../utilities/config-placeholders';
 
 /**
  * Read and parse a config.json file at the given path.

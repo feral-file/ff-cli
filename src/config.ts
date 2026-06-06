@@ -14,6 +14,7 @@ import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
 } from './utilities/playlist-signing-role';
+import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
 
 // One-shot legacy config migration: copy `$XDG_CONFIG_HOME/ff1/config.json` to
 // `$XDG_CONFIG_HOME/ff-cli/config.json` on first read after upgrading from
@@ -311,7 +312,7 @@ export function getFF1DeviceConfig(): FF1DeviceConfig {
   const ff1Devices = config.ff1Devices || { devices: [] };
 
   return {
-    devices: ff1Devices.devices || [],
+    devices: configuredFF1Devices(ff1Devices.devices || []),
   };
 }
 
@@ -379,7 +380,7 @@ export function validateConfig(modelName?: string): ValidationResult {
 
     const modelConfig = config.models[selectedModel];
 
-    if (!modelConfig.apiKey || modelConfig.apiKey === 'your_api_key_here') {
+    if (isMissingConfigValue(modelConfig.apiKey)) {
       errors.push(`API key for "${selectedModel}" is missing or not configured`);
     }
 
