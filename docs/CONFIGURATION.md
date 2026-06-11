@@ -116,6 +116,19 @@ Environment variable alternative:
 FEED_BASE_URLS=https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1,https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1
 ```
 
+## find (Raster API)
+
+`ff-cli find` resolves tokens, series, and artist addresses through Raster's public GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)). No configuration is required; two environment variables adjust the integration:
+
+```env
+# API key sent as the x-api-key header. The API currently answers without
+# one, but Raster's docs declare a key required — set this once enforced.
+RASTER_API_KEY=rk_your_key_here
+
+# Override the GraphQL endpoint (default: https://api.raster.art/graphql).
+RASTER_API_URL=https://api.raster.art/graphql
+```
+
 ## ff1Devices
 
 Configure devices you want to play content on.

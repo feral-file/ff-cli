@@ -26,7 +26,7 @@
 import * as logger from '../logger';
 import { USER_AGENT } from './user-agent';
 
-const RASTER_GRAPHQL_URL = process.env.RASTER_API_URL ?? 'https://api.raster.art/graphql';
+const DEFAULT_RASTER_GRAPHQL_URL = 'https://api.raster.art/graphql';
 
 // CAIP-2 chain IDs for the chains the FF indexer supports.
 // Tezos mainnet's CAIP form uses the genesis block hash (NetXdQprcVkpaWU),
@@ -62,7 +62,6 @@ export interface RasterArtworkRow {
 }
 
 export interface RasterTokenCoords {
-  caipChain: string;
   chain: IndexerChain;
   contractAddress: string;
   tokenId: string;
@@ -86,7 +85,8 @@ function caipToIndexerChain(caip: string): IndexerChain | null {
  * callers check their own field for null.
  */
 async function rasterQuery<T>(query: string, variables: Record<string, unknown>): Promise<T> {
-  logger.debug(`[Raster] POST ${RASTER_GRAPHQL_URL} ${JSON.stringify(variables)}`);
+  const endpoint = process.env.RASTER_API_URL ?? DEFAULT_RASTER_GRAPHQL_URL;
+  logger.debug(`[Raster] POST ${endpoint} ${JSON.stringify(variables)}`);
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'User-Agent': USER_AGENT,
@@ -95,7 +95,7 @@ async function rasterQuery<T>(query: string, variables: Record<string, unknown>)
   if (apiKey) {
     headers['x-api-key'] = apiKey;
   }
-  const response = await fetch(RASTER_GRAPHQL_URL, {
+  const response = await fetch(endpoint, {
     method: 'POST',
     headers,
     body: JSON.stringify({ query, variables }),
@@ -241,7 +241,6 @@ export async function listArtworkTokens(
       continue;
     }
     tokens.push({
-      caipChain: raw.chainId,
       chain,
       contractAddress: raw.contractAddress,
       tokenId: raw.tokenId,
