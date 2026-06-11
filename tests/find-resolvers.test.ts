@@ -21,7 +21,12 @@ import { resolveFxhashIteration, resolveFxhashProject } from '../src/utilities/f
 import { resolveNeortArt } from '../src/utilities/neort-marketplace';
 import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
 import { resolveVerseSeries } from '../src/utilities/verse-marketplace';
-import { resolveTokenToArtwork, listArtworkTokens } from '../src/utilities/raster-client';
+import {
+  resolveTokenToArtwork,
+  listArtworkTokens,
+  listArtistArtworks,
+  resolveAddressToArtist,
+} from '../src/utilities/raster-client';
 
 type FetchFn = typeof global.fetch;
 
@@ -56,77 +61,103 @@ async function withMockedFetch<T>(mock: FetchFn, run: () => Promise<T>): Promise
   }
 }
 
-describe('resolveTokenToArtwork (Raster)', () => {
-  test('200 → resolves to artworkId + title', async () => {
-    const mock = mockFetchByUrl([
-      {
-        match: '/token/ethereum/0xabc/123',
-        body: {
-          id: 1,
-          contract_address: '0xabc',
-          token_id: '123',
-          title: 'Token #123',
-          artwork: {
-            id: 42,
-            title: 'Send/Receive',
-            artists: [],
-            is_edition: false,
-            edition_size: 1,
+/**
+ * Build a fetch mock for the Raster GraphQL endpoint. All Raster calls POST
+ * to one URL, so routing keys off the request body (query text + variables)
+ * instead of the URL. The handler returns the JSON payload to serve
+ * (`{ data }` or `{ errors }`); pass `status` to simulate HTTP failures.
+ */
+function mockRasterGraphQL(
+  handler: (query: string, variables: Record<string, unknown>) => unknown,
+  status = 200
+): FetchFn {
+  return (async (_input: string | URL | Request, init?: RequestInit) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as {
+      query?: string;
+      variables?: Record<string, unknown>;
+    };
+    return new Response(JSON.stringify(handler(body.query ?? '', body.variables ?? {})), {
+      status,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }) as FetchFn;
+}
+
+describe('resolveTokenToArtwork (Raster GraphQL)', () => {
+  test('indexed token → full summary (id, title, artists) in one query', async () => {
+    let seenRef: Record<string, unknown> | undefined;
+    const mock = mockRasterGraphQL((_query, variables) => {
+      seenRef = variables.ref as Record<string, unknown>;
+      return {
+        data: {
+          tokenByRef: {
+            artworks: [
+              {
+                id: '42',
+                title: 'Send/Receive',
+                artists: [{ id: '7', name: 'Snowfro', slug: 'snowfro' }],
+              },
+            ],
           },
         },
-      },
-    ]);
+      };
+    });
     const result = await withMockedFetch(mock, () =>
       resolveTokenToArtwork('ethereum', '0xabc', '123')
     );
     assert.notEqual(result, null);
-    assert.equal(result?.artworkId, 42);
-    assert.equal(result?.artworkTitle, 'Send/Receive');
+    assert.equal(result?.artworkId, '42');
+    assert.equal(result?.title, 'Send/Receive');
+    assert.equal(result?.artists[0]?.name, 'Snowfro');
+    // Indexer chain slugs must be translated to CAIP-2 for the API.
+    assert.deepEqual(seenRef, { chainId: 'eip155:1', contractAddress: '0xabc', tokenId: '123' });
   });
 
-  test('404 → returns null (caller falls back to single-token mode)', async () => {
-    const mock = mockFetchByUrl([
-      { match: '/token/', status: 404, body: { detail: 'Token not found' } },
-    ]);
+  test('unindexed token → tokenByRef null → returns null (caller falls back to single-token mode)', async () => {
+    const mock = mockRasterGraphQL(() => ({ data: { tokenByRef: null } }));
     const result = await withMockedFetch(mock, () =>
       resolveTokenToArtwork('ethereum', '0xabc', '123')
     );
     assert.equal(result, null);
   });
 
-  test('500 → throws (non-404 errors propagate)', async () => {
-    const mock = mockFetchByUrl([
-      { match: '/token/', status: 500, body: { detail: 'internal error' } },
-    ]);
+  test('HTTP 500 → throws', async () => {
+    const mock = mockRasterGraphQL(() => ({ detail: 'internal error' }), 500);
     await assert.rejects(
       () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '123')),
       /500/
     );
   });
+
+  test('GraphQL errors → throws with concatenated messages', async () => {
+    const mock = mockRasterGraphQL(() => ({
+      errors: [{ message: 'invalid API key' }, { message: 'rate limited' }],
+    }));
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '123')),
+      /invalid API key; rate limited/
+    );
+  });
 });
 
-describe('listArtworkTokens (Raster — pagination + chain filter)', () => {
+describe('listArtworkTokens (Raster GraphQL — pagination + chain filter)', () => {
   test('eth + tezos tokens pass through, unsupported chains counted in skippedUnsupported', async () => {
-    const mock = mockFetchByUrl([
-      {
-        match: '/artwork/42/tokens',
-        body: {
-          tokens: [
-            { chain_id: 'eip155:1', contract_address: 'eip155:1/0xeth', token_id: '1' },
-            {
-              chain_id: 'tezos:NetXdQprcVkpaWU',
-              contract_address: 'tezos:NetXdQprcVkpaWU/KT1abc',
-              token_id: '2',
-            },
-            { chain_id: 'eip155:137', contract_address: 'eip155:137/0xmatic', token_id: '3' },
-            { chain_id: 'eip155:8453', contract_address: 'eip155:8453/0xbase', token_id: '4' },
-          ],
-          total_count: 4,
-          cursor: 4,
+    const mock = mockRasterGraphQL(() => ({
+      data: {
+        artwork: {
+          tokens: {
+            nodes: [
+              { chainId: 'eip155:1', contractAddress: '0xeth', tokenId: '1' },
+              { chainId: 'tezos:NetXdQprcVkpaWU', contractAddress: 'KT1abc', tokenId: '2' },
+              { chainId: 'eip155:137', contractAddress: '0xmatic', tokenId: '3' },
+              { chainId: 'eip155:8453', contractAddress: '0xbase', tokenId: '4' },
+            ],
+            pageInfo: { hasNextPage: false, endCursor: 'opaque-end' },
+          },
         },
       },
-    ]);
-    const page = await withMockedFetch(mock, () => listArtworkTokens(42));
+    }));
+    const page = await withMockedFetch(mock, () => listArtworkTokens('42'));
     assert.equal(page.tokens.length, 2);
     assert.equal(page.tokens[0].chain, 'ethereum');
     assert.equal(page.tokens[0].contractAddress, '0xeth');
@@ -135,34 +166,111 @@ describe('listArtworkTokens (Raster — pagination + chain filter)', () => {
     assert.equal(page.skippedUnsupported, 2);
   });
 
-  test('cursor === total_count → nextCursor null (end of stream)', async () => {
-    const mock = mockFetchByUrl([
-      {
-        match: '/artwork/42/tokens',
-        body: {
-          tokens: [{ chain_id: 'eip155:1', contract_address: 'eip155:1/0xa', token_id: '1' }],
-          total_count: 100,
-          cursor: 100,
+  test('hasNextPage false → nextCursor null (end of stream)', async () => {
+    const mock = mockRasterGraphQL(() => ({
+      data: {
+        artwork: {
+          tokens: {
+            nodes: [{ chainId: 'eip155:1', contractAddress: '0xa', tokenId: '1' }],
+            pageInfo: { hasNextPage: false, endCursor: 'cursor-a' },
+          },
         },
       },
-    ]);
-    const page = await withMockedFetch(mock, () => listArtworkTokens(42));
+    }));
+    const page = await withMockedFetch(mock, () => listArtworkTokens('42'));
     assert.equal(page.nextCursor, null);
   });
 
-  test('cursor < total_count → nextCursor passes through for next page', async () => {
-    const mock = mockFetchByUrl([
-      {
-        match: '/artwork/42/tokens',
-        body: {
-          tokens: [{ chain_id: 'eip155:1', contract_address: 'eip155:1/0xa', token_id: '1' }],
-          total_count: 100,
-          cursor: 50,
+  test('hasNextPage true → endCursor passes through for next page', async () => {
+    const mock = mockRasterGraphQL((_query, variables) => ({
+      data: {
+        artwork: {
+          tokens: {
+            nodes: [{ chainId: 'eip155:1', contractAddress: '0xa', tokenId: '1' }],
+            pageInfo: {
+              hasNextPage: true,
+              endCursor: `cursor-after-${variables.after ?? 'start'}`,
+            },
+          },
         },
       },
+    }));
+    const page = await withMockedFetch(mock, () => listArtworkTokens('42'));
+    assert.equal(page.nextCursor, 'cursor-after-start');
+
+    const next = await withMockedFetch(mock, () =>
+      listArtworkTokens('42', { cursor: page.nextCursor! })
+    );
+    assert.equal(next.nextCursor, 'cursor-after-cursor-after-start');
+  });
+
+  test('unknown artwork id → throws', async () => {
+    const mock = mockRasterGraphQL(() => ({ data: { artwork: null } }));
+    await assert.rejects(
+      () => withMockedFetch(mock, () => listArtworkTokens('999')),
+      /artwork 999 not found/
+    );
+  });
+});
+
+describe('resolveAddressToArtist (Raster GraphQL)', () => {
+  test('claimed address → first associated artist', async () => {
+    const mock = mockRasterGraphQL(() => ({
+      data: { address: { artists: [{ id: '2', name: 'Snowfro', slug: 'snowfro' }] } },
+    }));
+    const artist = await withMockedFetch(mock, () =>
+      resolveAddressToArtist('0xf3860788d1597cecf938424baabe976fac87dc26')
+    );
+    assert.deepEqual(artist, { id: '2', name: 'Snowfro', slug: 'snowfro' });
+  });
+
+  test('unclaimed address → empty artists list → null', async () => {
+    const mock = mockRasterGraphQL(() => ({ data: { address: { artists: [] } } }));
+    const artist = await withMockedFetch(mock, () => resolveAddressToArtist('0xdeadbeef'));
+    assert.equal(artist, null);
+  });
+});
+
+describe('listArtistArtworks (Raster GraphQL — full catalog walk)', () => {
+  test('paginates until hasNextPage is false and concatenates rows', async () => {
+    const mock = mockRasterGraphQL((_query, variables) => {
+      if (!variables.after) {
+        return {
+          data: {
+            artist: {
+              artworks: {
+                nodes: [{ id: '1', title: 'First' }],
+                pageInfo: { hasNextPage: true, endCursor: 'page-2' },
+              },
+            },
+          },
+        };
+      }
+      assert.equal(variables.after, 'page-2');
+      return {
+        data: {
+          artist: {
+            artworks: {
+              nodes: [{ id: '2', title: 'Second' }],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        },
+      };
+    });
+    const rows = await withMockedFetch(mock, () => listArtistArtworks('7'));
+    assert.deepEqual(rows, [
+      { artworkId: '1', title: 'First' },
+      { artworkId: '2', title: 'Second' },
     ]);
-    const page = await withMockedFetch(mock, () => listArtworkTokens(42));
-    assert.equal(page.nextCursor, 50);
+  });
+
+  test('unknown artist id → throws', async () => {
+    const mock = mockRasterGraphQL(() => ({ data: { artist: null } }));
+    await assert.rejects(
+      () => withMockedFetch(mock, () => listArtistArtworks('404')),
+      /artist 404 not found/
+    );
   });
 });
 

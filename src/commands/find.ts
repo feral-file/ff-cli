@@ -15,7 +15,6 @@ import type { NeortArt } from '../utilities/neort-marketplace';
 import { resolveVerseSeries } from '../utilities/verse-marketplace';
 import {
   resolveTokenToArtwork,
-  getArtworkSummary,
   listArtworkTokens,
   listArtistArtworks,
   resolveAddressToArtist,
@@ -126,31 +125,50 @@ export const findCommand = new Command('find')
       console.log();
 
       const userLimit = parseLimitOption(options.limit);
-      const seriesTotal = target.kind === 'series' ? target.summary.tokenCount : 1;
       // Implicit cap: no --limit + series > 1024 → cap to DP-1 max with a
       // clear warning. Explicit `--limit > 1024` was already rejected by
       // parseLimitOption, so reaching here means either capped-by-default or
       // the user picked a value within spec.
       const limit = Math.min(userLimit, DP1_MAX_ITEMS);
-      if (userLimit === Number.POSITIVE_INFINITY && seriesTotal > DP1_MAX_ITEMS) {
+
+      // Raster's GraphQL API exposes no series token counts, so enumerate
+      // tokens first (up to the effective limit) and confirm with the real
+      // number afterward. `hasMore` means the series continues past `limit`.
+      let tokens: TokenCoords[];
+      let seriesHasMore = false;
+      if (target.kind === 'series') {
+        const fetched = await fetchTokens(target.summary, limit);
+        tokens = fetched.tokens;
+        seriesHasMore = fetched.hasMore;
+      } else {
+        tokens = [target.coords];
+      }
+
+      if (tokens.length === 0) {
+        console.error(
+          chalk.red('Series has no tokens on supported chains (Ethereum + Tezos mainnet).')
+        );
+        process.exit(1);
+      }
+
+      if (userLimit === Number.POSITIVE_INFINITY && seriesHasMore) {
         console.log(
           chalk.yellow(
-            `Series has ${seriesTotal} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
+            `Series has more than ${DP1_MAX_ITEMS} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
               `Building with the first ${DP1_MAX_ITEMS} — pass \`--limit N\` (≤ ${DP1_MAX_ITEMS}) for fewer.`
           )
         );
         console.log();
       }
-      const willInclude = Math.min(seriesTotal, limit);
+
       const shouldBuild =
-        !!options.yes || !!options.output || (await confirmMakePlaylist(willInclude, seriesTotal));
+        !!options.yes ||
+        !!options.output ||
+        (await confirmMakePlaylist(tokens.length, seriesHasMore));
       if (!shouldBuild) {
         console.log(chalk.dim('Cancelled.'));
         return;
       }
-
-      const tokens =
-        target.kind === 'series' ? await fetchTokens(target.summary, limit) : [target.coords];
       console.log(
         chalk.dim(
           `Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`
@@ -248,35 +266,36 @@ async function resolveTarget(
     return resolveCoords(coords);
   }
   if (parsed.kind === 'address') {
-    const artistId = await resolveAddressToArtist(parsed.address);
-    if (artistId === null) {
+    const artist = await resolveAddressToArtist(parsed.address);
+    if (artist === null) {
       throw new Error(
         `No artist found on Raster for address ${parsed.address}. ` +
           'Raster indexes artists by their on-chain addresses; this address may not yet be claimed.'
       );
     }
-    const catalog = await listArtistArtworks(artistId);
+    const catalog = await listArtistArtworks(artist.id);
     if (catalog.length === 0) {
       throw new Error('Artist has no artworks indexed on Raster.');
     }
     const picked = await pickFromCatalog(catalog, skipPrompt);
-    const summary = await getArtworkSummary(picked.artworkId);
-    return { kind: 'series', summary };
+    return {
+      kind: 'series',
+      summary: { artworkId: picked.artworkId, title: picked.title, artists: [artist] },
+    };
   }
   // `unsupported` is handled upstream; this branch keeps the type narrowing honest.
   throw new Error(`Unsupported parse result: ${parsed.kind}`);
 }
 
 /**
- * Resolve on-chain coords to a target. If Raster doesn't index this token
- * (404), fall back to single-token mode so we still build something playable.
+ * Resolve on-chain coords to a target. If Raster doesn't index this token,
+ * fall back to single-token mode so we still build something playable.
  */
 async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
-  const lookup = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
-  if (lookup === null) {
+  const summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  if (summary === null) {
     return { kind: 'single', coords };
   }
-  const summary = await getArtworkSummary(lookup.artworkId);
   return { kind: 'series', summary };
 }
 
@@ -312,12 +331,21 @@ export function parseLimitOption(limitStr: string | undefined): number {
   return n;
 }
 
-async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promise<TokenCoords[]> {
+/**
+ * Enumerate series tokens from Raster up to `limit`. `hasMore` reports
+ * whether the series continues past what was collected — the API exposes
+ * no total counts, so this is all the size information the flow gets.
+ */
+async function fetchTokens(
+  summary: RasterArtworkSummary,
+  limit: number
+): Promise<{ tokens: TokenCoords[]; hasMore: boolean }> {
   const collected: TokenCoords[] = [];
-  let cursor: number | undefined;
+  let cursor: string | undefined;
   let skipped = 0;
+  let hasMore = false;
 
-  while (collected.length < limit) {
+  for (;;) {
     const page = await listArtworkTokens(summary.artworkId, {
       cursor,
       pageSize: RASTER_PAGE_SIZE,
@@ -325,6 +353,7 @@ async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promis
     skipped += page.skippedUnsupported;
     for (const t of page.tokens) {
       if (collected.length >= limit) {
+        hasMore = true;
         break;
       }
       collected.push({
@@ -333,7 +362,11 @@ async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promis
         tokenId: t.tokenId,
       });
     }
-    if (page.nextCursor === null) {
+    if (hasMore || page.nextCursor === null) {
+      break;
+    }
+    if (collected.length >= limit) {
+      hasMore = true;
       break;
     }
     cursor = page.nextCursor;
@@ -347,7 +380,7 @@ async function fetchTokens(summary: RasterArtworkSummary, limit: number): Promis
     );
   }
 
-  return collected;
+  return { tokens: collected, hasMore };
 }
 
 async function pickFromCatalog(
@@ -359,8 +392,7 @@ async function pickFromCatalog(
   }
   console.log(chalk.cyan(`Found ${catalog.length} artworks for this artist:`));
   catalog.forEach((row, i) => {
-    const count = `${row.tokenCount} token${row.tokenCount === 1 ? '' : 's'}`;
-    console.log(chalk.dim(`  ${i}: ${row.title} (${count})`));
+    console.log(chalk.dim(`  ${i}: ${row.title}`));
   });
   console.log();
   const prompt = createPrompt();
@@ -376,9 +408,9 @@ async function pickFromCatalog(
   return catalog[index];
 }
 
-async function confirmMakePlaylist(count: number, total: number): Promise<boolean> {
-  const noun = total === 1 ? 'token' : 'tokens';
-  const label = count < total ? `${count} of ${total} ${noun}` : `${count} ${noun}`;
+async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boolean> {
+  const noun = count === 1 ? 'token' : 'tokens';
+  const label = hasMore ? `the first ${count} ${noun}` : `${count} ${noun}`;
   const prompt = createPrompt();
   const yes = await promptYesNo(prompt.ask, `Build playlist with ${label}?`, true);
   prompt.close();
@@ -593,7 +625,7 @@ async function runNeortFind(id: string, options: FindOptions): Promise<void> {
   );
   console.log();
 
-  const shouldBuild = !!options.yes || !!options.output || (await confirmMakePlaylist(1, 1));
+  const shouldBuild = !!options.yes || !!options.output || (await confirmMakePlaylist(1, false));
   if (!shouldBuild) {
     console.log(chalk.dim('Cancelled.'));
     return;
