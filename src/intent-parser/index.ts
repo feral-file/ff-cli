@@ -160,7 +160,7 @@ EXAMPLES (fetch_feed)
 - "Pick 3 artworks from Social Codes and 2 from a2p. Mix them up." → \`fetch_feed\` { playlistName: "Social Codes", quantity: 3 } + \`fetch_feed\` { playlistName: "a2p", quantity: 2 }, and set \`playlistSettings.preserveOrder\` = false
 
 PLAYLIST SETTINGS EXTRACTION
-- durationPerItem: parse phrases (e.g., "6 seconds each" → 6)
+- durationPerItem: parse phrases (e.g., "6 seconds each" → 6); OMIT entirely when the user gives no per-item time — omitted means auto timing (video/audio play their natural length, static media uses the configured default). Never invent a number.
 - preserveOrder: default true; synonyms ("shuffle", "randomize", "mix", "mix them up", "scramble") → false
 - title/slug: optional; include only if provided by the user
 - deviceName: from phrases like "send to", "display on", "play on", "push to"${hasDevices ? '\n- available devices:\n' + deviceInfo.replace('\n\nAVAILABLE FF1 DEVICES:\n', '') : ''}
@@ -349,7 +349,8 @@ const intentParserFunctionSchemas: OpenAI.Chat.ChatCompletionTool[] = [
               },
               durationPerItem: {
                 type: 'number',
-                description: 'Duration per item in seconds (e.g., 5 for "5 seconds each")',
+                description:
+                  'Duration per item in seconds (e.g., 5 for "5 seconds each"). Omit when the user gives no per-item time: omitted = auto timing (video/audio play natural length per DP-1 §4.1).',
               },
               totalDuration: {
                 type: 'number',

@@ -75,11 +75,13 @@ Two options are available:
       "quantity": 2
     }
   ],
-  "playlistSettings": { "durationPerItem": 10, "preserveOrder": true, "title": "My Mix" }
+  "playlistSettings": { "preserveOrder": true, "title": "My Mix" }
 }
 ```
 
 This path bypasses the intent parser/orchestrator and calls utilities directly. Validation and sensible defaults are applied in `src/main.ts`.
+
+`playlistSettings.durationPerItem` is optional. Omit it for auto timing: video/audio items are emitted without `duration` and with `display.loop: false`, so a DP-1 player advances at end-of-stream (§4.1) and the media plays its natural length; static items fall back to `defaultDuration`. Set `durationPerItem` only to force a fixed display time on every item.
 
 2. AI‑orchestrated deterministic build (recommended for prompts): Use `chat` with `--verbose` to see tool calls. The orchestrator enforces complete requirement objects, then runs `verify_playlist` (structure only) before sending.
 

@@ -6,6 +6,7 @@
 
 const GRAPHQL_ENDPOINT = 'https://indexer.feralfile.com/graphql';
 const logger = require('../logger');
+const { applyItemTiming } = require('./playlist-builder');
 
 // Polling configuration (in milliseconds)
 const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds
@@ -392,10 +393,11 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
  * animation_url > image.url, ensuring the best quality media is used.
  *
  * @param {Object} tokenData - Token data in standard format
- * @param {number} duration - Display duration in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
+ *   (video/audio play natural length per DP-1 §4.1)
  * @returns {Object} DP1 item with source URL from indexer
  */
-function convertToDP1Item(tokenData, duration = 10) {
+function convertToDP1Item(tokenData, duration) {
   const { token } = tokenData;
 
   if (!token) {
@@ -482,7 +484,6 @@ function convertToDP1Item(tokenData, duration = 10) {
   const dp1Item = {
     id: itemId,
     source: sourceUrl,
-    duration: duration,
     license: 'open',
     created: new Date().toISOString(),
     provenance: {
@@ -501,6 +502,8 @@ function convertToDP1Item(tokenData, duration = 10) {
     dp1Item.title = token.name;
   }
 
+  applyItemTiming(dp1Item, { mimeType: token.image?.mimeType, sourceUrl }, duration);
+
   logger.debug('[NFT Indexer] ✓ Converted to DP1:', {
     title: token.name,
     source: sourceUrl ? sourceUrl.substring(0, 60) + '...' : '(no source URL)',
@@ -515,11 +518,11 @@ function convertToDP1Item(tokenData, duration = 10) {
 /**
  * Get NFT token information from indexer and return as DP1 item (supports single or batch)
  * @param {Object|Array} params - Token parameters (single object or array)
- * @param {number} duration - Display duration in seconds (default: 10)
+ * @param {number} [params.duration] - Explicit display seconds; omit for auto timing
  * @returns {Promise<Object>} DP1 item(s)
  */
 async function getNFTTokenInfo(params) {
-  const duration = params.duration || 10;
+  const duration = params.duration;
 
   // Handle array input for batch processing
   if (Array.isArray(params.tokens)) {
@@ -549,7 +552,7 @@ async function getNFTTokenInfo(params) {
  * @param {Object} [options.mediaPoll] - Passed to pollForMediaAssets
  * @returns {Promise<Object>} DP1 item with success/error status
  */
-async function getNFTTokenInfoSingle(params, duration = 10, options = {}) {
+async function getNFTTokenInfoSingle(params, duration, options = {}) {
   let chain = params.chain;
   const { contractAddress, tokenId } = params;
 
@@ -672,7 +675,7 @@ async function getNFTTokenInfoSingle(params, duration = 10, options = {}) {
  * @param {number} duration - Display duration in seconds
  * @returns {Promise<Array>} Array of DP1 items
  */
-async function getNFTTokenInfoBatch(tokens, duration = 10) {
+async function getNFTTokenInfoBatch(tokens, duration) {
   logger.info(`[NFT Indexer] 📦 Starting batch processing for ${tokens.length} token(s)...`);
   logger.debug('[NFT Indexer] Batch tokens:', tokens);
 

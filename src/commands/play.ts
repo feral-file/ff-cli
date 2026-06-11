@@ -24,7 +24,9 @@ export const playCommand = new Command('play')
   .action(async (source: string, options: { device?: string; skipVerify?: boolean }) => {
     try {
       const config = getConfig();
-      const resolved = await resolvePlaySource(source, config.defaultDuration || 10);
+      // No explicit duration: a direct video/audio URL plays its natural
+      // length (DP-1 §4.1); static media uses config.defaultDuration.
+      const resolved = await resolvePlaySource(source);
       const isPlaylistSource = resolved.kind === 'playlist';
       const sourceLabel = isPlaylistSource
         ? `${resolved.sourceType}: ${resolved.source}`

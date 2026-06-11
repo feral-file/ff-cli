@@ -80,17 +80,20 @@ function inferToolCallFromContent(content, iterationCount) {
         typeof parsed === 'object' &&
         parsed.requirement &&
         typeof parsed.requirement === 'object' &&
-        typeof parsed.duration === 'number'
+        (parsed.duration === undefined || typeof parsed.duration === 'number')
       ) {
+        // duration is optional: absent means auto timing (DP-1 §4.1), so the
+        // synthetic call must not fabricate one.
+        const syntheticArgs = { requirement: parsed.requirement };
+        if (typeof parsed.duration === 'number') {
+          syntheticArgs.duration = parsed.duration;
+        }
         return {
           id: `synthetic_query_requirement_${iterationCount}`,
           type: 'function',
           function: {
             name: 'query_requirement',
-            arguments: JSON.stringify({
-              requirement: parsed.requirement,
-              duration: parsed.duration,
-            }),
+            arguments: JSON.stringify(syntheticArgs),
           },
         };
       }
@@ -188,10 +191,11 @@ const functionSchemas = [
           },
           duration: {
             type: 'number',
-            description: 'Display duration per item in seconds',
+            description:
+              'Display duration per item in seconds. Omit for auto timing: video/audio items then carry no duration and play their natural length (DP-1 §4.1); static items use the configured default.',
           },
         },
-        required: ['requirement', 'duration'],
+        required: ['requirement'],
       },
     },
   },
@@ -232,10 +236,10 @@ const functionSchemas = [
           },
           duration: {
             type: 'number',
-            description: 'Duration per item in seconds',
+            description: "Duration per item in seconds. Omit to keep each feed item's own timing.",
           },
         },
-        required: ['playlistName', 'quantity', 'duration'],
+        required: ['playlistName', 'quantity'],
       },
     },
   },
@@ -534,6 +538,14 @@ function buildOrchestratorSystemPrompt(params) {
     })
     .join('\n');
 
+  // Spell out the duration argument once: an explicit setting is passed
+  // through verbatim; otherwise the model must OMIT duration so item-build
+  // applies auto timing (video/audio natural length per DP-1 §4.1).
+  const durationArgText =
+    typeof playlistSettings.durationPerItem === 'number'
+      ? `call query_requirement(requirement, duration=${playlistSettings.durationPerItem}).`
+      : 'call query_requirement(requirement) WITHOUT a duration argument (auto timing).';
+
   const hasDevice = playlistSettings.deviceName !== undefined;
   const sendStep = hasDevice
     ? `6) If verification passed → you MUST call send_to_device({ playlistId: <the_playlistId>, deviceName: "${playlistSettings.deviceName || 'first-device'}" }) before finishing.
@@ -549,7 +561,7 @@ REQUIREMENTS
 ${requirementsText}
 
 PLAYLIST SETTINGS
-- durationPerItem: ${playlistSettings.durationPerItem || 10}
+- durationPerItem: ${typeof playlistSettings.durationPerItem === 'number' ? playlistSettings.durationPerItem : 'auto (omit duration: video/audio play natural length, static media uses configured default)'}
 - title: ${playlistSettings.title || 'auto'}
 - slug: ${playlistSettings.slug || 'auto'}
 - preserveOrder: ${playlistSettings.preserveOrder !== false ? 'true' : 'false'}
@@ -578,14 +590,14 @@ KEY RULES
 
 DECISION LOOP
 1) For each requirement in order:
-   - build_playlist: call query_requirement(requirement, duration=${playlistSettings.durationPerItem || 10}).
+   - build_playlist: ${durationArgText}
      Returns array with minimal item data including id field. Collect the id values.
-   - feral_file_artwork: call query_requirement(requirement, duration=${playlistSettings.durationPerItem || 10}).
+   - feral_file_artwork: ${durationArgText}
      Returns array with minimal item data including id field. Collect the id values.
    - query_address:
      • if ownerAddress endsWith .eth/.tez → resolve_domains([domain]); if resolved → use returned address; if not → mark failed and continue.
-     • if ownerAddress is 0x…/tz… → call query_requirement(requirement, duration=${playlistSettings.durationPerItem || 10}).
-   - fetch_feed: search_feed_playlist(name) → take bestMatch → fetch_feed_playlist_items(bestMatch, quantity, duration=${playlistSettings.durationPerItem || 10}).
+     • if ownerAddress is 0x…/tz… → ${durationArgText}
+   - fetch_feed: search_feed_playlist(name) → take bestMatch → fetch_feed_playlist_items(bestMatch, quantity${typeof playlistSettings.durationPerItem === 'number' ? `, duration=${playlistSettings.durationPerItem}` : ''}).
    - Collect item IDs across all steps in an array (let's call it collectedItemIds).
 2) If zero items → explain briefly and finish.
 3) If some requirements failed and interactive mode → ask user; otherwise proceed with available items.

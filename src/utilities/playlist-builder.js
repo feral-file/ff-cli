@@ -3,8 +3,76 @@
  * Core functions for building and validating DP1 playlists
  */
 
-const { getPlaylistConfig } = require('../config');
+const { getPlaylistConfig, getConfig } = require('../config');
 const { signPlaylist } = require('./playlist-signer');
+
+/**
+ * isTimeBasedMedia reports whether an item's media has an intrinsic runtime
+ * (video or audio) per DP-1 §4.1 "time-based sources".
+ *
+ * Two signals are consulted because neither is reliable alone: indexer
+ * `display.mime_type` is authoritative when present but is defaulted to
+ * 'image/png' upstream when missing, and URL extensions only cover direct
+ * media links. Either signal saying video/audio wins.
+ *
+ * @param {string} [mimeType] - MIME type reported by the indexer, if any
+ * @param {string} [sourceUrl] - Item source URL, used as an extension fallback
+ * @returns {boolean} True when the media is video or audio
+ */
+function isTimeBasedMedia(mimeType, sourceUrl) {
+  const candidates = [String(mimeType || '').toLowerCase(), detectMimeType(sourceUrl)];
+  return candidates.some((mime) => mime.startsWith('video/') || mime.startsWith('audio/'));
+}
+
+/**
+ * applyItemTiming sets a DP1 item's playback timing per DP-1 §4.1.
+ *
+ * Invariant this function owns: an explicit numeric `duration` always wins
+ * and is stamped as-is. When `duration` is undefined/null ("auto"), a
+ * time-based source (video/audio) gets NO duration and `display.loop: false`,
+ * so a conformant player MUST advance at end-of-stream — the media plays its
+ * natural length. Static and code-based sources fall back to the configured
+ * `defaultDuration` because they have no intrinsic runtime to play out.
+ *
+ * Do not re-introduce an unconditional duration here: stamping a default on
+ * video items silently truncates or pads them (the bug this fixed).
+ *
+ * @param {Object} item - DP1 playlist item (mutated in place)
+ * @param {Object} mediaHints - Media signals for the time-based check
+ * @param {string} [mediaHints.mimeType] - Indexer-reported MIME type
+ * @param {string} [mediaHints.sourceUrl] - Item source URL
+ * @param {number} [duration] - Explicit display seconds; omit for auto
+ * @returns {Object} The same item, for chaining
+ */
+function applyItemTiming(item, mediaHints = {}, duration) {
+  if (typeof duration === 'number') {
+    item.duration = duration;
+    return item;
+  }
+
+  if (isTimeBasedMedia(mediaHints.mimeType, mediaHints.sourceUrl)) {
+    item.display = { ...(item.display || {}), loop: false };
+    return item;
+  }
+
+  item.duration = getDefaultStaticDuration();
+  return item;
+}
+
+/**
+ * getDefaultStaticDuration returns the configured per-item display seconds
+ * for media without an intrinsic runtime. Falls back to 10 when config is
+ * unavailable (e.g. unit tests without a config file).
+ *
+ * @returns {number} Display duration in seconds
+ */
+function getDefaultStaticDuration() {
+  try {
+    return getConfig().defaultDuration || 10;
+  } catch (_error) {
+    return 10;
+  }
+}
 
 /**
  * Convert a string to a URL-friendly slug
@@ -34,14 +102,16 @@ function slugify(value) {
  * Convert single NFT token info to DP1 playlist item
  *
  * @param {Object} tokenInfo - Token information from NFT indexer
- * @param {number} duration - Display duration in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
+ *   (video/audio play natural length per DP-1 §4.1, static media uses the
+ *   configured default — see applyItemTiming)
  * @returns {Object} DP1 playlist item
  * @throws {Error} When token data is missing or source is a data URI
  * @example
  * const item = convertTokenToDP1ItemSingle(tokenInfo, 10);
  * // Returns: { title, source, duration, license, provenance, ... }
  */
-function convertTokenToDP1ItemSingle(tokenInfo, duration = 10) {
+function convertTokenToDP1ItemSingle(tokenInfo, duration) {
   const { token } = tokenInfo;
 
   if (!token) {
@@ -86,7 +156,6 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration = 10) {
     id: itemId,
     title: token.name || `Token #${token.tokenId}`,
     source: sourceUrl,
-    duration: duration,
     license: 'token', // NFTs are token-gated by default
     created: new Date().toISOString(),
     provenance: {
@@ -117,7 +186,7 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration = 10) {
     dp1Item.ref = token.image?.url || token.image;
   }
 
-  return dp1Item;
+  return applyItemTiming(dp1Item, { mimeType: token.image?.mimeType, sourceUrl }, duration);
 }
 
 /**
@@ -127,7 +196,7 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration = 10) {
  * For collections, returns a map of token key to DP1 item.
  *
  * @param {Object|Array} tokenInfo - Token information (single object or map of tokens)
- * @param {number} duration - Display duration in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @returns {Object} Map of token key to DP1 playlist item, or single item
  * @example
  * // Single token
@@ -136,7 +205,7 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration = 10) {
  * // Multiple tokens
  * const items = convertTokenToDP1Item({ token1: info1, token2: info2 }, 10);
  */
-function convertTokenToDP1Item(tokenInfo, duration = 10) {
+function convertTokenToDP1Item(tokenInfo, duration) {
   // Handle array or map of tokens
   if (typeof tokenInfo === 'object' && !tokenInfo.token) {
     const results = {};
@@ -178,12 +247,12 @@ function convertTokenToDP1Item(tokenInfo, duration = 10) {
  * Excludes items with data URIs in their source field.
  *
  * @param {Array} tokensInfo - Array of token information
- * @param {number} duration - Display duration in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @returns {Array} Array of DP1 playlist items
  * @example
  * const items = convertTokensToDP1Items(tokensInfoArray, 10);
  */
-function convertTokensToDP1Items(tokensInfo, duration = 10) {
+function convertTokensToDP1Items(tokensInfo, duration) {
   return tokensInfo
     .filter((info) => info.success && info.token)
     .map((info) => {
@@ -339,7 +408,10 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
         margin: 0,
       },
       license: 'token',
-      duration: 10,
+      // No defaults.duration: items that should be timed carry an explicit
+      // duration already, and a playlist-level default would make conformant
+      // players time-cut items that intentionally omit duration to play
+      // their natural length (DP-1 §4.1 end-of-stream advance).
     },
   };
 
@@ -410,10 +482,14 @@ function validateDP1Playlist(playlist) {
         errors.push(`Item ${index}: Field "source" must be a string (URI)`);
       }
 
-      if (item.duration === undefined || item.duration === null) {
-        errors.push(`Item ${index}: Missing required field "duration"`);
-      } else if (typeof item.duration !== 'number' || item.duration < 1) {
-        errors.push(`Item ${index}: Field "duration" must be a number >= 1`);
+      // Duration is OPTIONAL per the DP-1 v1.1.0 schema (PlaylistItem requires
+      // only `source`; duration has `minimum: 0`). Absent duration is meaningful:
+      // time-based sources advance at end-of-stream (§4.1). Do not tighten this
+      // back to required — it would reject spec-valid playlists.
+      if (item.duration !== undefined && item.duration !== null) {
+        if (typeof item.duration !== 'number' || item.duration < 0) {
+          errors.push(`Item ${index}: Field "duration" must be a number >= 0`);
+        }
       }
 
       if (!item.license) {
@@ -499,12 +575,13 @@ function detectMimeType(url) {
  * Build a single DP1 playlist item from a URL
  *
  * @param {string} url - Media URL
- * @param {number} duration - Duration per item in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
+ *   (video/audio URLs play their natural length per DP-1 §4.1)
  * @param {Object} [options] - Optional configuration
  * @param {string} [options.title] - Optional item title override
  * @returns {Object} DP1 playlist item
  */
-function buildUrlItem(url, duration = 10, options = {}) {
+function buildUrlItem(url, duration, options = {}) {
   const sourceUrl = String(url || '').trim();
   if (!sourceUrl) {
     throw new Error('URL is required to build a playlist item');
@@ -536,7 +613,6 @@ function buildUrlItem(url, duration = 10, options = {}) {
     id: itemId,
     title,
     source: sourceUrl,
-    duration: duration,
     license: 'open',
     created: new Date().toISOString(),
     provenance: {
@@ -550,7 +626,7 @@ function buildUrlItem(url, duration = 10, options = {}) {
     },
   };
 
-  return item;
+  return applyItemTiming(item, { sourceUrl }, duration);
 }
 
 module.exports = {
@@ -561,5 +637,7 @@ module.exports = {
   buildDP1Playlist,
   validateDP1Playlist,
   detectMimeType,
+  isTimeBasedMedia,
+  applyItemTiming,
   buildUrlItem,
 };

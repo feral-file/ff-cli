@@ -382,7 +382,7 @@ function shuffleArray(array) {
  *
  * @param {Object} playlist - DP1 playlist object
  * @param {number} quantity - Number of items to extract
- * @param {number} duration - Duration per item in seconds
+ * @param {number} [duration] - Explicit display seconds; omit to keep item timing
  * @param {boolean} shuffle - Whether to shuffle and randomly select items
  * @returns {Array<Object>} Array of DP1 playlist items
  */
@@ -401,12 +401,19 @@ function extractPlaylistItems(playlist, quantity, duration, shuffle = true) {
   // Take requested quantity
   items = items.slice(0, quantity);
 
-  // Override duration and ensure created field exists
-  items = items.map((item) => ({
-    ...item,
-    duration: duration || item.duration,
-    created: item.created || new Date().toISOString(), // Ensure created field exists
-  }));
+  // Apply an explicit duration override when one was requested; otherwise
+  // keep each item's own timing (including intentionally absent duration,
+  // which DP-1 §4.1 uses for natural-length playback of video/audio).
+  items = items.map((item) => {
+    const next = {
+      ...item,
+      created: item.created || new Date().toISOString(), // Ensure created field exists
+    };
+    if (typeof duration === 'number') {
+      next.duration = duration;
+    }
+    return next;
+  });
 
   return items;
 }
@@ -416,10 +423,10 @@ function extractPlaylistItems(playlist, quantity, duration, shuffle = true) {
  *
  * @param {string} playlistName - Exact playlist name
  * @param {number} quantity - Number of items to fetch
- * @param {number} duration - Duration per item
+ * @param {number} [duration] - Explicit display seconds; omit to keep item timing
  * @returns {Promise<Object>} Result with items
  */
-async function fetchFeedPlaylistDirect(playlistName, quantity = 5, duration = 10) {
+async function fetchFeedPlaylistDirect(playlistName, quantity = 5, duration) {
   const feedUrls = getFeedApiUrls();
   console.log(
     chalk.cyan(`Searching for playlist "${playlistName}" in ${feedUrls.length} source(s)...`)
@@ -457,10 +464,10 @@ async function fetchFeedPlaylistDirect(playlistName, quantity = 5, duration = 10
  *
  * @param {string} playlistName - Playlist name (can be fuzzy)
  * @param {number} quantity - Number of items to fetch
- * @param {number} duration - Duration per item
+ * @param {number} [duration] - Explicit display seconds; omit to keep item timing
  * @returns {Promise<Object>} Result with best match and map for lookup
  */
-async function searchFeedPlaylists(playlistName, quantity = 5, duration = 10) {
+async function searchFeedPlaylists(playlistName, quantity = 5, duration) {
   const feedUrls = getFeedApiUrls();
   console.log(
     chalk.cyan(`Searching for playlist "${playlistName}" in ${feedUrls.length} source(s)...`)
@@ -496,7 +503,7 @@ async function searchFeedPlaylists(playlistName, quantity = 5, duration = 10) {
  *
  * @param {string} playlistIdOrName - Playlist ID, slug, or exact name
  * @param {number} quantity - Number of items to fetch
- * @param {number} duration - Duration per item
+ * @param {number} [duration] - Explicit display seconds; omit to keep item timing
  * @param {Object} playlistMap - Optional map of names to IDs for lookup
  * @param {boolean} shuffle - Whether to shuffle and randomly select items
  * @returns {Promise<Object>} Result with items
@@ -504,7 +511,7 @@ async function searchFeedPlaylists(playlistName, quantity = 5, duration = 10) {
 async function fetchPlaylistItems(
   playlistIdOrName,
   quantity = 5,
-  duration = 10,
+  duration,
   playlistMap = null,
   shuffle = true
 ) {
