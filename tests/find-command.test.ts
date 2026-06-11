@@ -97,6 +97,8 @@ function runFind(
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let killedByMatcher = false;
+    let timedOut = false;
 
     const finish = (result: RunResult | Error): void => {
       if (settled) {
@@ -104,7 +106,13 @@ function runFind(
       }
       settled = true;
       clearTimeout(timer);
-      rmSync(dir, { recursive: true, force: true });
+      // On Windows the just-killed child can briefly hold its cwd open
+      // (EBUSY); retry, and prefer leaking a temp dir over a flaky test.
+      try {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+      } catch {
+        // best-effort cleanup only
+      }
       if (result instanceof Error) {
         rejectRun(result);
       } else {
@@ -113,24 +121,31 @@ function runFind(
     };
 
     // Hermeticity backstop: a hung prompt or an unexpected network call
-    // should fail the test, not stall the suite.
+    // should fail the test, not stall the suite. Resolution happens in the
+    // 'close' handler so the child is fully gone before cleanup.
     const timer = setTimeout(() => {
+      timedOut = true;
       child.kill('SIGKILL');
-      finish(new Error(`find timed out.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
     }, 30_000);
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      if (options.killOn && options.killOn.test(stdout)) {
+      if (options.killOn && !killedByMatcher && options.killOn.test(stdout)) {
+        killedByMatcher = true;
         child.kill('SIGKILL');
-        finish({ stdout, stderr, code: null });
       }
     });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
     });
     child.on('error', finish);
-    child.on('close', (code) => finish({ stdout, stderr, code }));
+    child.on('close', (code) => {
+      if (timedOut) {
+        finish(new Error(`find timed out.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
+      } else {
+        finish({ stdout, stderr, code: killedByMatcher ? null : code });
+      }
+    });
 
     child.stdin.write(options.stdin ?? '');
     child.stdin.end();
