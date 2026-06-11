@@ -343,7 +343,7 @@ Setup preserves existing devices when adding new ones. See selection rules and e
 
 - Max 20 items total across all requirements
 - Per-source caps enforced in utilities
-- Duration per item defaults to 10s (configurable)
+- Per-item timing: when no duration is given, video/audio items carry **no** `duration` and `display.loop: false`, so the player advances at end-of-stream (DP-1 §4.1) — the media plays its natural length. Static items use `defaultDuration` (10s unless configured). An explicit duration always wins.
 
 ## Links
 

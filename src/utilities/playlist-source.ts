@@ -131,13 +131,15 @@ export type PlaySource =
  * `loadedAsPlaylist` boolean dance.
  *
  * @param source - User-supplied path or URL
- * @param defaultDuration - Duration (seconds) for the synthesized media item
+ * @param defaultDuration - Explicit duration (seconds) for the synthesized
+ *   media item; omit for auto timing (video/audio URLs play their natural
+ *   length per DP-1 §4.1, static media uses the configured default)
  * @returns Resolved playlist + metadata describing how it was loaded
  * @throws Error When `source` is empty, or is a non-URL file path that cannot be loaded
  */
 export async function resolvePlaySource(
   source: string,
-  defaultDuration: number
+  defaultDuration?: number
 ): Promise<PlaySource> {
   const trimmed = source.trim();
   if (!trimmed) {

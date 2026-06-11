@@ -252,12 +252,14 @@ export function validateRequirements(requirements: Requirement[]): Requirement[]
  * @returns {Object} Settings with defaults
  */
 export function applyPlaylistDefaults(settings: Partial<PlaylistSettings> = {}): PlaylistSettings {
-  const config = getConfig();
-
   return {
     title: settings.title || null,
     slug: settings.slug || null,
-    durationPerItem: settings.durationPerItem || config.defaultDuration || 10,
+    // Leave durationPerItem undefined when not requested: absence means auto
+    // timing downstream (video/audio omit duration and play their natural
+    // length per DP-1 §4.1; static media falls back to config.defaultDuration
+    // at item-build time). Filling a number here would force-cut video items.
+    durationPerItem: settings.durationPerItem,
     preserveOrder: settings.preserveOrder !== false,
     deviceName: settings.deviceName,
   };

@@ -90,7 +90,9 @@ export interface Playlist {
 export interface PlaylistSettings {
   title: string | null;
   slug: string | null;
-  durationPerItem: number;
+  // Undefined = auto timing: video/audio items omit duration and play their
+  // natural length (DP-1 §4.1); static items use config.defaultDuration.
+  durationPerItem?: number;
   preserveOrder: boolean;
   deviceName?: string;
   feedServer?: { baseUrl: string; apiKey?: string };

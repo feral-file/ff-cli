@@ -17,10 +17,12 @@ interface RequirementParams {
  * @param {Object} params - Parsed parameters
  * @param {Array<Object>} params.requirements - Array of requirements
  * @param {Object} [params.playlistSettings] - Playlist settings
- * @param {Object} config - Application config
+ * @param {Object} _config - Application config (kept in the signature for
+ *   call-site stability; no constraint reads it since durationPerItem
+ *   pre-filling was removed in favor of DP-1 §4.1 auto timing)
  * @returns {Object} Validated parameters
  */
-export function applyConstraints(params: RequirementParams, config: Config): RequirementParams {
+export function applyConstraints(params: RequirementParams, _config: Config): RequirementParams {
   // Validate requirements array
   if (!params.requirements || !Array.isArray(params.requirements)) {
     throw new Error('Requirements must be an array');
@@ -112,10 +114,11 @@ export function applyConstraints(params: RequirementParams, config: Config): Req
     params.playlistSettings = {};
   }
 
-  // Only set durationPerItem if not already specified
-  if (params.playlistSettings.durationPerItem === undefined) {
-    params.playlistSettings.durationPerItem = config.defaultDuration || 10;
-  }
+  // durationPerItem stays undefined unless the user asked for a per-item
+  // time: absence means auto timing downstream (video/audio omit duration
+  // and play their natural length per DP-1 §4.1; static media falls back to
+  // config.defaultDuration at item-build time). Pre-filling a number here
+  // would force-cut every video item.
 
   // Only set preserveOrder if not already specified
   if (params.playlistSettings.preserveOrder === undefined) {

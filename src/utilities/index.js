@@ -70,10 +70,10 @@ function isLikelyEvmAddress(address) {
  *
  * @param {string} contractAddress - Contract address
  * @param {number|string} [quantity] - Number of random tokens to select
- * @param {number} duration - Duration per item in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @returns {Promise<Array<Object>>} Array of DP1 items
  */
-async function queryTokensByContractAddress(contractAddress, quantity, duration = 10) {
+async function queryTokensByContractAddress(contractAddress, quantity, duration) {
   console.log(
     chalk.cyan(
       `   Fetching ${quantity || 100} random token(s) from contract ${contractAddress.substring(0, 10)}...`
@@ -133,10 +133,10 @@ function initializeUtilities(_config) {
  *
  * @param {string} ownerAddress - Owner wallet address
  * @param {number|string} [quantity] - Number of random tokens to select, or "all" to fetch all tokens
- * @param {number} duration - Duration per item in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @returns {Promise<Array>} Array of DP1 playlist items
  */
-async function queryTokensByAddress(ownerAddress, quantity, duration = 10, options = {}) {
+async function queryTokensByAddress(ownerAddress, quantity, duration, options = {}) {
   try {
     const { suppressNotFoundGuidance = false } = options;
     const shouldFetchAll = quantity === 'all' || quantity === undefined || quantity === null;
@@ -237,7 +237,7 @@ async function queryTokensByAddress(ownerAddress, quantity, duration = 10, optio
       selectedTokens = shuffleArray([...selectedTokens]).slice(0, quantity);
     }
 
-    const tokenCountKey = `${ownerAddress}|${quantity ?? 'all'}|${duration}`;
+    const tokenCountKey = `${ownerAddress}|${quantity ?? 'all'}|${duration ?? 'auto'}`;
     if (!printedTokenCountKeys.has(tokenCountKey)) {
       console.log(chalk.dim(`Got ${selectedTokens.length} token(s)`));
       printedTokenCountKeys.add(tokenCountKey);
@@ -271,10 +271,10 @@ async function queryTokensByAddress(ownerAddress, quantity, duration = 10, optio
  * @param {string} [requirement.ownerAddress] - Owner address (for query_address)
  * @param {string} [requirement.playlistName] - Feed playlist name (for fetch_feed)
  * @param {number} [requirement.quantity] - Number of items
- * @param {number} duration - Duration per item in seconds
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @returns {Promise<Array>} Array of DP1 playlist items
  */
-async function queryRequirement(requirement, duration = 10) {
+async function queryRequirement(requirement, duration) {
   const {
     type,
     blockchain,
@@ -532,7 +532,9 @@ async function buildPlaylistDirect(params, options = {}) {
   const { verbose = false, outputPath = 'playlist.json' } = options;
 
   const allItems = [];
-  const duration = playlistSettings.durationPerItem || 10;
+  // Undefined means auto timing: video/audio items omit duration and play
+  // their natural length (DP-1 §4.1); static items get the configured default.
+  const duration = playlistSettings.durationPerItem;
 
   console.log(chalk.cyan('\nBuilding playlist from your requirements...\n'));
 

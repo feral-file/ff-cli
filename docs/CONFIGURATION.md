@@ -26,7 +26,8 @@ npm run dev -- config show
   - Used by orchestration to pick API, timeouts, and model identifier.
 
 - **defaultDuration** (number, seconds)
-  - Intended default per‑item display duration. Some flows pass an explicit duration; when omitted, utilities fall back to 10s.
+  - Default per‑item display duration for media without an intrinsic runtime (images, code-based works). Falls back to 10s when unset.
+  - Does NOT apply to video/audio items: with no explicit duration those are emitted without `duration` and with `display.loop: false`, so a DP-1 player advances at end-of-stream (§4.1) — the media plays its natural length.
 
 ## models
 

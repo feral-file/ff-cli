@@ -158,7 +158,8 @@ export const findCommand = new Command('find')
 
       // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
       // display seconds), not concurrency — concurrency is hardcoded inside.
-      // Omit it so the default (10s) applies; no misleading constant on this side.
+      // Omit it for auto timing: video/audio items carry no duration and play
+      // their natural length (DP-1 §4.1); static items get the config default.
       const items = await getNFTTokenInfoBatch(
         tokens.map((t) => ({
           chain: t.chain,
@@ -593,7 +594,8 @@ async function runNeortFind(id: string, options: FindOptions): Promise<void> {
     return;
   }
 
-  const item = buildUrlItem(art.assetUrl, 10, { title: art.title });
+  // No explicit duration: auto timing (video/audio play natural length).
+  const item = buildUrlItem(art.assetUrl, undefined, { title: art.title });
   const playlistTitle = `${artistLabel} — ${art.title}`;
   const playlist = await buildDP1Playlist({ items: [item], title: playlistTitle });
 
