@@ -1,8 +1,8 @@
 /**
- * Raster API client (kit.raster.art)
+ * Raster API client (api.raster.art — public GraphQL API).
  *
- * Resolves on-chain coordinates and artist addresses into Raster `artwork_id`
- * (series) and `artist_id` (catalog) — the inputs the `ff-cli find` flow needs
+ * Resolves on-chain coordinates and artist addresses into Raster artworks
+ * (series) and artists (catalog) — the inputs the `ff-cli find` flow needs
  * before handing tokens to the FF GraphQL indexer for DP-1 conversion.
  *
  * This module is pure data: it does not construct DP-1 items, send anything
@@ -13,52 +13,55 @@
  * mainnet. Token lists are filtered here at the CAIP level and a
  * `skippedUnsupported` count is surfaced so callers can warn-skip without
  * walking every row themselves.
+ *
+ * API notes (v0.1.0, https://docs.api.raster.art/):
+ *  - Auth: `x-api-key` header, sent when RASTER_API_KEY is set in the
+ *    environment. The endpoint currently answers without a key; the docs
+ *    declare one required, so the hook is wired in ahead of enforcement.
+ *  - Not-found is a `null` query field, not an HTTP 404.
+ *  - Connections expose no total counts — callers learn series size by
+ *    paginating, so the find flow fetches before it prompts.
  */
 
 import * as logger from '../logger';
 import { USER_AGENT } from './user-agent';
 
-const RASTER_BASE_URL = 'https://kit.raster.art';
+const DEFAULT_RASTER_GRAPHQL_URL = 'https://api.raster.art/graphql';
 
 // CAIP-2 chain IDs for the chains the FF indexer supports.
 // Tezos mainnet's CAIP form uses the genesis block hash (NetXdQprcVkpaWU),
 // not the human-readable "tezos:mainnet" — Raster returns the hash form on
-// token rows and rejects "tezos:mainnet" with HTTP 400.
+// token rows and resolves nothing for "tezos:mainnet".
 const CAIP_TO_INDEXER_CHAIN: Record<string, 'ethereum' | 'tezos'> = {
   'eip155:1': 'ethereum',
   'tezos:NetXdQprcVkpaWU': 'tezos',
 };
 
+const INDEXER_CHAIN_TO_CAIP: Record<IndexerChain, string> = {
+  ethereum: 'eip155:1',
+  tezos: 'tezos:NetXdQprcVkpaWU',
+};
+
 export type IndexerChain = 'ethereum' | 'tezos';
 
 export interface RasterArtist {
-  id: number;
+  id: string;
   name: string;
   slug: string | null;
 }
 
 export interface RasterArtworkSummary {
-  artworkId: number;
+  artworkId: string;
   title: string;
   artists: RasterArtist[];
-  tokenCount: number;
-  editionSize: number;
-  isEdition: boolean;
-  hasOneOfOneTokens: boolean;
-  platforms: Array<{ id: string; label: string }>;
-  contractAddresses: string[];
 }
 
 export interface RasterArtworkRow {
-  artworkId: number;
+  artworkId: string;
   title: string;
-  tokenCount: number;
-  isEdition: boolean;
-  mintDate: string | null;
 }
 
 export interface RasterTokenCoords {
-  caipChain: string;
   chain: IndexerChain;
   contractAddress: string;
   tokenId: string;
@@ -66,14 +69,8 @@ export interface RasterTokenCoords {
 
 export interface PaginatedTokens {
   tokens: RasterTokenCoords[];
-  totalCount: number;
-  nextCursor: number | null;
+  nextCursor: string | null;
   skippedUnsupported: number;
-}
-
-function stripContractChainPrefix(raw: string): string {
-  const slash = raw.indexOf('/');
-  return slash >= 0 ? raw.slice(slash + 1) : raw;
 }
 
 function caipToIndexerChain(caip: string): IndexerChain | null {
@@ -81,176 +78,119 @@ function caipToIndexerChain(caip: string): IndexerChain | null {
 }
 
 /**
- * Thrown when Raster returns 404 for a requested path. Used as a soft signal
- * by callers that have a fallback path (e.g. `find` falls back to a
- * single-token playlist when Raster doesn't index the artwork).
+ * POST one GraphQL operation to Raster and return `data`.
+ *
+ * Throws on HTTP errors and on GraphQL `errors` entries. "Not found" never
+ * lands here — Raster models it as a null query field with no error, so
+ * callers check their own field for null.
  */
-export class RasterNotFoundError extends Error {
-  readonly notFound = true as const;
-  constructor(path: string) {
-    super(`Raster: not found (${path})`);
-    this.name = 'RasterNotFoundError';
+async function rasterQuery<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  const endpoint = process.env.RASTER_API_URL ?? DEFAULT_RASTER_GRAPHQL_URL;
+  logger.debug(`[Raster] POST ${endpoint} ${JSON.stringify(variables)}`);
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': USER_AGENT,
+  };
+  const apiKey = process.env.RASTER_API_KEY;
+  if (apiKey) {
+    headers['x-api-key'] = apiKey;
   }
-}
-
-async function rasterFetch<T>(path: string): Promise<T> {
-  const url = `${RASTER_BASE_URL}${path}`;
-  logger.debug(`[Raster] GET ${url}`);
-  const response = await fetch(url, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ query, variables }),
   });
-  if (response.status === 404) {
-    throw new RasterNotFoundError(path);
-  }
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(
-      `Raster API ${response.status} ${response.statusText} for ${path}: ${body.slice(0, 200)}`
-    );
+    throw new Error(`Raster API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`);
   }
-  return (await response.json()) as T;
+  const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  if (payload.errors && payload.errors.length > 0) {
+    throw new Error(`Raster API error: ${payload.errors.map((e) => e.message).join('; ')}`);
+  }
+  if (payload.data === undefined) {
+    throw new Error('Raster API returned no data.');
+  }
+  return payload.data;
 }
 
-interface TokenLookupResponse {
-  id: number;
-  contract_address: string;
-  token_id: string;
-  title: string;
-  artwork: {
-    id: number;
-    title: string;
-    artists: RasterArtist[];
-    is_edition: boolean;
-    edition_size: number;
-  };
+interface ArtistFields {
+  id: string;
+  name: string | null;
+  slug: string | null;
 }
 
-interface ArtworkResponse {
-  id: number;
-  title: string;
-  artists: RasterArtist[];
-  token_count: number;
-  edition_size: number;
-  is_edition: boolean;
-  has_one_of_one_tokens: boolean;
-  contract_addresses: string[];
-  platforms: Array<{ id: string; label: string }>;
-}
-
-interface ArtworkTokensResponse {
-  tokens: Array<{
-    chain_id: string;
-    contract_address: string;
-    token_id: string;
-  }>;
-  total_count: number;
-  cursor: number | null;
-}
-
-interface ArtistArtworksResponse {
-  artworks: Array<{
-    id: number;
-    title: string;
-    num_tokens: number;
-    num_pieces: number;
-    is_edition: boolean;
-    mint_date: string | null;
-  }>;
-}
-
-interface SearchResponse {
-  results: Array<{
-    hits: Array<{
-      document: {
-        id: string;
-        data_pk: string;
-        data_type: 'artist' | 'artwork';
-        title: string;
-        addresses?: string[];
-        aliases?: string[];
-      };
-    }>;
-  }>;
+function toRasterArtist(raw: ArtistFields): RasterArtist {
+  return { id: raw.id, name: raw.name ?? 'Unknown artist', slug: raw.slug };
 }
 
 /**
- * Resolve a token's on-chain coordinates to its Raster artwork (series) id.
+ * Resolve a token's on-chain coordinates to its Raster artwork (series).
  *
- * Accepts either a CAIP chain id (`eip155:1`) or human slug (`ethereum`) —
- * Raster handles both. Returns `null` when Raster doesn't index this token
- * (HTTP 404); callers can fall back to a single-token playlist in that case.
- * Other Raster errors throw normally.
+ * One round trip: `tokenByRef` returns the artwork with artists inline, so
+ * this yields the full summary directly. Returns `null` when Raster doesn't
+ * index this token; callers fall back to a single-token playlist in that
+ * case. Tokens occasionally belong to multiple artworks; the first one is
+ * Raster's primary association.
  */
 export async function resolveTokenToArtwork(
-  chain: string,
+  chain: IndexerChain,
   contract: string,
   tokenId: string
-): Promise<{ artworkId: number; artworkTitle: string } | null> {
-  const path =
-    `/token/${encodeURIComponent(chain)}` +
-    `/${encodeURIComponent(contract)}` +
-    `/${encodeURIComponent(tokenId)}`;
-  try {
-    const data = await rasterFetch<TokenLookupResponse>(path);
-    return {
-      artworkId: data.artwork.id,
-      artworkTitle: data.artwork.title,
-    };
-  } catch (error) {
-    if (error instanceof RasterNotFoundError) {
-      return null;
+): Promise<RasterArtworkSummary | null> {
+  const data = await rasterQuery<{
+    tokenByRef: {
+      artworks: Array<{
+        id: string;
+        title: string;
+        artists: ArtistFields[];
+      }>;
+    } | null;
+  }>(
+    `query ResolveToken($ref: TokenRefInput!) {
+      tokenByRef(ref: $ref) {
+        artworks { id title artists { id name slug } }
+      }
+    }`,
+    {
+      ref: {
+        chainId: INDEXER_CHAIN_TO_CAIP[chain],
+        contractAddress: contract,
+        tokenId,
+      },
     }
-    throw error;
-  }
-}
+  );
 
-/**
- * Get the full Raster artwork summary suitable for the one-line resolve
- * message ("Snowfro — send/receive — 8977 tokens") and downstream UX.
- */
-export async function getArtworkSummary(artworkId: number): Promise<RasterArtworkSummary> {
-  const data = await rasterFetch<ArtworkResponse>(`/artwork/${artworkId}`);
+  const artwork = data.tokenByRef?.artworks?.[0];
+  if (!artwork) {
+    return null;
+  }
   return {
-    artworkId: data.id,
-    title: data.title,
-    artists: data.artists ?? [],
-    tokenCount: data.token_count,
-    editionSize: data.edition_size,
-    isEdition: data.is_edition,
-    hasOneOfOneTokens: data.has_one_of_one_tokens,
-    platforms: data.platforms ?? [],
-    contractAddresses: data.contract_addresses ?? [],
+    artworkId: artwork.id,
+    title: artwork.title,
+    artists: (artwork.artists ?? []).map(toRasterArtist),
   };
 }
 
 /**
- * Resolve an artist's wallet address to a Raster artist id via `/search`.
+ * Resolve a wallet address to the Raster artist who claims it.
  *
- * `/artist/{id}` does not accept raw addresses (404), so we bridge through
- * the multi-search endpoint and pick the artist hit whose `addresses` list
- * contains the input. Returns `null` when no artist matches.
+ * The `address` query carries artist associations directly (the old REST
+ * API needed a `/search` bridge). Returns `null` when no artist claims the
+ * address. Checksummed Ethereum input is normalized server-side.
  */
-export async function resolveAddressToArtist(address: string): Promise<number | null> {
-  const normalized = address.trim().toLowerCase();
-  const data = await rasterFetch<SearchResponse>(`/search?query=${encodeURIComponent(address)}`);
+export async function resolveAddressToArtist(address: string): Promise<RasterArtist | null> {
+  const data = await rasterQuery<{
+    address: { artists: ArtistFields[] } | null;
+  }>(
+    `query ResolveAddress($address: String!) {
+      address(address: $address) { artists { id name slug } }
+    }`,
+    { address: address.trim() }
+  );
 
-  for (const result of data.results ?? []) {
-    for (const hit of result.hits ?? []) {
-      const doc = hit.document;
-      if (doc.data_type !== 'artist') {
-        continue;
-      }
-      const addrs = (doc.addresses ?? []).map((a) => a.toLowerCase());
-      if (!addrs.includes(normalized)) {
-        continue;
-      }
-      const parsed = Number.parseInt(doc.data_pk, 10);
-      if (Number.isFinite(parsed)) {
-        return parsed;
-      }
-    }
-  }
-  return null;
+  const artist = data.address?.artists?.[0];
+  return artist ? toRasterArtist(artist) : null;
 }
 
 /**
@@ -262,79 +202,110 @@ export async function resolveAddressToArtist(address: string): Promise<number | 
  * warn-skip line instead of one per token.
  *
  * Pagination: pass the returned `nextCursor` back as `options.cursor`.
- * `nextCursor` is `null` on the final page. Raster signals end-of-stream by
- * returning `cursor === total_count`; that is normalized to `null` here.
+ * `nextCursor` is `null` on the final page. The API exposes no total count;
+ * the only way to learn a series' size is to walk it.
  */
 export async function listArtworkTokens(
-  artworkId: number,
-  options: { cursor?: number; pageSize?: number } = {}
+  artworkId: string,
+  options: { cursor?: string; pageSize?: number } = {}
 ): Promise<PaginatedTokens> {
-  const params = new URLSearchParams();
-  if (options.cursor !== undefined) {
-    params.set('cursor', String(options.cursor));
-  }
-  if (options.pageSize !== undefined) {
-    params.set('page_size', String(options.pageSize));
-  }
-  const qs = params.toString();
-  const path = `/artwork/${artworkId}/tokens${qs ? `?${qs}` : ''}`;
+  const data = await rasterQuery<{
+    artwork: {
+      tokens: {
+        nodes: Array<{ chainId: string; contractAddress: string | null; tokenId: string }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  }>(
+    `query ArtworkTokens($id: ID!, $first: Int, $after: String) {
+      artwork(id: $id) {
+        tokens(first: $first, after: $after) {
+          nodes { chainId contractAddress tokenId }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }`,
+    { id: artworkId, first: options.pageSize ?? null, after: options.cursor ?? null }
+  );
 
-  const data = await rasterFetch<ArtworkTokensResponse>(path);
+  if (!data.artwork) {
+    throw new Error(`Raster: artwork ${artworkId} not found.`);
+  }
 
   const tokens: RasterTokenCoords[] = [];
   let skippedUnsupported = 0;
-  for (const raw of data.tokens ?? []) {
-    const chain = caipToIndexerChain(raw.chain_id);
-    if (!chain) {
+  for (const raw of data.artwork.tokens.nodes) {
+    const chain = caipToIndexerChain(raw.chainId);
+    if (!chain || !raw.contractAddress) {
       skippedUnsupported += 1;
       continue;
     }
     tokens.push({
-      caipChain: raw.chain_id,
       chain,
-      contractAddress: stripContractChainPrefix(raw.contract_address),
-      tokenId: raw.token_id,
+      contractAddress: raw.contractAddress,
+      tokenId: raw.tokenId,
     });
   }
 
-  const rawCursor = data.cursor;
-  const nextCursor = rawCursor === null || rawCursor >= data.total_count ? null : rawCursor;
-
+  const { hasNextPage, endCursor } = data.artwork.tokens.pageInfo;
   return {
     tokens,
-    totalCount: data.total_count,
-    nextCursor,
+    nextCursor: hasNextPage && endCursor ? endCursor : null,
     skippedUnsupported,
   };
 }
 
 /**
- * List an artist's full catalog as light artwork rows (id, title, token count,
- * edition flag, mint date). Use {@link getArtworkSummary} when full details
- * are needed for a specific row.
+ * List an artist's full catalog as light artwork rows (id + title — the
+ * API exposes no per-artwork token counts or mint dates yet).
  *
- * The endpoint returns the full catalog in a single response; no cursor is
- * exposed by Raster for this path.
+ * Walks the artist's `artworks` connection to the end so the caller sees
+ * the complete catalog, matching the old single-response REST behavior.
  */
-export async function listArtistArtworks(artistId: number): Promise<RasterArtworkRow[]> {
-  const data = await rasterFetch<ArtistArtworksResponse>(`/artist/${artistId}/artworks`);
-  return (data.artworks ?? []).map((row) => ({
-    artworkId: row.id,
-    title: row.title,
-    tokenCount: row.num_tokens ?? row.num_pieces ?? 0,
-    isEdition: row.is_edition,
-    mintDate: row.mint_date ?? null,
-  }));
+export async function listArtistArtworks(artistId: string): Promise<RasterArtworkRow[]> {
+  const rows: RasterArtworkRow[] = [];
+  let cursor: string | null = null;
+
+  do {
+    const data: {
+      artist: {
+        artworks: {
+          nodes: Array<{ id: string; title: string }>;
+          pageInfo: { hasNextPage: boolean; endCursor: string | null };
+        };
+      } | null;
+    } = await rasterQuery(
+      `query ArtistArtworks($id: ID!, $after: String) {
+        artist(id: $id) {
+          artworks(first: 100, after: $after) {
+            nodes { id title }
+            pageInfo { hasNextPage endCursor }
+          }
+        }
+      }`,
+      { id: artistId, after: cursor }
+    );
+
+    if (!data.artist) {
+      throw new Error(`Raster: artist ${artistId} not found.`);
+    }
+    for (const node of data.artist.artworks.nodes) {
+      rows.push({ artworkId: node.id, title: node.title });
+    }
+    const { hasNextPage, endCursor } = data.artist.artworks.pageInfo;
+    cursor = hasNextPage && endCursor ? endCursor : null;
+  } while (cursor !== null);
+
+  return rows;
 }
 
 /**
  * Format a one-line summary for the resolved artwork.
  *
  * @example
- *   formatSummaryLine(summary) // "Snowfro — send/receive — 8977 tokens"
+ *   formatSummaryLine(summary) // "Snowfro — send/receive"
  */
 export function formatSummaryLine(summary: RasterArtworkSummary): string {
   const artistNames = summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
-  const tokenWord = summary.tokenCount === 1 ? 'token' : 'tokens';
-  return `${artistNames} — ${summary.title} — ${summary.tokenCount} ${tokenWord}`;
+  return `${artistNames} — ${summary.title}`;
 }
