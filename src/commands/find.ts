@@ -8,6 +8,7 @@ import type { TokenCoords } from '../utilities/marketplace-url';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
+import { resolveOpenSeaCollection } from '../utilities/opensea-marketplace';
 import { resolveFxhashIteration, resolveFxhashProject } from '../utilities/fxhash-marketplace';
 import { resolveNeortArt } from '../utilities/neort-marketplace';
 import type { NeortArt } from '../utilities/neort-marketplace';
@@ -227,6 +228,10 @@ async function resolveTarget(
   }
   if (parsed.kind === 'ab-collection') {
     const coords = await resolveArtBlocksCollection(parsed.slug);
+    return resolveCoords(coords);
+  }
+  if (parsed.kind === 'os-collection') {
+    const coords = await resolveOpenSeaCollection(parsed.slug);
     return resolveCoords(coords);
   }
   if (parsed.kind === 'fxhash-iteration') {

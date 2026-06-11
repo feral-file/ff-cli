@@ -42,6 +42,7 @@ export type ParsedFindInput =
   | { kind: 'ff-url'; urlKind: FeralFileUrlKind; identifier: string }
   | { kind: 'objkt-alias'; alias: string; tokenId: string }
   | { kind: 'ab-collection'; slug: string }
+  | { kind: 'os-collection'; slug: string }
   | { kind: 'fxhash-iteration'; slug: string }
   | { kind: 'fxhash-project'; slug: string }
   | { kind: 'neort-art'; id: string }
@@ -281,7 +282,7 @@ export function parseFxhash(url: URL): ParsedFindInput {
  * OpenSea URL forms:
  *   opensea.io/assets/{chain}/{contract}/{tokenId}
  *   opensea.io/item/{chain}/{contract}/{tokenId}    — newer naming
- *   opensea.io/collection/{slug}                    — series slug (not yet)
+ *   opensea.io/collection/{slug}                    — collection slug (series)
  *
  * Only `ethereum` is in scope; other chains (matic, base, solana, etc.)
  * fall outside the FF indexer's coverage. Token URLs resolve end-to-end only
@@ -308,12 +309,16 @@ export function parseOpenSea(url: URL): ParsedFindInput {
       coords: { chain: 'ethereum', contract: tokenMatch[2].toLowerCase(), tokenId: tokenMatch[3] },
     };
   }
+  const collectionMatch = /^\/collection\/([a-z0-9][a-z0-9-]*)\/?$/.exec(url.pathname);
+  if (collectionMatch) {
+    return { kind: 'os-collection', slug: collectionMatch[1] };
+  }
   if (url.pathname.startsWith('/collection/')) {
     return {
       kind: 'unsupported',
       reason:
-        'OpenSea `/collection/{slug}` URLs are not yet supported in v1. Paste a specific token ' +
-        'URL (opensea.io/assets/ethereum/{contract}/{tokenId}) or use `ethereum:{contract}:{tokenId}`.',
+        `OpenSea collection URL not recognized: ${url.pathname}. ` +
+        'Expected opensea.io/collection/{slug} with no extra path segments.',
     };
   }
   return {
