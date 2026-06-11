@@ -1,6 +1,6 @@
 {
   "name": "@feralfile/cli",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "description": "CLI for building DP-1 playlists of digital art using AI (Claude, Grok, ChatGPT, Gemini)",
   "repository": {
     "type": "git",
