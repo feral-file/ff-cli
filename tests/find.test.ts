@@ -199,9 +199,9 @@ describe('parseFindInput', () => {
     assert.ok(r.reason.includes('matic'));
   });
 
-  test('OpenSea collection URL → unsupported with hint', () => {
+  test('OpenSea collection URL → os-collection kind', () => {
     const r = parseFindInput('https://opensea.io/collection/azuki');
-    assert.equal(r?.kind, 'unsupported');
+    assert.deepEqual(r, { kind: 'os-collection', slug: 'azuki' });
   });
 
   test('SuperRare /artwork/eth/{contract}/{tokenId} → token kind, source superrare', () => {
