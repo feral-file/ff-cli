@@ -579,6 +579,10 @@ function detectMimeType(url) {
  *   (video/audio URLs play their natural length per DP-1 §4.1)
  * @param {Object} [options] - Optional configuration
  * @param {string} [options.title] - Optional item title override
+ * @param {string} [options.mimeType] - Source media type hint for timing
+ *   (DP-1 §4.1). Needed when the URL has no file extension to detect from —
+ *   e.g. extensionless IPFS gateway URLs, where without this hint a video
+ *   would be misclassified as a static image and stamped a fixed duration.
  * @returns {Object} DP1 playlist item
  */
 function buildUrlItem(url, duration, options = {}) {
@@ -626,7 +630,7 @@ function buildUrlItem(url, duration, options = {}) {
     },
   };
 
-  return applyItemTiming(item, { sourceUrl }, duration);
+  return applyItemTiming(item, { sourceUrl, mimeType: options.mimeType }, duration);
 }
 
 module.exports = {

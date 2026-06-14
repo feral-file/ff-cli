@@ -12,7 +12,8 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { parseFindInput } from '../src/utilities/marketplace-url';
-import { parseLimitOption, decideActions } from '../src/commands/find';
+import { parseLimitOption, decideActions, buildRasterMediaItems } from '../src/commands/find';
+import type { BuildToken, ResolvedTarget } from '../src/commands/find';
 
 describe('parseFindInput', () => {
   test('Ethereum wallet address → address kind', () => {
@@ -286,6 +287,33 @@ describe('parseFindInput', () => {
     assert.ok(r.reason.includes('base'));
   });
 
+  test('Raster /artwork/{slug} URL → raster-artwork kind', () => {
+    const r = parseFindInput('https://raster.art/artwork/split-logic-by-ricky-retouch');
+    assert.equal(r?.kind, 'raster-artwork');
+    if (r?.kind !== 'raster-artwork') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'split-logic-by-ricky-retouch');
+  });
+
+  test('Raster /artwork/{slug} URL with trailing slash + query → raster-artwork kind', () => {
+    const r = parseFindInput('https://raster.art/artwork/split-logic-by-ricky-retouch/?ref=x');
+    assert.equal(r?.kind, 'raster-artwork');
+    if (r?.kind !== 'raster-artwork') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'split-logic-by-ricky-retouch');
+  });
+
+  test('Raster non-artwork URL → unsupported with /artwork/ hint', () => {
+    const r = parseFindInput('https://raster.art/explore');
+    assert.equal(r?.kind, 'unsupported');
+    if (r?.kind !== 'unsupported') {
+      throw new Error('narrowing');
+    }
+    assert.ok(r.reason.includes('/artwork/'));
+  });
+
   test('SuperRare /collection/{contract} URL → unsupported with specific message', () => {
     const r = parseFindInput(
       'https://superrare.com/collection/0x3e930455dcBf4bC69DE9926bDAF8ef782398786f'
@@ -432,5 +460,120 @@ describe('decideActions', () => {
   test('--yes --publish → [publish] (publish flag overrides default Play)', async () => {
     const actions = await decideActions({ yes: true, publish: true });
     assert.deepEqual(actions, ['publish']);
+  });
+});
+
+/**
+ * `buildRasterMediaItems` is the FF-indexer bypass: when the indexer resolves
+ * nothing for a Raster-minted series, items are built straight from each
+ * token's Raster `media.contentUrl` (off-chain provenance, Neort-style) so the
+ * playlist still builds and verifies. These assert the title/source/provenance
+ * shape, the drop-on-missing-media behavior, and — critically — that Raster's
+ * `mediaType` drives DP-1 timing so an extensionless IPFS video isn't
+ * misclassified as a static still. No network.
+ */
+describe('buildRasterMediaItems', () => {
+  const series: ResolvedTarget = {
+    kind: 'series',
+    summary: { artworkId: '2886465', title: 'Split Logic', artists: [] },
+  };
+
+  test('builds one off-chain item per token, titled "<Series> #<tokenId>"', () => {
+    const tokens: BuildToken[] = [
+      {
+        chain: 'ethereum',
+        contract: '0xabc',
+        tokenId: '1',
+        mediaUrl: 'https://media/1.mp4',
+        mediaType: 'video/mp4',
+      },
+      {
+        chain: 'ethereum',
+        contract: '0xabc',
+        tokenId: '94',
+        mediaUrl: 'https://media/94.mp4',
+        mediaType: 'video/mp4',
+      },
+    ];
+    const items = buildRasterMediaItems(tokens, series) as Array<{
+      title: string;
+      source: string;
+      provenance: { type: string; uri: string };
+    }>;
+    assert.equal(items.length, 2);
+    assert.equal(items[0].title, 'Split Logic #1');
+    assert.equal(items[0].source, 'https://media/1.mp4');
+    assert.equal(items[0].provenance.type, 'offChainURI');
+    assert.equal(items[0].provenance.uri, 'https://media/1.mp4');
+    assert.equal(items[1].title, 'Split Logic #94');
+  });
+
+  test('extensionless IPFS video (mediaType "video/2") gets no fixed duration, loops off', () => {
+    // The real-world Raster shape: contentUrl has no file extension and the
+    // only type signal is the category-prefixed previewType. Without the hint
+    // this video would be stamped a static duration and play as a freeze-frame.
+    const tokens: BuildToken[] = [
+      {
+        chain: 'ethereum',
+        contract: '0xabc',
+        tokenId: '1',
+        mediaUrl: 'https://ipfs.verse.works/ipfs/bafybeifi2e6h3katweqgx2wz',
+        mediaType: 'video/2',
+      },
+    ];
+    const items = buildRasterMediaItems(tokens, series) as Array<{
+      duration?: number;
+      display?: { loop?: boolean };
+    }>;
+    assert.equal(items[0].duration, undefined);
+    assert.equal(items[0].display?.loop, false);
+  });
+
+  test('extensionless still (mediaType "image/1") gets a fixed display duration', () => {
+    const tokens: BuildToken[] = [
+      {
+        chain: 'ethereum',
+        contract: '0xabc',
+        tokenId: '2',
+        mediaUrl: 'https://ipfs.verse.works/ipfs/bafybeiawsns62ftxpi3vffbn',
+        mediaType: 'image/1',
+      },
+    ];
+    const items = buildRasterMediaItems(tokens, series) as Array<{ duration?: number }>;
+    assert.equal(typeof items[0].duration, 'number');
+  });
+
+  test('drops tokens with no Raster media (nothing playable to point at)', () => {
+    const tokens: BuildToken[] = [
+      {
+        chain: 'ethereum',
+        contract: '0xabc',
+        tokenId: '1',
+        mediaUrl: 'https://media/1.mp4',
+        mediaType: 'video/mp4',
+      },
+      { chain: 'ethereum', contract: '0xabc', tokenId: '2', mediaUrl: null, mediaType: null },
+    ];
+    const items = buildRasterMediaItems(tokens, series);
+    assert.equal(items.length, 1);
+  });
+
+  test('single-token target (Raster did not index the series) falls back to "Token <id>"', () => {
+    const single: ResolvedTarget = {
+      kind: 'single',
+      coords: { chain: 'tezos', contract: 'KT1abc', tokenId: '7' },
+    };
+    const tokens: BuildToken[] = [
+      {
+        chain: 'tezos',
+        contract: 'KT1abc',
+        tokenId: '7',
+        mediaUrl: 'https://media/7.mp4',
+        mediaType: 'video/mp4',
+      },
+    ];
+    const items = buildRasterMediaItems(tokens, single) as Array<{ title: string }>;
+    assert.equal(items.length, 1);
+    assert.equal(items[0].title, 'Token 7');
   });
 });

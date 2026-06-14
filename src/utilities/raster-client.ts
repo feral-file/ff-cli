@@ -65,6 +65,21 @@ export interface RasterTokenCoords {
   chain: IndexerChain;
   contractAddress: string;
   tokenId: string;
+  /**
+   * Raster's own playable asset URL for this token, when present. The find
+   * flow uses it to build a DP-1 item directly (off-chain `provenance`),
+   * bypassing the FF indexer for Raster-minted tokens it cannot resolve.
+   */
+  mediaUrl: string | null;
+  /**
+   * Media type hint for DP-1 timing: Raster's `contentType` when populated,
+   * else its `previewType` (e.g. "video/2"). Raster's `contentUrl` is often
+   * an extensionless IPFS URL, so without this hint the builder can't tell a
+   * video from a still and would stamp it a fixed duration. Both fields share
+   * a standard category prefix (`video/`, `audio/`, `image/`), which is all
+   * the timing check needs.
+   */
+  mediaType: string | null;
 }
 
 export interface PaginatedTokens {
@@ -173,6 +188,41 @@ export async function resolveTokenToArtwork(
 }
 
 /**
+ * Resolve a `raster.art/artwork/{slug}` URL to its artwork (series) summary.
+ *
+ * One round trip via `artworkBySlug`. Returns `null` when the slug is
+ * unknown (Raster models not-found as a null query field, not an HTTP 404).
+ */
+export async function resolveSlugToArtwork(slug: string): Promise<RasterArtworkSummary | null> {
+  const data = await rasterQuery<{
+    artworkBySlug: {
+      id: string;
+      title: string;
+      artists: ArtistFields[];
+    } | null;
+  }>(
+    `query ResolveSlug($slug: String!) {
+      artworkBySlug(slug: $slug) {
+        id
+        title
+        artists { id name slug }
+      }
+    }`,
+    { slug }
+  );
+
+  const artwork = data.artworkBySlug;
+  if (!artwork) {
+    return null;
+  }
+  return {
+    artworkId: artwork.id,
+    title: artwork.title,
+    artists: (artwork.artists ?? []).map(toRasterArtist),
+  };
+}
+
+/**
  * Resolve a wallet address to the Raster artist who claims it.
  *
  * The `address` query carries artist associations directly (the old REST
@@ -212,7 +262,16 @@ export async function listArtworkTokens(
   const data = await rasterQuery<{
     artwork: {
       tokens: {
-        nodes: Array<{ chainId: string; contractAddress: string | null; tokenId: string }>;
+        nodes: Array<{
+          chainId: string;
+          contractAddress: string | null;
+          tokenId: string;
+          media: {
+            contentUrl: string | null;
+            contentType: string | null;
+            previewType: string | null;
+          } | null;
+        }>;
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
       };
     } | null;
@@ -220,7 +279,7 @@ export async function listArtworkTokens(
     `query ArtworkTokens($id: ID!, $first: Int, $after: String) {
       artwork(id: $id) {
         tokens(first: $first, after: $after) {
-          nodes { chainId contractAddress tokenId }
+          nodes { chainId contractAddress tokenId media { contentUrl contentType previewType } }
           pageInfo { hasNextPage endCursor }
         }
       }
@@ -244,6 +303,10 @@ export async function listArtworkTokens(
       chain,
       contractAddress: raw.contractAddress,
       tokenId: raw.tokenId,
+      mediaUrl: raw.media?.contentUrl ?? null,
+      // Prefer a real MIME (`contentType`) when Raster populates it; today it
+      // is usually empty, so fall back to the category-prefixed `previewType`.
+      mediaType: raw.media?.contentType || raw.media?.previewType || null,
     });
   }
 
