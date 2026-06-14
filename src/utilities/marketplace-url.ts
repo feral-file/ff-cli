@@ -47,6 +47,7 @@ export type ParsedFindInput =
   | { kind: 'fxhash-project'; slug: string }
   | { kind: 'neort-art'; id: string }
   | { kind: 'verse-series'; slug: string }
+  | { kind: 'raster-artwork'; slug: string }
   | { kind: 'unsupported'; reason: string };
 
 const ETH_ADDR = /^0x[a-fA-F0-9]{40}$/;
@@ -127,6 +128,9 @@ export function parseMarketplaceUrl(url: URL): ParsedFindInput | null {
   }
   if (host === 'verse.works' || host.endsWith('.verse.works')) {
     return parseVerse(url);
+  }
+  if (host === 'raster.art' || host.endsWith('.raster.art')) {
+    return parseRaster(url);
   }
   return null;
 }
@@ -427,6 +431,28 @@ export function parseVerse(url: URL): ParsedFindInput {
     reason:
       `Verse URL not recognized: ${url.pathname}. Expected ` +
       '/items/ethereum/{contract}/{tokenId} or /series/{slug}.',
+  };
+}
+
+/**
+ * Raster URL forms (raster.art):
+ *   raster.art/artwork/{slug}   — artwork (series) detail page
+ *
+ * Unlike the other marketplaces, Raster is already the find flow's backend
+ * resolver — so a Raster URL resolves to an artwork by slug via
+ * `artworkBySlug` and (crucially) builds DP-1 items straight from Raster's
+ * own `media.contentUrl`, bypassing the FF indexer the way Neort does. This
+ * is what lets Raster-minted tokens (which the FF indexer doesn't carry)
+ * build a verifiable playlist without `--skip-verify`.
+ */
+export function parseRaster(url: URL): ParsedFindInput {
+  const m = /^\/artwork\/([A-Za-z0-9][A-Za-z0-9_-]*)\/?$/.exec(url.pathname);
+  if (m) {
+    return { kind: 'raster-artwork', slug: m[1] };
+  }
+  return {
+    kind: 'unsupported',
+    reason: `Raster URL not recognized: ${url.pathname}. Expected /artwork/{slug}.`,
   };
 }
 
