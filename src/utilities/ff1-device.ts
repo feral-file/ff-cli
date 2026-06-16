@@ -9,6 +9,10 @@ import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-co
 
 const SEND_RETRY_ATTEMPTS = 3;
 const SEND_RETRY_BASE_DELAY_MS = 750;
+const RATE_LIMIT_STATUS = 429;
+// Cap how long a device-supplied Retry-After can stall the CLI, so a buggy or
+// hostile device cannot pin a command for minutes/hours.
+const MAX_RETRY_DELAY_MS = 30_000;
 
 interface SendPlaylistParams {
   playlist: Playlist;
@@ -85,6 +89,40 @@ export function isTransientDeviceNetworkError(error: unknown): boolean {
       : undefined;
 
   return Boolean(causeCode && networkCodes.has(causeCode));
+}
+
+/**
+ * parseRetryAfterMs converts an HTTP `Retry-After` header into milliseconds.
+ *
+ * Supports both forms from RFC 7231: a delta-seconds integer (e.g. "5") and an
+ * HTTP-date (e.g. "Wed, 21 Oct 2025 07:28:00 GMT"). Returns undefined when the
+ * header is absent or unparseable, so callers can fall back to their own
+ * backoff. A past date clamps to 0 (retry immediately).
+ *
+ * @param {string | null | undefined} headerValue - Raw Retry-After header value
+ * @returns {number | undefined} Delay in milliseconds, or undefined if unknown
+ */
+export function parseRetryAfterMs(headerValue: string | null | undefined): number | undefined {
+  if (!headerValue) {
+    return undefined;
+  }
+
+  const trimmed = headerValue.trim();
+  if (/^\d+$/.test(trimmed)) {
+    return Number(trimmed) * 1000;
+  }
+
+  // A valid HTTP-date always contains letters (month/day names, or the ISO
+  // 'T'/'Z'). Requiring one rejects bare numeric junk (e.g. "-5", "5.5") that
+  // Date.parse would otherwise misinterpret as a date.
+  if (/[a-zA-Z]/.test(trimmed)) {
+    const dateMs = Date.parse(trimmed);
+    if (!Number.isNaN(dateMs)) {
+      return Math.max(0, dateMs - Date.now());
+    }
+  }
+
+  return undefined;
 }
 
 /**
@@ -187,6 +225,23 @@ export async function sendPlaylistToDevice({
           headers,
           body: JSON.stringify(requestBody),
         });
+
+        // The device sheds bursts of commands with HTTP 429 to protect itself.
+        // Treat it as transient: honor Retry-After when present, otherwise back
+        // off, and retry within the bounded attempt budget.
+        if (response.status === RATE_LIMIT_STATUS && attempt < SEND_RETRY_ATTEMPTS) {
+          const retryAfterMs = parseRetryAfterMs(response.headers.get('retry-after'));
+          const retryDelay = Math.min(
+            retryAfterMs ?? SEND_RETRY_BASE_DELAY_MS * attempt,
+            MAX_RETRY_DELAY_MS
+          );
+          logger.warn(
+            `Device rate-limited the command (attempt ${attempt}/${SEND_RETRY_ATTEMPTS}); retrying in ${retryDelay}ms`
+          );
+          response = null;
+          await waitForRetry(retryDelay);
+          continue;
+        }
         break;
       } catch (error) {
         const shouldRetry = attempt < SEND_RETRY_ATTEMPTS && isTransientDeviceNetworkError(error);
@@ -219,6 +274,17 @@ export async function sendPlaylistToDevice({
       const errorText = await response.text();
       logger.error(`Failed to cast to device: ${response.status} ${response.statusText}`);
       logger.debug(`Error details: ${errorText}`);
+
+      if (response.status === RATE_LIMIT_STATUS) {
+        const deviceLabel = device.name || device.host;
+        return {
+          success: false,
+          error: `Device "${deviceLabel}" is busy and rate-limited the command`,
+          details:
+            'The Art Computer is shedding a burst of commands to protect itself. ' +
+            'Wait a few seconds and try again.',
+        };
+      }
 
       return {
         success: false,
