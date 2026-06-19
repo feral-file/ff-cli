@@ -145,7 +145,7 @@ config.json
 # Test scripts directory
 /.tmp
 
-# Output playlist
+# Output playlist (default `build`/`play` output name)
 playlist.json
 
 # Release artifacts
