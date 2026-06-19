@@ -22,7 +22,7 @@ import {
   formatSummaryLine,
 } from '../utilities/raster-client';
 import type { RasterArtworkSummary, RasterArtworkRow } from '../utilities/raster-client';
-import { sendPlaylistToDevice } from '../utilities/ff1-device';
+import { castPlaylist } from '../utilities/playlist-cast';
 
 // nft-indexer + playlist-builder are still CommonJS; require keeps interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -544,20 +544,22 @@ async function doPlay(
   deviceName: string | undefined,
   skipVerify: boolean
 ): Promise<void> {
-  // Match `ff-cli play`'s verification gate: signed playlists are verified
-  // before device delivery; the same surface that play surfaces failures.
-  // `buildDP1Playlist` signs when a playlist private key is configured and
-  // silently continues unsigned otherwise — so when no key is set, the user
-  // sees an actionable error here instead of an unverifiable playlist on
-  // the wall.
+  // Same verify → send gate `ff-cli play` uses, via the shared castPlaylist
+  // helper. `find`'s playlists are already signed by buildDP1Playlist (when a
+  // key is configured), so no signing is requested here — an unsigned one
+  // fails the verify gate with an actionable message instead of reaching the
+  // wall unverifiable.
   if (!skipVerify) {
-    const { verifyPlaylist } = await import('../utilities/playlist-verifier');
     console.log(chalk.cyan('Verify playlist'));
-    const verifyResult = await verifyPlaylist(playlist);
-    if (!verifyResult.valid) {
-      console.error(chalk.red('Playlist verification failed:'), verifyResult.error);
-      if (verifyResult.details && verifyResult.details.length > 0) {
-        for (const d of verifyResult.details) {
+  }
+
+  const result = await castPlaylist(playlist, { deviceName, skipVerify });
+
+  if (!result.success) {
+    if (result.stage === 'verify') {
+      console.error(chalk.red('Playlist verification failed:'), result.error);
+      if (result.details && result.details.length > 0) {
+        for (const d of result.details) {
           console.error(chalk.dim(`  ${d.path}: ${d.message}`));
         }
       }
@@ -567,29 +569,28 @@ async function doPlay(
             'or pass --skip-verify to bypass.'
         )
       );
-      process.exitCode = 1;
-      return;
+    } else {
+      console.error(chalk.red('Play failed:'), result.error);
+      if (result.deviceDetails) {
+        console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
+      }
     }
+    process.exitCode = 1;
+    return;
+  }
+
+  if (result.verified) {
     console.log(chalk.green('✓ Verified\n'));
   }
   console.log(chalk.blue('Play on FF1'));
-  const result = await sendPlaylistToDevice({ playlist, deviceName });
-  if (result.success) {
-    console.log(chalk.green('✓ Playing'));
-    if (result.deviceName) {
-      console.log(chalk.dim(`  Device: ${result.deviceName}`));
-    }
-    if (result.device) {
-      console.log(chalk.dim(`  Host: ${result.device}`));
-    }
-    console.log();
-    return;
+  console.log(chalk.green('✓ Playing'));
+  if (result.deviceName) {
+    console.log(chalk.dim(`  Device: ${result.deviceName}`));
   }
-  console.error(chalk.red('Play failed:'), result.error);
-  if (result.details) {
-    console.error(chalk.dim(`  Details: ${result.details}`));
+  if (result.device) {
+    console.log(chalk.dim(`  Host: ${result.device}`));
   }
-  process.exitCode = 1;
+  console.log();
 }
 
 async function doPublish(
