@@ -13,7 +13,7 @@ export async function readConfigFile(configPath: string): Promise<Config> {
 
 /**
  * Locate an existing config.json. Local (`./config.json`) wins over user
- * (`~/.config/ff1/config.json`). Returns null when neither exists.
+ * (`~/.config/ff-cli/config.json`). Returns null when neither exists.
  */
 export async function resolveExistingConfigPath(): Promise<string | null> {
   const { localPath, userPath } = getConfigPaths();

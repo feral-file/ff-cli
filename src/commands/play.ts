@@ -3,16 +3,11 @@ import chalk from 'chalk';
 import { getConfig } from '../config';
 import { isPlaylistSourceUrl, resolvePlaySource } from '../utilities/playlist-source';
 import { parseFindInput } from '../utilities/marketplace-url';
+import { castPlaylist } from '../utilities/playlist-cast';
 import {
   printPlaylistSourceLoadFailure,
   printPlaylistVerificationFailure,
 } from './helpers/playlist-display';
-
-// ff1-device is still CommonJS; require keeps the interop simple.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { sendPlaylistToDevice } = require('../utilities/ff1-device');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { signPlaylist } = require('../utilities/playlist-signer');
 
 /**
  * Human label for a discovery input that `play` cannot cast directly.
@@ -102,93 +97,50 @@ export const playCommand = new Command('play')
 
       console.log(chalk.blue('\nPlay on FF1\n'));
 
-      if (!options.skipVerify) {
-        const playlistConfig = config.playlist;
-        const privateKey = playlistConfig?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
-        const { verifyPlaylist } = await import('../utilities/playlist-verifier');
-
-        if (isPlaylistSource) {
-          console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
-        }
-
-        const verifyResult =
-          resolved.kind === 'media'
-            ? await (async () => {
-                try {
-                  if (!privateKey) {
-                    return {
-                      valid: false,
-                      error:
-                        'Cannot sign playlist for playback: no playlist signing key is configured',
-                    };
-                  }
-
-                  const signature = await signPlaylist(resolved.playlist, privateKey);
-                  const signedPlaylist = {
-                    ...resolved.playlist,
-                    signature: undefined,
-                    signatures: [signature],
-                  };
-                  const signedVerification = await verifyPlaylist(signedPlaylist);
-                  if (signedVerification.valid) {
-                    resolved.playlist = signedPlaylist as typeof resolved.playlist;
-                    return { valid: true, playlist: signedPlaylist };
-                  }
-
-                  return {
-                    valid: false,
-                    error: signedVerification.error,
-                    details: signedVerification.details,
-                  };
-                } catch (error) {
-                  return {
-                    valid: false,
-                    error: `Failed to sign playlist for playback: ${(error as Error).message}`,
-                  };
-                }
-              })()
-            : await verifyPlaylist(resolved.playlist);
-
-        if (!verifyResult.valid) {
-          printPlaylistVerificationFailure(
-            {
-              valid: false,
-              error: verifyResult.error,
-              details: verifyResult.details,
-            },
-            isPlaylistSource ? `source: ${sourceLabel}` : undefined
-          );
-          process.exit(1);
-        }
-
-        if (resolved.kind === 'media') {
-          console.log(chalk.green('✓ Signed and verified\n'));
-        } else if (isPlaylistSource) {
-          console.log(chalk.green('✓ Verified\n'));
-        }
+      if (!options.skipVerify && isPlaylistSource) {
+        console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
       }
 
-      const result = await sendPlaylistToDevice({
-        playlist: resolved.playlist,
+      // A direct media/web URL is wrapped in an unsigned single-item playlist,
+      // so it must be signed before the verify gate; a loaded playlist is sent
+      // as-is. castPlaylist owns the sign → verify → send sequence.
+      const privateKey = config.playlist?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
+      const result = await castPlaylist(resolved.playlist, {
         deviceName: options.device,
+        skipVerify: options.skipVerify,
+        requireSignature: resolved.kind === 'media',
+        signingKey: privateKey,
       });
 
-      if (result.success) {
-        console.log(chalk.green('✓ Playing'));
-        if (result.deviceName) {
-          console.log(chalk.dim(`  Device: ${result.deviceName}`));
-        }
-        if (result.device) {
-          console.log(chalk.dim(`  Host: ${result.device}`));
-        }
-        console.log();
-      } else {
-        console.error(chalk.red('\nPlay failed:'), result.error);
-        if (result.details) {
-          console.error(chalk.dim(`  Details: ${result.details}`));
+      if (!result.success) {
+        if (result.stage === 'verify') {
+          printPlaylistVerificationFailure(
+            { valid: false, error: result.error, details: result.details },
+            isPlaylistSource ? `source: ${sourceLabel}` : undefined
+          );
+        } else if (result.stage === 'sign') {
+          console.error(chalk.red(`\n${result.error}`));
+        } else {
+          console.error(chalk.red('\nPlay failed:'), result.error);
+          if (result.deviceDetails) {
+            console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
+          }
         }
         process.exit(1);
       }
+
+      if (result.verified) {
+        console.log(chalk.green(result.signed ? '✓ Signed and verified\n' : '✓ Verified\n'));
+      }
+
+      console.log(chalk.green('✓ Playing'));
+      if (result.deviceName) {
+        console.log(chalk.dim(`  Device: ${result.deviceName}`));
+      }
+      if (result.device) {
+        console.log(chalk.dim(`  Host: ${result.device}`));
+      }
+      console.log();
     } catch (error) {
       if (isPlaylistSourceUrl(source)) {
         printPlaylistSourceLoadFailure(source, error as Error);
