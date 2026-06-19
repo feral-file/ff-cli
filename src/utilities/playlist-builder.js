@@ -575,19 +575,38 @@ function validateDP1Playlist(playlist) {
  * misclassified HTML pages and extensionless URLs as static images, stamping
  * them with a display duration that cut interactive artworks off.)
  *
+ * The extension is taken from the URL *pathname* only — the query string and
+ * fragment are stripped first, so a signed URL like `art.png?sig=a.b` or
+ * `clip.mp4#t=1` still resolves to its real extension instead of parsing `b`
+ * or `mp4#t=1`. Misreading those would mislabel media as undetermined and
+ * (via buildUrlItem) route it through the interactive-web timing path.
+ *
  * @param {string} url - Media or page URL
  * @returns {string} MIME type, or '' when undetermined
  * @example
- * detectMimeType('https://example.com/image.png'); // 'image/png'
- * detectMimeType('https://example.com/art.html');  // 'text/html'
- * detectMimeType('https://example.com/output/abc'); // ''
+ * detectMimeType('https://example.com/image.png');        // 'image/png'
+ * detectMimeType('https://example.com/art.png?sig=a.b');  // 'image/png'
+ * detectMimeType('https://example.com/art.html');         // 'text/html'
+ * detectMimeType('https://example.com/output/abc');       // ''
  */
 function detectMimeType(url) {
   if (!url) {
     return '';
   }
 
-  const extension = url.split('.').pop()?.toLowerCase().split('?')[0];
+  // Use the pathname only: drop query + fragment so a dot inside `?sig=a.b`
+  // or `#v=1.2` can't masquerade as the file extension.
+  let pathname;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    // Not an absolute URL (bare path/filename) — strip fragment then query.
+    pathname = String(url).split('#')[0].split('?')[0];
+  }
+
+  const lastSegment = pathname.split('/').pop() || '';
+  const dotIndex = lastSegment.lastIndexOf('.');
+  const extension = dotIndex >= 0 ? lastSegment.slice(dotIndex + 1).toLowerCase() : '';
 
   const mimeTypes = {
     jpg: 'image/jpeg',

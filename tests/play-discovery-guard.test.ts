@@ -41,6 +41,20 @@ describe('describeDiscoveryInput — redirects discovery inputs to find', () => 
       'an Objkt token'
     );
   });
+
+  test('a recognized-but-unsupported marketplace URL is still a discovery input', () => {
+    // Legacy Art Blocks /projects/{id} and unsupported-chain OpenSea links
+    // parse to `unsupported` — they must redirect to `find`, not get wrapped
+    // as a web page by `play`.
+    assert.equal(
+      describeDiscoveryInput('https://www.artblocks.io/projects/123'),
+      'a marketplace URL'
+    );
+    assert.equal(
+      describeDiscoveryInput('https://opensea.io/assets/matic/0xabc/1'),
+      'a marketplace URL'
+    );
+  });
 });
 
 describe('describeDiscoveryInput — leaves real play targets alone', () => {
