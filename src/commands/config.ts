@@ -1,12 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import {
-  createSampleConfig,
-  getConfig,
-  getConfigPaths,
-  listAvailableModels,
-  validateConfig,
-} from '../config';
+import { createSampleConfig, getConfig, getConfigPaths, validateConfig } from '../config';
 
 // `config` is a single command with an action argument rather than a
 // commander subcommand group. Kept this way to preserve the existing
@@ -26,25 +20,24 @@ export const configCommand = new Command('config')
       } else if (action === 'show') {
         const config = getConfig();
         console.log(chalk.blue('\nCurrent configuration\n'));
-        console.log(chalk.bold('Default model:'), chalk.white(config.defaultModel));
         console.log(chalk.bold('Default duration:'), chalk.white(config.defaultDuration + 's'));
-        console.log(chalk.bold('\nAvailable models:\n'));
-
-        const models = listAvailableModels();
-        models.forEach((modelName) => {
-          const modelConfig = config.models[modelName];
-          const isCurrent = modelName === config.defaultModel;
-          console.log(`  ${isCurrent ? chalk.green('→') : ' '} ${chalk.bold(modelName)}`);
-          console.log(
-            `    API key: ${modelConfig.apiKey && modelConfig.apiKey !== 'your_api_key_here' ? chalk.green('Set') : chalk.red('Missing')}`
-          );
-          console.log(`    Base URL: ${chalk.dim(modelConfig.baseURL)}`);
-          console.log(`    Model: ${chalk.dim(modelConfig.model)}`);
-          console.log(
-            `    Function calling: ${modelConfig.supportsFunctionCalling ? chalk.green('Supported') : chalk.red('Not supported')}`
-          );
-          console.log();
-        });
+        const feedServers = config.feedServers || [];
+        if (feedServers.length > 0) {
+          console.log(chalk.bold('\nFeed servers:\n'));
+          feedServers.forEach((server) => {
+            console.log(`  ${chalk.dim(server.baseUrl)}`);
+          });
+        }
+        const devices = config.ff1Devices?.devices || [];
+        if (devices.length > 0) {
+          console.log(chalk.bold('\nFF1 devices:\n'));
+          devices.forEach((device) => {
+            console.log(
+              `  ${chalk.bold(device.name || 'unnamed')} ${chalk.dim(`→ ${device.host}`)}`
+            );
+          });
+        }
+        console.log();
       } else if (action === 'validate') {
         const validation = validateConfig();
 

@@ -18,6 +18,8 @@ const require = createRequire(import.meta.url);
 const {
   applyItemTiming,
   isTimeBasedMedia,
+  isInteractiveWeb,
+  detectMimeType,
   buildUrlItem,
   convertTokenToDP1ItemSingle,
   validateDP1Playlist,
@@ -81,6 +83,40 @@ describe('applyItemTiming', () => {
     assert.equal(typeof item.duration, 'number');
     assert.ok((item.duration as number) >= 1);
   });
+
+  test('auto + interactive HTML: no duration (player parks indefinitely)', () => {
+    const item: Record<string, unknown> = { display: { scaling: 'fit' } };
+    applyItemTiming(item, { mimeType: 'text/html', sourceUrl: 'https://e.com/art' });
+    assert.equal('duration' in item, false);
+    // Unlike video, no loop:false — an HTML page has no end-of-stream event.
+    assert.deepEqual(item.display, { scaling: 'fit' });
+  });
+
+  test('auto + interactive HTML by .html extension: no duration', () => {
+    const item: Record<string, unknown> = {};
+    applyItemTiming(item, { sourceUrl: 'https://e.com/page.html' });
+    assert.equal('duration' in item, false);
+  });
+});
+
+describe('detectMimeType / isInteractiveWeb', () => {
+  test('detectMimeType maps .html/.htm to text/html', () => {
+    assert.equal(detectMimeType('https://e.com/art.html'), 'text/html');
+    assert.equal(detectMimeType('https://e.com/art.htm'), 'text/html');
+  });
+
+  test('detectMimeType returns empty string for unknown/extensionless URLs', () => {
+    assert.equal(detectMimeType('https://e.com/output/abc123'), '');
+    assert.equal(detectMimeType('https://whorl.app'), '');
+    assert.equal(detectMimeType(''), '');
+  });
+
+  test('isInteractiveWeb detects HTML by MIME hint or extension, not media', () => {
+    assert.equal(isInteractiveWeb('text/html', 'https://e.com/x'), true);
+    assert.equal(isInteractiveWeb(undefined, 'https://e.com/page.html'), true);
+    assert.equal(isInteractiveWeb('video/mp4', 'https://e.com/v.mp4'), false);
+    assert.equal(isInteractiveWeb('image/png', 'https://e.com/i.png'), false);
+  });
 });
 
 describe('item builders honor auto timing', () => {
@@ -94,6 +130,22 @@ describe('item builders honor auto timing', () => {
     const item = buildUrlItem('https://example.com/art.png');
     assert.equal(typeof item.duration, 'number');
     assert.equal(item.display.loop, undefined);
+  });
+
+  test('buildUrlItem: .html URL plays open-ended (no duration)', () => {
+    const item = buildUrlItem('https://whorl.app/index_launch.html');
+    assert.equal('duration' in item, false);
+    assert.equal(item.display.loop, undefined);
+  });
+
+  test('buildUrlItem: extensionless URL is treated as interactive web (no duration)', () => {
+    const item = buildUrlItem('https://whorl.app/output/abc123');
+    assert.equal('duration' in item, false);
+  });
+
+  test('buildUrlItem: explicit duration still wins for an HTML page', () => {
+    const item = buildUrlItem('https://whorl.app/index_launch.html', 30);
+    assert.equal(item.duration, 30);
   });
 
   test('buildUrlItem: explicit duration is stamped as-is on video', () => {

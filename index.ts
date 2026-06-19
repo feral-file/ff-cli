@@ -14,7 +14,6 @@ import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { setupCommand } from './src/commands/setup';
 import { statusCommand } from './src/commands/status';
-import { chatCommand } from './src/commands/chat';
 import { verifyCommand, validateCommand } from './src/commands/validate';
 import { signCommand } from './src/commands/sign';
 import { playCommand } from './src/commands/play';
@@ -45,12 +44,11 @@ program
   .version(packageVersion)
   .addHelpText(
     'after',
-    `\nQuick start:\n  1) ff-cli setup\n  2) ff-cli chat\n\nDocs: https://github.com/feral-file/ff-cli\n`
+    `\nQuick start:\n  1) ff-cli setup\n  2) ff-cli play <url-or-playlist>\n\nDocs: https://github.com/feral-file/ff-cli\n`
   );
 
 program.addCommand(setupCommand);
 program.addCommand(statusCommand);
-program.addCommand(chatCommand);
 program.addCommand(verifyCommand);
 program.addCommand(validateCommand);
 program.addCommand(signCommand);

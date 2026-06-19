@@ -1,6 +1,6 @@
 # Examples
 
-Copy‑pasteable commands that work with the current CLI.
+Copy‑pasteable commands that work with the current CLI. ff-cli is deterministic: there's no built-in chat. Natural language belongs in your coding agent (Claude Code, Codex), which drives these commands via the `ff-control` skill. No LLM API key required.
 
 ## Setup
 
@@ -16,61 +16,170 @@ npm run dev -- config init
 npm run dev -- config validate
 ```
 
-## OpenClaw skill prompt
+## Use with a coding agent
 
-If you want OpenClaw to run ff-cli end-to-end without confirmation, start from:
-
-`skills/ff-control/SKILL.md`
+ff-cli ships a [Claude Code](https://docs.claude.com/en/docs/claude-code) / Codex skill at `skills/ff-control/SKILL.md`. Once installed, ask your agent in plain language ("Get 3 works from reas.eth and play on Living Room", "Build a playlist from this Objkt URL and publish to my feed") and it translates the request into `ff-cli find` or `ff-cli build` and runs the validate → play/publish flow for you.
 
 Recommended local install path:
 
 ```bash
-mkdir -p ~/.openclaw/skills
-ln -sfn ~/Work/ff-cli/skills/ff-control ~/.openclaw/skills/ff-control
+git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
+  && mkdir -p ~/.claude/skills \
+  && cp -r /tmp/ff-cli/skills/ff-control ~/.claude/skills/
 ```
 
-Compatibility copy (same prompt):
+The rest of this doc shows the deterministic commands the skill (or you) drives directly.
 
-`examples/openclaw-ff-skill.md`
+## Find an artwork
 
-Paste that prompt into your OpenClaw skill config, then test with plain requests like:
+`ff-cli find` resolves a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist. Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses.
 
 ```bash
-"Get 3 works from reas.eth and send to Living Room"
-"Get 3 from Unsupervised and publish to my feed"
+# Paste a URL and play it on your FF1
+npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+
+# Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
+
+# Feral File artwork (public id may be hex or numeric)
+npm run dev -- find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --play
+
+# Save without playing
+npm run dev -- find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 -o send-receive.json
+
+# Single on-chain token by coordinates
+npm run dev -- find ethereum:0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0:52932 -o token.json
+
+# Tezos token by coordinates
+npm run dev -- find tezos:KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ:22 -o tez-token.json
+
+# Wallet address (owner lookup); cap the number of tokens with --limit
+npm run dev -- find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
+
+# Limit a large series to the first N tokens
+npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak -l 5 -o ringers.json
+
+# Build and publish to a configured feed server
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --publish
+
+# Build, play on a named device, and skip interactive prompts
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play -d "Living Room Display" -y
 ```
 
-## Natural Language
+OpenSea and Verse accept both item and collection/series URLs:
 
 ```bash
-# Interactive chat
-npm run dev chat
+# OpenSea collection (Ethereum); slug resolved from the public page, no API key
+npm run dev -- find https://opensea.io/collection/your-collection-slug -l 5 -o opensea.json
 
-# One-shot requests
-npm run dev -- chat "Get 3 works from reas.eth" -o playlist.json
-npm run dev -- chat "Get 3 works from einstein-rosen.tez"
-npm run dev -- chat "Get tokens 52932,52457 from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0" -v
-npm run dev -- chat "Make a playlist of 10 works from 0xaeE022552B539dB18297D7481b6D547C622488B3" -v
-
-# Switch model
-npm run dev -- chat "your request" --model grok
-npm run dev -- chat "your request" --model gpt
-npm run dev -- chat "your request" --model gemini
-
-# Model names must match keys in config.json under `models`.
+# Verse series
+npm run dev -- find https://verse.works/series/your-series-slug -l 5 -o verse.json
 ```
 
-## Deterministic Build (no AI)
+Run `npm run dev -- find --help` for the full input list and options.
+
+## Build from structured params
+
+Use `ff-cli build` when you already have the contract, token IDs, feed names, or artwork ids and want explicit control over ordering, durations, and title. The input is a JSON object with `requirements` and optional `playlistSettings`.
 
 ```bash
-# From file
+# From a file
 npm run dev -- build examples/params-example.json -o playlist.json
 
 # From stdin
 cat examples/params-example.json | npm run dev -- build -o playlist.json
 ```
 
-Build from a Feral File public artwork id or artwork URL:
+Each requirement has a `type`:
+
+- `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
+- `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
+- `query_address` — `ownerAddress`, optional `quantity` (random selection)
+- `fetch_feed` — `playlistName`, `quantity`
+
+`playlistSettings` may set `title`, `durationPerItem`, `preserveOrder` (set `false` to shuffle), and `deviceName`.
+
+### From a contract + token IDs
+
+```bash
+cat > /tmp/eth-tokens.json <<'JSON'
+{
+  "requirements": [
+    {
+      "type": "build_playlist",
+      "blockchain": "ethereum",
+      "contractAddress": "0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0",
+      "tokenIds": ["52932", "52457"]
+    }
+  ],
+  "playlistSettings": {
+    "title": "ETH Tokens",
+    "preserveOrder": false,
+    "durationPerItem": 7
+  }
+}
+JSON
+
+npm run dev -- build /tmp/eth-tokens.json -o playlist-eth.json -v
+```
+
+Tezos works the same way with `"blockchain": "tezos"` and a `KT1...` contract:
+
+```bash
+cat > /tmp/tez-tokens.json <<'JSON'
+{
+  "requirements": [
+    {
+      "type": "build_playlist",
+      "blockchain": "tezos",
+      "contractAddress": "KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ",
+      "tokenIds": ["22", "8"]
+    }
+  ],
+  "playlistSettings": { "title": "Tezos Tokens", "preserveOrder": false }
+}
+JSON
+
+npm run dev -- build /tmp/tez-tokens.json -o playlist-tez.json -v
+```
+
+### From a wallet address
+
+```bash
+cat > /tmp/wallet.json <<'JSON'
+{
+  "requirements": [
+    {
+      "type": "query_address",
+      "ownerAddress": "0xaeE022552B539dB18297D7481b6D547C622488B3",
+      "quantity": 5
+    }
+  ],
+  "playlistSettings": { "title": "From a wallet", "preserveOrder": false }
+}
+JSON
+
+npm run dev -- build /tmp/wallet.json -o playlist-wallet.json -v
+```
+
+### From a feed playlist
+
+Feed playlist queries require reachable feed servers in your config. Reference exhibition titles from the official playlist repository: `https://github.com/feral-file/dp1-feed/tree/main/playlists`.
+
+```bash
+cat > /tmp/feed.json <<'JSON'
+{
+  "requirements": [
+    { "type": "fetch_feed", "playlistName": "Unsupervised", "quantity": 3 }
+  ],
+  "playlistSettings": { "title": "From a feed", "preserveOrder": false }
+}
+JSON
+
+npm run dev -- build /tmp/feed.json -o playlist-feed.json -v
+```
+
+### From a Feral File artwork
 
 ```bash
 cat > /tmp/ff-artwork.json <<'JSON'
@@ -81,125 +190,75 @@ cat > /tmp/ff-artwork.json <<'JSON'
       "artworkId": "https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf"
     }
   ],
-  "playlistSettings": {
-    "title": "Feral File Artwork"
-  }
+  "playlistSettings": { "title": "Feral File Artwork" }
 }
 JSON
 
 npm run dev -- build /tmp/ff-artwork.json -o playlist.json
 ```
 
-## AI‑Orchestrated Deterministic Flow (prompts)
+### Mixing sources in one playlist
+
+Combine multiple requirements; shuffle with `preserveOrder: false` and set per-item timing with `durationPerItem`.
 
 ```bash
-# Show tool‑call progress and validation
-npm run dev -- chat "Build a playlist of my works from reas.eth plus 3 from Unsupervised" -v -o playlist.json
+cat > /tmp/mixed.json <<'JSON'
+{
+  "requirements": [
+    {
+      "type": "build_playlist",
+      "blockchain": "tezos",
+      "contractAddress": "KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ",
+      "tokenIds": ["22", "8"]
+    },
+    {
+      "type": "build_playlist",
+      "blockchain": "ethereum",
+      "contractAddress": "0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0",
+      "tokenIds": ["52932", "52457"]
+    },
+    { "type": "fetch_feed", "playlistName": "Unsupervised", "quantity": 3 },
+    { "type": "query_address", "ownerAddress": "reas.eth", "quantity": 1 }
+  ],
+  "playlistSettings": {
+    "title": "Mixed",
+    "preserveOrder": false,
+    "durationPerItem": 6,
+    "deviceName": "Living Room Display"
+  }
+}
+JSON
 
-# Build from a Feral File artwork URL
-npm run dev -- chat "Build a playlist from https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf" -v -o playlist.json
-
-# Switch model if desired
-npm run dev -- chat "Build playlist from Ethereum address 0xaeE022552B539dB18297D7481b6D547C622488B3 and 2 from Unsupervised" --model gpt -v
+npm run dev -- build /tmp/mixed.json -o playlist-mixed.json -v
 ```
 
-### One‑shot complex prompt
-
-The CLI can parse rich requests and do it all in one go: fetch, build a DP‑1 playlist, shuffle, set durations, and send to a named device.
+## Validate / Sign / Play
 
 ```bash
-# Example: combine sources, shuffle, set 6s per item, and send to device
-npm run dev -- chat "Get tokens 52932,52457 from contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 and 2 from reas.eth; shuffle; 6 seconds each; send to 'Living Room Display'." -o playlist.json -v
-```
-
-## Feral File Built Playlists
-
-Use exhibition titles from the official playlist repository:
-`https://github.com/feral-file/dp1-feed/tree/main/playlists`
-
-```bash
-# Fetch from a built playlist title
-npm run dev -- chat "Get 3 from Unsupervised" -v
-
-# Mix a built playlist with wallet/domain sources
-npm run dev -- chat "Get 3 from Unsupervised and 2 from reas.eth" -v -o playlist.json
-```
-
-Notes:
-
-- Feed playlist queries require reachable feed servers in your config.
-- If no feeds are reachable, feed playlist examples will fail even if the title exists.
-- Bare EVM prompts (`from 0x...`) now fall back from owner lookup to contract lookup when needed.
-
-## Natural Language: Display and Publish
-
-The CLI recognizes publishing keywords like "publish", "publish to my feed", "push to feed", "send to feed" and automatically publishes after building.
-
-### Basic Publishing
-
-```bash
-# Build and publish
-npm run dev -- chat "Build playlist from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 with tokens 52932 and 52457; publish to my feed" -o playlist.json -v
-
-# With feed selection (if multiple servers configured)
-# The CLI will ask: "Which feed server? 1) https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1 2) http://localhost:8787"
-npm run dev -- chat "Get 3 from Unsupervised and publish to feed" -v
-
-# Publish existing playlist (defaults to ./playlist.json)
-npm run dev chat
-# Then type: "publish playlist"
-
-# Publish specific playlist file
-npm run dev chat
-# Then type: "publish the playlist ./playlist-temp.json"
-```
-
-### Combined: Display + Publish
-
-```bash
-# Display on Art Computer AND publish to feed
-npm run dev -- chat "Build playlist from contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 with tokens 52932 and 52457; mix them up; send to my Art Computer and publish to my feed" -o playlist.json -v
-
-# With explicit device name
-npm run dev -- chat "Get 5 from Unsupervised, shuffle, display on 'Living Room', and publish to feed" -v
-```
-
-### How It Works
-
-**Mode 1: Build and Publish** (when sources are mentioned)
-
-1. Intent parser detects "publish" keywords with sources/requirements
-2. Calls `get_feed_servers` to retrieve configured servers
-3. If 1 server → uses it automatically; if 2+ servers → asks user to pick
-4. Builds playlist → validates structure → publishes automatically
-
-**Mode 2: Publish Existing File** (e.g., "publish playlist")
-
-1. Intent parser detects "publish playlist" or similar phrases
-2. Calls `get_feed_servers` to retrieve configured servers
-3. If 1 server → uses it automatically; if 2+ servers → asks user to pick
-4. Publishes the playlist from `./playlist.json` (or specified path)
-
-Output shows:
-
-- Playlist build progress (Mode 1 only)
-- Device sending (if requested): `✓ Sent to device: Living Room`
-- Publishing status: `✓ Published to feed server`
-- Playlist ID: `Playlist ID: 84e028f8-...`
-
-## Validate / Sign / Send
-
-```bash
-# Validate playlist
+# Validate playlist structure
 npm run dev -- validate playlist.json
 npm run dev -- validate "https://cdn.example.com/playlist.json"
 
-# Sign playlist
+# Validate structure AND verify signatures
+npm run dev -- verify playlist.json
+
+# Sign playlist (uses key/role from config, or override via --key / --role)
 npm run dev -- sign playlist.json -o signed.json
 
-# Send to device
-npm run dev -- send playlist.json -d "Living Room Display"
-npm run dev -- send "https://cdn.example.com/playlist.json" -d "Living Room Display"
+# Play on the configured default device
+npm run dev -- play playlist.json
+
+# Play on a specific named device
+npm run dev -- play signed.json -d "Living Room Display"
+
+# Play a hosted DP-1 playlist
+npm run dev -- play "https://cdn.example.com/playlist.json"
+
+# Play a media URL directly
+npm run dev -- play "https://example.com/video.mp4"
+
+# Skip verification only if you must send a non-conformant payload (not recommended)
+npm run dev -- play playlist.json --skip-verify
 ```
 
 ## Publish to Feed Server
@@ -240,9 +299,9 @@ npm run dev -- publish --help
 
 ### Flow
 
-1. **Validate** - Playlist structure checked (`validate`-style parse; use `verify` for signatures)
+1. **Verify** - Playlist structure and signatures checked; unsigned or broken playlists are rejected
 2. **Select Server** - If multiple servers, choose which one (interactive or via `-s` flag)
-3. **Publish** - Send validated playlist to selected feed server
+3. **Publish** - Send the verified playlist to the selected feed server
 4. **Confirm** - Returns playlist ID and server details
 
 ### Example Output
@@ -287,11 +346,11 @@ Select server (0-based index): 0
    Failed to publish: {"error":"unauthorized","message":"Invalid API key"}
 ```
 
-## Validate / Sign / Send / Publish (Complete Flow)
+## Complete Flow (build → validate → sign → play → publish)
 
 ```bash
-# 1. Create a playlist (via chat or build)
-npm run dev -- chat "Get 3 works from reas.eth" -o playlist.json
+# 1. Build a playlist (via find or build)
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -o playlist.json
 
 # 2. Validate it
 npm run dev -- validate playlist.json
@@ -299,11 +358,36 @@ npm run dev -- validate playlist.json
 # 3. Sign it
 npm run dev -- sign playlist.json -o signed.json
 
-# 4. Send to device
-npm run dev -- send signed.json -d "My Display"
+# 4. Play it on a device
+npm run dev -- play signed.json -d "Living Room Display"
 
-# 5. Publish to feed server
+# 5. Publish to a feed server
 npm run dev -- publish signed.json -s 0
+```
+
+`ff-cli find` can collapse build + play + publish into one command:
+
+```bash
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play -d "Living Room Display" --publish
+```
+
+## FF1 device management
+
+```bash
+# List configured devices
+npm run dev -- device list
+
+# Add a device interactively (with mDNS discovery)
+npm run dev -- device add
+
+# Add a device non-interactively
+npm run dev -- device add --host 192.168.1.100 --name kitchen
+
+# Remove a device by name
+npm run dev -- device remove kitchen
+
+# Set the default device (used when -d is omitted)
+npm run dev -- device default office
 ```
 
 ## Troubleshooting
@@ -314,100 +398,7 @@ npm run dev -- config show
 
 # Reinitialize config
 npm run dev -- config init
+
+# Validate configuration
+npm run dev -- config validate
 ```
-
-### Natural‑language one‑shot examples (proven)
-
-- **ETH contract + token IDs (shuffle/mix, generic device)**
-  - Format:
-    ```bash
-    npm run dev -- chat "Compose a playlist from Ethereum contract <0x...> with tokens <id> and <id>; [shuffle|mix]; [send to device|send to '<device>']" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Compose a playlist from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 with tokens 52932 and 52457; mix them up; send to device" -o playlist-eth.json -v
-    ```
-
-- **TEZ contract + token IDs (shuffle, named device)**
-  - Format:
-    ```bash
-    npm run dev -- chat "Build a playlist from Tezos contract <KT1...> with tokens <id> and <id>; shuffle; send to '<device>'" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Build a playlist from Tezos contract KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ with tokens 22 and 8; shuffle; send to 'Living Room'" -o playlist-tez.json -v
-    ```
-
-- **Owner address (ENS → ETH), shuffled**
-  - Format:
-    ```bash
-    npm run dev -- chat "Create a playlist from address <ens> (<n> items); [shuffle|mix]; [send/push to my device]" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Create a playlist from address reas.eth (5 items); shuffle; push to my device" -o playlist-ens.json -v
-    ```
-
-- **Owner address (Tezos tz1), shuffled**
-  - Format:
-    ```bash
-    npm run dev -- chat "Create a playlist from Tezos address <tz1...> (<n> items); [shuffle|mix]; [send to device]" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Create a playlist from Tezos address tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb (3 items); mix them up; send to device" -o playlist-tz1.json -v
-    ```
-
-- **Feed playlists (named), shuffled**
-  - Format:
-    ```bash
-    npm run dev -- chat "[Create|Build] a playlist from feed '<name>' (<n> items); shuffle; [send to device]" -o <output.json> -v
-    ```
-  - Examples:
-    ```bash
-    npm run dev -- chat "Create a playlist from feed 'Unsupervised' (3 items); shuffle; send to device" -o playlist-feed1.json -v
-    npm run dev -- chat "Build a playlist from feed 'Unsupervised' (3 items); shuffle; send to device" -o playlist-feed2.json -v
-    ```
-
-- **Mixed in one prompt (ETH + TEZ + feed + ENS), shuffled, named device**
-  - Format:
-    ```bash
-    npm run dev -- chat "Compose a playlist: Tezos <KT1...> tokens <id>, <id>; Ethereum <0x...> tokens <id>, <id>; <n> from '<feed>'; <m> from <ens>; shuffle; send to '<device>'" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Compose a playlist: Tezos KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ tokens 22, 8; Ethereum 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 tokens 52932, 52457; 3 from 'Unsupervised'; 1 from reas.eth; shuffle; send to 'Living Room'" -o playlist-mixed.json -v
-    ```
-
-- **Multiple instructions in one prompt (incremental), shuffled**
-  - Format:
-    ```bash
-    npm run dev -- chat "Create a playlist from Ethereum contract <0x...> tokens <id>, <id>; then add <n> from '<feed>'; then add <m> from <ens>; shuffle; [send/push to my device]" -o <output.json> -v
-    ```
-  - Example:
-    ```bash
-    npm run dev -- chat "Create a playlist from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 tokens 52932, 52457; then add 2 from 'Unsupervised'; then add 1 from reas.eth; shuffle; push to my device" -o playlist-multi.json -v
-    ```
-
-- **Synonym variants for the same ETH case**
-  - Format:
-    ```bash
-    npm run dev -- chat "[Build|Create|Compose] a playlist from Ethereum contract <0x...> tokens <id> and <id>; send to device" -o <output.json> -v
-    ```
-  - Examples:
-    ```bash
-    npm run dev -- chat "Build a playlist from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 tokens 52932 and 52457; send to device" -o playlist-eth-build.json -v
-    npm run dev -- chat "Create a playlist from Ethereum contract 0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0 tokens 52932 and 52457; send to device" -o playlist-eth-create.json -v
-    ```
-
-- **Device targeting: generic vs named**
-  - Format:
-    ```bash
-    npm run dev -- chat "Compose a playlist from <ens/address> (<n> items); send to device" -o <output.json> -v
-    npm run dev -- chat "Compose a playlist from <ens/address> (<n> items); send to '<device>'" -o <output.json> -v
-    ```
-  - Examples:
-    ```bash
-    npm run dev -- chat "Compose a playlist from reas.eth (3 items); send to device" -o playlist-generic-device.json -v
-    npm run dev -- chat "Compose a playlist from reas.eth (3 items); send to 'Living Room'" -o playlist-named-device.json -v
-    ```

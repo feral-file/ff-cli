@@ -3,7 +3,6 @@ import path from 'path';
 import os from 'os';
 import type {
   Config,
-  ModelConfig,
   BrowserConfig,
   PlaylistConfig,
   FeedConfig,
@@ -14,7 +13,7 @@ import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
 } from './utilities/playlist-signing-role';
-import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
+import { configuredFF1Devices } from './utilities/config-placeholders';
 
 // One-shot legacy config migration: copy `$XDG_CONFIG_HOME/ff1/config.json` to
 // `$XDG_CONFIG_HOME/ff-cli/config.json` on first read after upgrading from
@@ -60,63 +59,13 @@ export function getConfigPaths(): { localPath: string; userPath: string } {
  * Load configuration from config.json or environment variables
  * Priority: config.json > .env > defaults
  *
- * @returns {Object} Configuration object with model settings
- * @returns {string} returns.defaultModel - Name of the default model to use
- * @returns {Object} returns.models - Available models configuration
+ * @returns {Object} Configuration object
  * @returns {number} returns.defaultDuration - Default duration per item in seconds
  */
 function loadConfig(): Config {
   const { localPath, userPath } = getConfigPaths();
 
-  // Default configuration supporting Grok as default
   const defaultConfig: Config = {
-    defaultModel: process.env.DEFAULT_MODEL || 'claude',
-    models: {
-      claude: {
-        apiKey: process.env.ANTHROPIC_API_KEY || '',
-        baseURL: 'https://api.anthropic.com/v1/',
-        model: 'claude-sonnet-4-6',
-        availableModels: ['claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
-        timeout: 30000,
-        maxRetries: 3,
-        temperature: 0.3,
-        maxTokens: 4000,
-        supportsFunctionCalling: true,
-      },
-      grok: {
-        apiKey: process.env.GROK_API_KEY || '',
-        baseURL: process.env.GROK_API_BASE_URL || 'https://api.x.ai/v1',
-        model: process.env.GROK_MODEL || 'grok-beta',
-        availableModels: ['grok-beta', 'grok-2-1212', 'grok-2-vision-1212'],
-        timeout: parseInt(process.env.TIMEOUT || '30000', 10),
-        maxRetries: parseInt(process.env.MAX_RETRIES || '3', 10),
-        temperature: parseFloat(process.env.TEMPERATURE || '0.3'),
-        maxTokens: parseInt(process.env.MAX_TOKENS || '4000', 10),
-        supportsFunctionCalling: true,
-      },
-      gpt: {
-        apiKey: process.env.OPENAI_API_KEY || '',
-        baseURL: 'https://api.openai.com/v1',
-        model: 'gpt-4.1',
-        availableModels: ['gpt-4.1', 'gpt-4.1-mini', 'gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-        timeout: 30000,
-        maxRetries: 3,
-        temperature: 0.3,
-        maxTokens: 4000,
-        supportsFunctionCalling: true,
-      },
-      gemini: {
-        apiKey: process.env.GEMINI_API_KEY || '',
-        baseURL: 'https://generativelanguage.googleapis.com/v1beta/openai/',
-        model: 'gemini-2.5-flash',
-        availableModels: ['gemini-2.5-flash-lite', 'gemini-2.5-flash', 'gemini-flash-lite-latest'],
-        timeout: 30000,
-        maxRetries: 3,
-        temperature: 0.3,
-        maxTokens: 4000,
-        supportsFunctionCalling: true,
-      },
-    },
     defaultDuration: parseInt(process.env.DEFAULT_DURATION || '10', 10),
     browser: {
       timeout: parseInt(process.env.BROWSER_TIMEOUT || '90000', 10),
@@ -135,22 +84,10 @@ function loadConfig(): Config {
     try {
       const fileConfig = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as Partial<Config>;
 
-      // Deep merge models configuration
-      const mergedModels = { ...defaultConfig.models };
-      if (fileConfig.models) {
-        Object.keys(fileConfig.models).forEach((modelName) => {
-          mergedModels[modelName] = {
-            ...(defaultConfig.models[modelName] || {}),
-            ...fileConfig.models![modelName],
-          };
-        });
-      }
-
       // Merge with defaults, file config takes precedence
       return {
         ...defaultConfig,
         ...fileConfig,
-        models: mergedModels,
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -317,84 +254,17 @@ export function getFF1DeviceConfig(): FF1DeviceConfig {
 }
 
 /**
- * Get configuration for a specific model
+ * Validate configuration
  *
- * @param {string} [modelName] - Name of the model (defaults to defaultModel from config)
- * @returns {Object} Model configuration
- * @returns {string} returns.apiKey - API key for the model
- * @returns {string} returns.baseURL - Base URL for the API
- * @returns {string} returns.model - Model name/identifier
- * @returns {number} returns.timeout - Request timeout in milliseconds
- * @returns {number} returns.maxRetries - Maximum number of retries
- * @returns {number} returns.temperature - Temperature for generation
- * @returns {number} returns.maxTokens - Maximum tokens for generation
- * @returns {boolean} returns.supportsFunctionCalling - Whether model supports function calling
- * @throws {Error} If model is not configured or doesn't support function calling
- */
-export function getModelConfig(modelName?: string): ModelConfig {
-  const config = getConfig();
-  const selectedModel = modelName || config.defaultModel;
-
-  if (!config.models[selectedModel]) {
-    throw new Error(
-      `Model "${selectedModel}" is not configured. Available models: ${Object.keys(config.models).join(', ')}`
-    );
-  }
-
-  const modelConfig = config.models[selectedModel];
-
-  if (!modelConfig.supportsFunctionCalling) {
-    throw new Error(`Model "${selectedModel}" does not support function calling`);
-  }
-
-  const normalizedBaseURL = modelConfig.baseURL?.replace(/\/+$/, '');
-
-  return {
-    ...modelConfig,
-    baseURL: normalizedBaseURL,
-    defaultDuration: config.defaultDuration,
-  };
-}
-
-/**
- * Validate configuration for a specific model
- *
- * @param {string} [modelName] - Name of the model to validate
  * @returns {Object} Validation result
  * @returns {boolean} returns.valid - Whether the configuration is valid
  * @returns {Array<string>} returns.errors - List of validation errors
  */
-export function validateConfig(modelName?: string): ValidationResult {
+export function validateConfig(): ValidationResult {
   const errors: string[] = [];
 
   try {
     const config = getConfig();
-    const selectedModel = modelName || config.defaultModel;
-
-    if (!config.models[selectedModel]) {
-      errors.push(
-        `Model "${selectedModel}" is not configured. Available: ${Object.keys(config.models).join(', ')}`
-      );
-      return { valid: false, errors };
-    }
-
-    const modelConfig = config.models[selectedModel];
-
-    if (isMissingConfigValue(modelConfig.apiKey)) {
-      errors.push(`API key for "${selectedModel}" is missing or not configured`);
-    }
-
-    if (!modelConfig.baseURL) {
-      errors.push(`Base URL for "${selectedModel}" is missing`);
-    }
-
-    if (!modelConfig.model) {
-      errors.push(`Model identifier for "${selectedModel}" is not set`);
-    }
-
-    if (!modelConfig.supportsFunctionCalling) {
-      errors.push(`Model "${selectedModel}" does not support function calling (required)`);
-    }
 
     // Validate browser configuration
     if (config.browser) {
@@ -490,14 +360,4 @@ export async function createSampleConfig(targetPath?: string): Promise<string> {
   fs.writeFileSync(configPath, exampleConfig, 'utf-8');
 
   return configPath;
-}
-
-/**
- * List all available models
- *
- * @returns {Array<string>} List of available model names
- */
-export function listAvailableModels(): string[] {
-  const config = getConfig();
-  return Object.keys(config.models);
 }

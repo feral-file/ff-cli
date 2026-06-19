@@ -1,7 +1,7 @@
 {
   "name": "@feralfile/cli",
-  "version": "1.6.0",
-  "description": "CLI for building DP-1 playlists of digital art using AI (Claude, Grok, ChatGPT, Gemini)",
+  "version": "2.0.0",
+  "description": "CLI for building, signing, and playing DP-1 playlists of digital art on Feral File devices",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/feral-file/ff-cli.git"
@@ -51,7 +51,7 @@
     "nft",
     "playlist",
     "dp1",
-    "grok",
+    "feralfile",
     "cli"
   ],
   "author": "",
@@ -65,7 +65,6 @@
     "dp1-js": "2.0.0",
     "ff1": "^1.0.0",
     "fuzzysort": "^3.1.0",
-    "openai": "^4.58.1",
     "viem": "^2.38.2"
   },
   "devDependencies": {

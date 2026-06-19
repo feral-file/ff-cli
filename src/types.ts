@@ -2,19 +2,6 @@
  * Type definitions for ff-cli
  */
 
-export interface ModelConfig {
-  apiKey: string;
-  baseURL: string;
-  model: string;
-  availableModels?: string[];
-  timeout: number;
-  maxRetries: number;
-  temperature: number;
-  maxTokens: number;
-  supportsFunctionCalling: boolean;
-  defaultDuration?: number;
-}
-
 export interface BrowserConfig {
   timeout: number;
   sanitizationLevel: string | number;
@@ -53,10 +40,6 @@ export interface IndexerConfig {
 }
 
 export interface Config {
-  defaultModel: string;
-  models: {
-    [key: string]: ModelConfig;
-  };
   defaultDuration: number;
   browser: BrowserConfig;
   feed?: FeedConfig; // Legacy
@@ -137,8 +120,6 @@ export interface BuildPlaylistParams {
 export interface BuildPlaylistOptions {
   verbose?: boolean;
   outputPath?: string;
-  modelName?: string;
-  interactive?: boolean;
   deviceName?: string;
 }
 

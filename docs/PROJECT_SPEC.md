@@ -15,7 +15,9 @@ It is derived from the behavior and interfaces implemented in this repository as
 - Project: `ff-cli`
 - Type: Node.js CLI
 - System role: a control and integration surface for FF1 and DP-1 workflows
-- Primary purpose: turn user intent or structured parameters into valid DP-1 playlists, then validate them and optionally sign, publish, and send them through FF1 and feed paths
+- Primary purpose: turn resolved sources or structured parameters into valid DP-1 playlists deterministically, then validate them and optionally sign, publish, and play them through FF1 and feed paths
+
+There is no built-in natural-language interface and no model orchestration. Natural language belongs in the user's coding agent (Claude Code, Codex), which drives ff-cli's deterministic commands via the `ff-control` skill. ff-cli requires no LLM API key.
 
 In the Feral File architecture bands, `ff-cli` sits primarily in the presentation and control layer. It is not the canonical source of truth for exhibitions, ownership, device runtime, or protocol evolution. It is a practical operator and developer surface that bridges those systems.
 
@@ -28,7 +30,7 @@ Its value is reducing friction in the publish-to-play path:
 - assemble playlists quickly
 - keep outputs DP-1 conformant
 - make FF1 playback and feed publishing easier to exercise
-- provide deterministic tooling around model-assisted workflows
+- provide deterministic tooling that agents and scripts can drive reliably
 
 The CLI should strengthen the Gold Path, not invent a parallel product model.
 
@@ -44,11 +46,11 @@ Current likely users:
 Primary use cases:
 
 - build a playlist from structured JSON inputs
-- build a playlist from natural-language prompts using model orchestration plus deterministic tools
+- resolve a marketplace URL, on-chain coordinates, or a wallet address into a playlist (`find`)
 - validate or verify a local or hosted DP-1 playlist
 - sign a playlist with an Ed25519 key
 - publish a validated playlist to a configured feed server
-- send a playlist or direct media URL to a configured FF1 device
+- play a playlist or direct media URL on a configured FF1 device
 - manage local config and FF1 SSH access
 - exercise compatibility checks against FF1 OS versions before risky commands
 
@@ -100,9 +102,9 @@ Long-term interoperability should continue to reduce hard infrastructure couplin
 Based on the code today, the CLI is responsible for:
 
 - loading configuration from `config.json`, `.env`, and defaults, with `config.json` taking precedence
-- parsing natural-language requests into structured playlist requirements and settings
-- orchestrating tool calls for feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and sending
-- supporting a deterministic non-AI build path from structured JSON
+- resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
+- running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
+- supporting a deterministic build path from structured JSON (`build`)
 - building DP-1 playlist envelopes from NFT metadata or direct media URLs
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
@@ -116,7 +118,7 @@ Based on the code today, the CLI is responsible for:
 
 - command-line UX and command routing
 - local config loading and validation
-- intent parsing and orchestration glue
+- source resolution (`find`) and structured-params handling (`build`)
 - deterministic playlist assembly, verification, and signing helpers
 - device and feed integration calls from the client side
 
@@ -132,8 +134,8 @@ Based on the code today, the CLI is responsible for:
 
 - The CLI may assemble, validate, and transmit DP-1 objects, but it should not silently fork the protocol.
 - The CLI may call feed and device endpoints, but it should not become their compatibility abstraction layer of last resort.
-- The CLI may use models for orchestration, but deterministic utilities remain the source of truth for output correctness.
-- Trust-sensitive correctness must stay vendor-neutral and portable. The CLI can use cloud APIs for model orchestration, but the trust path cannot depend on cloud-specific guarantees.
+- Deterministic utilities remain the source of truth for output correctness; the CLI does not interpret natural language or orchestrate models.
+- Trust-sensitive correctness must stay vendor-neutral and portable; the trust path cannot depend on cloud-specific guarantees.
 - Current implementation note: some retrieval paths still use Feral File-operated services directly, so portability here is an intended direction rather than a fully achieved property.
 
 ## Functional shape
@@ -146,9 +148,9 @@ Today the CLI groups into these workflow areas:
 - `status`
 - `config init|show|validate`
 
-### Build and orchestration
+### Build
 
-- `chat`
+- `find`
 - `build`
 
 ### DP-1 output integrity
@@ -168,11 +170,11 @@ Today the CLI groups into these workflow areas:
 
 ## Deterministic-first behavior
 
-The CLI supports model-assisted workflows, but the implementation posture should remain deterministic-first:
+The CLI is deterministic end to end. There is no natural-language interface; any natural-language layer lives in the user's coding agent, which drives these commands:
 
-- models interpret intent
-- utilities perform the real data fetching, playlist building, validation, signing, and delivery work
-- invalid or malformed outputs should fail validation rather than being accepted because they were model-produced
+- commands map directly to source resolution, data fetching, playlist building, validation, signing, and delivery
+- utilities perform the real work and are the source of truth for output correctness
+- invalid or malformed outputs fail validation rather than being passed through
 
 ## Trust, protocol, and rights assumptions
 
@@ -216,8 +218,8 @@ The current repo verification path is:
 npm run lint:fix
 npm test
 npm run build
-ANTHROPIC_API_KEY=dummy node dist/index.js validate examples/sample-playlist.json
-ANTHROPIC_API_KEY=dummy node dist/index.js config validate
+node dist/index.js validate examples/sample-playlist.json
+node dist/index.js config validate
 ```
 
 ## Open questions
