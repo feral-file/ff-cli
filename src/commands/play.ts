@@ -24,11 +24,19 @@ const { signPlaylist } = require('../utilities/playlist-signer');
  * can redirect the user instead of silently wrapping, say, an Art Blocks
  * collection *page* as a web item. Returns null for anything `play` should
  * handle itself (plain URLs and file paths parse to null here).
+ *
+ * A recognized-but-`unsupported` result (e.g. a legacy Art Blocks
+ * `/projects/{id}` URL, or an unsupported-chain OpenSea link) is also a
+ * discovery input — it's a marketplace URL, not a playable file — so it is
+ * redirected to `find` too, which surfaces the specific reason.
  */
 export function describeDiscoveryInput(source: string): string | null {
   const parsed = parseFindInput(source);
-  if (!parsed || parsed.kind === 'unsupported') {
+  if (!parsed) {
     return null;
+  }
+  if (parsed.kind === 'unsupported') {
+    return 'a marketplace URL';
   }
   switch (parsed.kind) {
     case 'token':

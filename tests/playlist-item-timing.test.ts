@@ -111,6 +111,14 @@ describe('detectMimeType / isInteractiveWeb', () => {
     assert.equal(detectMimeType(''), '');
   });
 
+  test('detectMimeType ignores query strings and fragments (extension from pathname)', () => {
+    // A dot inside ?sig=a.b or #v=1 must not be mistaken for the extension.
+    assert.equal(detectMimeType('https://e.com/art.png?sig=a.b'), 'image/png');
+    assert.equal(detectMimeType('https://e.com/art.png#v=1'), 'image/png');
+    assert.equal(detectMimeType('https://e.com/v.mp4?X-Amz-Credential=a.b'), 'video/mp4');
+    assert.equal(detectMimeType('https://e.com/v.mp4#t=1'), 'video/mp4');
+  });
+
   test('isInteractiveWeb detects HTML by MIME hint or extension, not media', () => {
     assert.equal(isInteractiveWeb('text/html', 'https://e.com/x'), true);
     assert.equal(isInteractiveWeb(undefined, 'https://e.com/page.html'), true);
@@ -130,6 +138,20 @@ describe('item builders honor auto timing', () => {
     const item = buildUrlItem('https://example.com/art.png');
     assert.equal(typeof item.duration, 'number');
     assert.equal(item.display.loop, undefined);
+  });
+
+  test('buildUrlItem: signed image URL (dotted query) still gets a numeric duration', () => {
+    // Regression: a `.png?sig=a.b` URL must not be mistaken for an interactive
+    // web page and lose its static-image duration.
+    const item = buildUrlItem('https://example.com/art.png?sig=a.b');
+    assert.equal(typeof item.duration, 'number');
+    assert.equal(item.display.loop, undefined);
+  });
+
+  test('buildUrlItem: signed video URL (dotted query) stays time-based (no duration)', () => {
+    const item = buildUrlItem('https://example.com/clip.mp4?X-Amz-Credential=a.b');
+    assert.equal('duration' in item, false);
+    assert.equal(item.display.loop, false);
   });
 
   test('buildUrlItem: .html URL plays open-ended (no duration)', () => {
