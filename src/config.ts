@@ -15,43 +15,10 @@ import {
 } from './utilities/playlist-signing-role';
 import { configuredFF1Devices } from './utilities/config-placeholders';
 
-// One-shot legacy config migration: copy `$XDG_CONFIG_HOME/ff1/config.json` to
-// `$XDG_CONFIG_HOME/ff-cli/config.json` on first read after upgrading from
-// `ff1-cli`. The check is cheap (two fs.existsSync calls) and the
-// `migrationChecked` flag keeps it to one attempt per process.
-//
-// Remove this block after a release cycle once telemetry suggests no remaining
-// users still have only the legacy path populated.
-let migrationChecked = false;
-
-function migrateLegacyConfigIfNeeded(newUserPath: string): void {
-  if (migrationChecked) {
-    return;
-  }
-  migrationChecked = true;
-
-  const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
-  const legacyUserPath = path.join(configBase, 'ff1', 'config.json');
-
-  if (!fs.existsSync(legacyUserPath) || fs.existsSync(newUserPath)) {
-    return;
-  }
-
-  try {
-    fs.mkdirSync(path.dirname(newUserPath), { recursive: true });
-    fs.copyFileSync(legacyUserPath, newUserPath);
-    console.log(`Migrated config from ${legacyUserPath} to ${newUserPath}`);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.warn(`Warning: Failed to migrate legacy config from ${legacyUserPath}: ${message}`);
-  }
-}
-
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
   const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
   const userPath = path.join(configBase, 'ff-cli', 'config.json');
-  migrateLegacyConfigIfNeeded(userPath);
   return { localPath, userPath };
 }
 
