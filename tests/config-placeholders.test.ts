@@ -34,16 +34,7 @@ function withTempConfig<T>(config: Record<string, unknown>, fn: (dir: string) =>
 
 function baseConfig(devices: Array<{ name?: string; host: string }>): Record<string, unknown> {
   return {
-    defaultModel: 'grok',
     defaultDuration: 10,
-    models: {
-      grok: {
-        apiKey: 'xai-test',
-        baseURL: 'https://api.x.ai/v1',
-        model: 'grok-beta',
-        supportsFunctionCalling: true,
-      },
-    },
     browser: {
       timeout: 90000,
       sanitizationLevel: 'medium',

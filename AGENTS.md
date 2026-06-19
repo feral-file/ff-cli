@@ -42,7 +42,7 @@ TDD is the default discipline for behavior changes. For small, low-risk fixes, t
 
 ## Repo-specific implementation rules
 
-- Docs may only be updated in `/docs/README.md`, `/docs/FUNCTION_CALLING.md`, `/docs/EXAMPLES.md`, `/docs/CONFIGURATION.md`, `/docs/RELEASING.md`, or `/docs/PROJECT_SPEC.md`.
+- Docs may only be updated in `/docs/README.md`, `/docs/EXAMPLES.md`, `/docs/CONFIGURATION.md`, `/docs/RELEASING.md`, or `/docs/PROJECT_SPEC.md`.
 - Do not add new root or `/docs` process documents beyond the approved set above.
 - Only update docs when behavior, usage, operations, or user-facing output changes.
 - Config priority remains `config.json` > `.env` > defaults. Validate config before use.
@@ -85,7 +85,7 @@ For behavior changes:
 Required verification commands:
 
 ```bash
-ANTHROPIC_API_KEY=dummy npm run verify
+npm run verify
 ```
 
 This is the same non-mutating entrypoint used by `.github/workflows/ci.yml` after `npm ci` on Node.js 22. Use `npm run lint:fix` only as an optional mutating cleanup step, then review and verify the resulting edits before committing.

@@ -32,15 +32,6 @@ function writeValidBaseConfig(tempDir: string, playlist?: Record<string, unknown
     join(tempDir, 'config.json'),
     JSON.stringify(
       {
-        defaultModel: 'grok',
-        models: {
-          grok: {
-            apiKey: 'test-key',
-            baseURL: 'https://api.x.ai/v1',
-            model: 'grok-beta',
-            supportsFunctionCalling: true,
-          },
-        },
         playlist,
       },
       null,

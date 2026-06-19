@@ -1,18 +1,4 @@
 {
-  "defaultModel": "grok",
-  "models": {
-    "grok": {
-      "apiKey": "dummy",
-      "baseURL": "https://api.x.ai/v1",
-      "model": "grok-beta",
-      "availableModels": ["grok-beta", "grok-2-1212", "grok-2-vision-1212"],
-      "timeout": 30000,
-      "maxRetries": 3,
-      "temperature": 0.3,
-      "maxTokens": 4000,
-      "supportsFunctionCalling": true
-    }
-  },
   "defaultDuration": 10,
   "browser": {
     "timeout": 90000,

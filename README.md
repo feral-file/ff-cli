@@ -4,7 +4,7 @@ A small Node.js CLI for building DP-1 playlists of digital art.
 
 **Runtime:** Node.js 22 or newer (matches CI and the `dp1-js` dependency). That engine floor is a **breaking** change if you previously used Node 18 or 20—check the **GitHub Release** for the version you move to; release authors follow `docs/RELEASING.md` so the notes stay explicit.
 
-ff-cli turns a simple prompt into a DP-1–conformant playlist you can preview on an Art Computer. The model orchestrates; deterministic tools do the real work (schema validation, indexing, JSON‑LD). If something comes back invalid, validation rejects it and we loop until it’s right.
+ff-cli is a set of deterministic commands for building DP-1–conformant playlists and playing them on an Art Computer: schema validation, indexing, JSON‑LD, signing, and device delivery. There's no built-in chat — natural language belongs in your coding agent (Claude Code, Codex), which drives ff-cli through the `ff-control` skill (see [Use with Claude Code](#use-with-claude-code)). No LLM API key required.
 
 ## Install
 
@@ -24,16 +24,14 @@ Installs a prebuilt binary for macOS/Linux (no Node.js required).
 
 ```bash
 npx @feralfile/cli setup
-npx @feralfile/cli chat
+npx @feralfile/cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
 ```
 
 ## Quick Start
 
-**Set your LLM API key first (default Claude):** `export ANTHROPIC_API_KEY='sk-ant-your-api-key-here'`
-
 ```bash
 ff-cli setup
-ff-cli chat
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
 ff-cli play "https://example.com/video.mp4" --skip-verify
 ```
 
@@ -96,12 +94,10 @@ Codex will surface it when you ask to build a playlist, play an artwork or URL o
 
 ## Dev Quick Start
 
-**Set your LLM API key first (default Claude):** `export ANTHROPIC_API_KEY='sk-ant-your-api-key-here'`
-
 ```bash
 npm ci
 npm run dev -- setup
-npm run dev -- chat
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
 npm run dev -- play "https://example.com/video.mp4" --skip-verify
 ```
 
@@ -109,16 +105,15 @@ npm run dev -- play "https://example.com/video.mp4" --skip-verify
 
 - Getting started and usage: `./docs/README.md`
 - Configuration: `./docs/CONFIGURATION.md`
-- Function calling architecture: `./docs/FUNCTION_CALLING.md`
 - Examples: `./docs/EXAMPLES.md`
 - SSH access: `ff-cli ssh enable|disable` in `./docs/README.md`
 
 ## Verification
 
-GitHub Actions runs `.github/workflows/ci.yml` for pull requests, pushes to `main`/`master`, and reusable `workflow_call` jobs. CI uses Node.js 22, installs dependencies with `npm ci`, sets `ANTHROPIC_API_KEY=dummy`, and runs the repo-wide verification entrypoint:
+GitHub Actions runs `.github/workflows/ci.yml` for pull requests, pushes to `main`/`master`, and reusable `workflow_call` jobs. CI uses Node.js 22, installs dependencies with `npm ci`, and runs the repo-wide verification entrypoint:
 
 ```bash
-ANTHROPIC_API_KEY=dummy npm run verify
+npm run verify
 ```
 
 Run the same command locally before opening a PR. It checks formatting, lint, tests, TypeScript build, playlist validation smoke, and config validation smoke without mutating source files.

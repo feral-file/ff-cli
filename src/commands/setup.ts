@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { findExistingDeviceEntry } from '../utilities/device-lookup';
 import { upsertDevice } from '../utilities/device-upsert';
-import { getConfig, listAvailableModels } from '../config';
 import { ensureConfigFile, isMissingConfigValue, readConfigFile } from './helpers/config-files';
 import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
@@ -25,90 +24,11 @@ export const setupCommand = new Command('setup')
       }
 
       const config = await readConfigFile(configPath);
-      const mergedDefaults = getConfig();
-      // Show every known provider in the menu (in-code defaults first, then any
-      // custom providers the user has added to the file) so adding a new provider
-      // to defaults shows up for existing users without rerunning createSampleConfig.
-      const modelNames = Array.from(
-        new Set([...listAvailableModels(), ...Object.keys(config.models || {})])
-      );
-
-      if (modelNames.length === 0) {
-        console.error(chalk.red('No models found in config.json'));
-        process.exit(1);
-      }
 
       console.log(chalk.blue('\nff-cli setup\n'));
 
       prompt = createPrompt();
       const ask = prompt.ask;
-
-      const currentModel =
-        config.defaultModel && modelNames.includes(config.defaultModel)
-          ? config.defaultModel
-          : modelNames[0];
-
-      let selectedModel = currentModel;
-      while (true) {
-        const modelAnswer = await ask(
-          `Default model (${modelNames.join(', ')}) [${currentModel}]: `
-        );
-        if (!modelAnswer) {
-          selectedModel = currentModel;
-          break;
-        }
-        if (modelNames.includes(modelAnswer)) {
-          selectedModel = modelAnswer;
-          break;
-        }
-        console.log(chalk.red(`Unknown model: ${modelAnswer}`));
-      }
-
-      config.defaultModel = selectedModel;
-      if (!config.models) {
-        config.models = {};
-      }
-      // Seed missing entries from in-code defaults so baseURL/model are populated,
-      // but blank the apiKey so the user is prompted instead of silently inheriting
-      // an env-derived value.
-      const providerDefaults = mergedDefaults.models[selectedModel];
-      const selectedModelConfig =
-        config.models[selectedModel] ||
-        (providerDefaults
-          ? { ...providerDefaults, apiKey: '' }
-          : {
-              apiKey: '',
-              baseURL: '',
-              model: '',
-              timeout: 0,
-              maxRetries: 0,
-              temperature: 0,
-              maxTokens: 0,
-              supportsFunctionCalling: true,
-            });
-
-      const hasApiKeyForModel = !isMissingConfigValue(selectedModelConfig.apiKey);
-      const keyHelpUrls: Record<string, string> = {
-        grok: 'https://console.x.ai/',
-        gpt: 'https://platform.openai.com/api-keys',
-        gemini: 'https://aistudio.google.com/app/apikey',
-        claude: 'https://console.anthropic.com/settings/keys',
-      };
-      if (!hasApiKeyForModel) {
-        const helpUrl = keyHelpUrls[selectedModel];
-        if (helpUrl) {
-          console.log(chalk.dim(helpUrl));
-        }
-      }
-
-      const apiKeyPrompt = hasApiKeyForModel
-        ? `API key for ${selectedModel} (leave blank to keep current): `
-        : `API key for ${selectedModel} (optional, only needed for chat): `;
-      const apiKeyAnswer = await ask(apiKeyPrompt);
-      if (apiKeyAnswer) {
-        selectedModelConfig.apiKey = apiKeyAnswer;
-      }
-      config.models[selectedModel] = selectedModelConfig;
 
       const currentKey = config.playlist?.privateKey || '';
       const currentRole = config.playlist?.role || '';
@@ -249,7 +169,6 @@ export const setupCommand = new Command('setup')
       console.log(chalk.green('\nSetup complete'));
       console.log(chalk.dim(`   Config: ${configPath}`));
 
-      const hasApiKey = !isMissingConfigValue(config.models[selectedModel]?.apiKey);
       const hasSigningKey = !isMissingConfigValue(config.playlist?.privateKey || '');
       const hasDevice = configuredFF1Devices(config.ff1Devices?.devices || []).length > 0;
 
@@ -262,11 +181,8 @@ export const setupCommand = new Command('setup')
           console.log(chalk.yellow('  • Add an FF1 device host'));
         }
       }
-      if (!hasApiKey) {
-        console.log(chalk.dim(`\nTo use ff-cli chat, add an API key for ${selectedModel}`));
-      }
 
-      console.log(chalk.dim('\nRun: ff-cli play'));
+      console.log(chalk.dim('\nRun: ff-cli play <url-or-playlist>'));
     } catch (error) {
       console.error(chalk.red('\nSetup failed:'), (error as Error).message);
       process.exit(1);

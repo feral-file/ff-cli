@@ -102,8 +102,6 @@ jobs:
       # OIDC token used by `npm publish --provenance` to authenticate against
       # the trusted-publisher configured for @feralfile/cli on npmjs.org.
       id-token: write
-    env:
-      ANTHROPIC_API_KEY: release-ci
     steps:
       - uses: actions/checkout@v5
 

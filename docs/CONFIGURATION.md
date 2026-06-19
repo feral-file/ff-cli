@@ -21,34 +21,9 @@ npm run dev -- config show
 
 ## Top‑level fields
 
-- **defaultModel** (string)
-  - The default AI model key to use. Must match a key under `models`.
-  - Used by orchestration to pick API, timeouts, and model identifier.
-
 - **defaultDuration** (number, seconds)
   - Default per‑item display duration for media without an intrinsic runtime (images, code-based works). Falls back to 10s when unset.
   - Does NOT apply to video/audio items: with no explicit duration those are emitted without `duration` and with `display.loop: false`, so a DP-1 player advances at end-of-stream (§4.1) — the media plays its natural length.
-
-## models
-
-Each key under `models` defines a model configuration used by the AI orchestrator.
-
-- `<modelName>.apiKey` (string): API key for the provider.
-- `<modelName>.baseURL` (string): Base API URL.
-- `<modelName>.model` (string): Model identifier (e.g., `grok-beta`, `gpt-4o`).
-- `<modelName>.availableModels` (string[], optional): Display/help only.
-- `<modelName>.timeout` (number, ms): HTTP timeout for requests.
-- `<modelName>.maxRetries` (number): Retry count for requests.
-- `<modelName>.temperature` (number): Generation temperature.
-- `<modelName>.maxTokens` (number): Token cap.
-- `<modelName>.supportsFunctionCalling` (boolean): Must be true; otherwise the CLI rejects the model.
-
-Environment variable helpers:
-
-- Anthropic (Claude): `ANTHROPIC_API_KEY`
-- Grok: `GROK_API_KEY`, `GROK_MODEL`, `GROK_API_BASE_URL`
-- OpenAI: `OPENAI_API_KEY`
-- Gemini: `GEMINI_API_KEY`
 
 ## browser
 
@@ -182,15 +157,6 @@ Minimal `config.json` example (selected fields):
 
 ```json
 {
-  "defaultModel": "claude",
-  "models": {
-    "claude": {
-      "apiKey": "sk-ant-your-api-key-here",
-      "baseURL": "https://api.anthropic.com/v1/",
-      "model": "claude-sonnet-4-6",
-      "supportsFunctionCalling": true
-    }
-  },
   "defaultDuration": 10,
   "playlist": {
     "privateKey": "your_ed25519_private_key_hex_or_base64_here",

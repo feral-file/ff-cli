@@ -25,17 +25,43 @@ function isTimeBasedMedia(mimeType, sourceUrl) {
 }
 
 /**
+ * isInteractiveWeb reports whether an item is an interactive web page (HTML).
+ *
+ * Such sources have no intrinsic runtime AND no end-of-stream event, so they
+ * are timed differently from both video/audio (which end) and static images
+ * (which need a display duration): they play open-ended. The FF1 player
+ * renders these in a sandboxed iframe.
+ *
+ * Mirrors isTimeBasedMedia's two-signal approach: an explicit `text/html`
+ * MIME hint or a `.html`/`.htm` URL extension qualifies.
+ *
+ * @param {string} [mimeType] - MIME type hint, if any
+ * @param {string} [sourceUrl] - Item source URL, used as an extension fallback
+ * @returns {boolean} True when the source is an interactive HTML page
+ */
+function isInteractiveWeb(mimeType, sourceUrl) {
+  const candidates = [String(mimeType || '').toLowerCase(), detectMimeType(sourceUrl)];
+  return candidates.some((mime) => mime.startsWith('text/html'));
+}
+
+/**
  * applyItemTiming sets a DP1 item's playback timing per DP-1 §4.1.
  *
  * Invariant this function owns: an explicit numeric `duration` always wins
- * and is stamped as-is. When `duration` is undefined/null ("auto"), a
- * time-based source (video/audio) gets NO duration and `display.loop: false`,
- * so a conformant player MUST advance at end-of-stream — the media plays its
- * natural length. Static and code-based sources fall back to the configured
- * `defaultDuration` because they have no intrinsic runtime to play out.
+ * and is stamped as-is. When `duration` is undefined/null ("auto"):
+ *   - a time-based source (video/audio) gets NO duration and
+ *     `display.loop: false`, so a conformant player MUST advance at
+ *     end-of-stream — the media plays its natural length;
+ *   - an interactive web page (HTML) gets NO duration either, but for the
+ *     opposite reason: it has no end-of-stream event, so a conformant player
+ *     parks on it indefinitely (the generative/interactive art keeps running);
+ *   - static and code-based sources fall back to the configured
+ *     `defaultDuration` because they have no intrinsic runtime to play out.
  *
  * Do not re-introduce an unconditional duration here: stamping a default on
- * video items silently truncates or pads them (the bug this fixed).
+ * video items silently truncates or pads them, and stamping one on an HTML
+ * page cuts the artwork off and restarts it every `defaultDuration` seconds
+ * (the bugs this guards against).
  *
  * @param {Object} item - DP1 playlist item (mutated in place)
  * @param {Object} mediaHints - Media signals for the time-based check
@@ -52,6 +78,12 @@ function applyItemTiming(item, mediaHints = {}, duration) {
 
   if (isTimeBasedMedia(mediaHints.mimeType, mediaHints.sourceUrl)) {
     item.display = { ...(item.display || {}), loop: false };
+    return item;
+  }
+
+  if (isInteractiveWeb(mediaHints.mimeType, mediaHints.sourceUrl)) {
+    // No duration: an open-ended interactive page should play until the
+    // playlist advances for another reason, not on a fixed timer.
     return item;
   }
 
@@ -535,20 +567,24 @@ function validateDP1Playlist(playlist) {
 }
 
 /**
- * Detect MIME type from URL or file extension
+ * Detect MIME type from a URL or file extension.
  *
- * Analyzes URL to determine appropriate MIME type for media content.
- * Supports images, videos, audio, and 3D models.
+ * Maps known media/web extensions to a MIME type. Returns '' (empty) when the
+ * extension is unknown or absent — the type is genuinely undetermined, and
+ * callers decide the fallback. (Do NOT default to 'image/png': that silently
+ * misclassified HTML pages and extensionless URLs as static images, stamping
+ * them with a display duration that cut interactive artworks off.)
  *
- * @param {string} url - Media URL
- * @returns {string} MIME type
+ * @param {string} url - Media or page URL
+ * @returns {string} MIME type, or '' when undetermined
  * @example
- * const mimeType = detectMimeType('https://example.com/image.png');
- * // Returns: 'image/png'
+ * detectMimeType('https://example.com/image.png'); // 'image/png'
+ * detectMimeType('https://example.com/art.html');  // 'text/html'
+ * detectMimeType('https://example.com/output/abc'); // ''
  */
 function detectMimeType(url) {
   if (!url) {
-    return 'image/png';
+    return '';
   }
 
   const extension = url.split('.').pop()?.toLowerCase().split('?')[0];
@@ -560,6 +596,8 @@ function detectMimeType(url) {
     gif: 'image/gif',
     webp: 'image/webp',
     svg: 'image/svg+xml',
+    html: 'text/html',
+    htm: 'text/html',
     mp4: 'video/mp4',
     webm: 'video/webm',
     mp3: 'audio/mpeg',
@@ -568,7 +606,7 @@ function detectMimeType(url) {
     gltf: 'model/gltf+json',
   };
 
-  return mimeTypes[extension] || 'image/png';
+  return mimeTypes[extension] || '';
 }
 
 /**
@@ -630,7 +668,14 @@ function buildUrlItem(url, duration, options = {}) {
     },
   };
 
-  return applyItemTiming(item, { sourceUrl, mimeType: options.mimeType }, duration);
+  // A URL handed to `play` that isn't a recognized media file is treated as an
+  // interactive web page: the FF1 renders unknown URLs in a sandboxed iframe,
+  // so an explicit caller hint aside, "unknown" means web, not static image.
+  // This routes such items through the open-ended (no-duration) timing path
+  // instead of the static-image default.
+  const mimeHint = options.mimeType || (detectMimeType(sourceUrl) === '' ? 'text/html' : undefined);
+
+  return applyItemTiming(item, { sourceUrl, mimeType: mimeHint }, duration);
 }
 
 module.exports = {
@@ -642,6 +687,7 @@ module.exports = {
   validateDP1Playlist,
   detectMimeType,
   isTimeBasedMedia,
+  isInteractiveWeb,
   applyItemTiming,
   buildUrlItem,
 };

@@ -18,9 +18,7 @@ const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
 
 interface TestConfig {
-  defaultModel: string;
   defaultDuration: number;
-  models: Record<string, { apiKey: string; model?: string }>;
   playlist: { privateKey: string };
   ff1Devices: {
     devices: Array<{ name?: string; host: string; id?: string; apiKey?: string }>;
@@ -31,9 +29,7 @@ interface TestConfig {
 
 function makeConfig(): TestConfig {
   return {
-    defaultModel: 'grok',
     defaultDuration: 10,
-    models: { grok: { apiKey: 'xai-test', model: 'grok-beta' } },
     playlist: { privateKey: 'TESTKEY' },
     ff1Devices: {
       devices: [
@@ -93,10 +89,8 @@ describe('ff1 device default <name> — CLI integration', () => {
       );
 
       // Unrelated top-level fields must be preserved.
-      assert.equal(written.defaultModel, 'grok');
       assert.equal(written.defaultDuration, 10);
       assert.equal(written.playlist.privateKey, 'TESTKEY');
-      assert.deepEqual(written.models, { grok: { apiKey: 'xai-test', model: 'grok-beta' } });
       assert.deepEqual(written.experimental, { flagA: true, nested: { count: 3 } });
 
       // File actually changed.

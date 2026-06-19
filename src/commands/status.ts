@@ -1,10 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import {
-  isMissingConfigValue,
-  readConfigFile,
-  resolveExistingConfigPath,
-} from './helpers/config-files';
+import { readConfigFile, resolveExistingConfigPath } from './helpers/config-files';
 import { getPlaylistConfig } from '../config';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
@@ -22,16 +18,8 @@ export const statusCommand = new Command('status')
       }
 
       const config = await readConfigFile(configPath);
-      const modelNames = Object.keys(config.models || {});
-      const defaultModel =
-        config.defaultModel && modelNames.includes(config.defaultModel)
-          ? config.defaultModel
-          : modelNames[0];
-      const defaultModelLabel = defaultModel || 'unknown';
-      const defaultModelConfig = defaultModel ? config.models?.[defaultModel] : undefined;
       const playlistConfig = getPlaylistConfig();
 
-      const hasApiKey = defaultModel ? !isMissingConfigValue(defaultModelConfig?.apiKey) : false;
       const playlistKeyMaterial = playlistConfig.privateKey?.trim() || '';
       const playlistKeyError =
         playlistKeyMaterial.length > 0 ? validatePlaylistPrivateKey(playlistKeyMaterial) : null;
@@ -54,12 +42,6 @@ export const statusCommand = new Command('status')
           label: 'Config file',
           ok: true,
           detail: configPath,
-        },
-        {
-          label: `Default model (${defaultModelLabel}) API key`,
-          ok: hasApiKey,
-          optional: true,
-          hint: ' (needed for chat)',
         },
         {
           label: 'Playlist signing key',
