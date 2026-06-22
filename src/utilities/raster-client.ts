@@ -72,12 +72,20 @@ export interface RasterTokenCoords {
    */
   mediaUrl: string | null;
   /**
-   * Media type hint for DP-1 timing: Raster's `contentType` when populated,
-   * else its `previewType` (e.g. "video/2"). Raster's `contentUrl` is often
-   * an extensionless IPFS URL, so without this hint the builder can't tell a
-   * video from a still and would stamp it a fixed duration. Both fields share
-   * a standard category prefix (`video/`, `audio/`, `image/`), which is all
-   * the timing check needs.
+   * Media type hint for DP-1 timing. Prefer Raster's real `contentType`; we
+   * currently fall back to `previewType` when it is empty, because Raster's
+   * `contentUrl` is often an extensionless IPFS URL and without any hint the
+   * builder can't tell a video from a still and would stamp it a fixed
+   * duration.
+   *
+   * CAUTION: `previewType` is NOT a reliable content-type signal. Per Raster
+   * (Michael, June 2026) it describes only how the *preview* is encoded, not
+   * the underlying work — e.g. a webapp's previewType is still `image`. So the
+   * fallback can misclassify: an interactive piece (empty contentType) gets
+   * stamped a fixed duration instead of playing open-ended, and a video whose
+   * preview is an image thumbnail would be timed as a still. Revisit this
+   * tradeoff once we know how reliably Raster populates `contentType` and what
+   * `previewType` returns for video — see the open Raster follow-up ticket.
    */
   mediaType: string | null;
 }
@@ -304,8 +312,10 @@ export async function listArtworkTokens(
       contractAddress: raw.contractAddress,
       tokenId: raw.tokenId,
       mediaUrl: raw.media?.contentUrl ?? null,
-      // Prefer a real MIME (`contentType`) when Raster populates it; today it
-      // is usually empty, so fall back to the category-prefixed `previewType`.
+      // Prefer the real MIME (`contentType`); today it is usually empty, so we
+      // fall back to `previewType` as a last resort. NOTE: previewType only
+      // describes the preview encoding, not the work, so this fallback can
+      // misclassify (see the mediaType doc comment above). Tracked for revisit.
       mediaType: raw.media?.contentType || raw.media?.previewType || null,
     });
   }
