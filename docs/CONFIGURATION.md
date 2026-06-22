@@ -38,30 +38,37 @@ Used for signing DP‑1 playlists.
 
 - `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
-  **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) pass the private key string through to **`dp1-js`** (`SignMultiEd25519`) without an extra decoding step in ff-cli. `dp1-js` recognizes **hex** (optional `0x`) or **base64** encodings of the PKCS#8 DER blob produced by the OpenSSL examples below, then loads the key for Ed25519. Use those formats; ff-cli does not add a separate normalizer ahead of the library.
+  **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) accept the private key in any of these encodings:
+
+  - **base64 PKCS#8 DER** — recommended; what `ff-cli setup` generates.
+  - **32-byte raw Ed25519 seed** as **hex** (optional `0x`) or **base64**.
+  - **PEM** (`-----BEGIN PRIVATE KEY-----`).
+  - **PKCS#8 DER as hex**.
+
+  ff-cli normalizes whichever form you supply to base64 PKCS#8 DER before handing it to **`dp1-js`** (`SignMultiEd25519`). A malformed key fails with an actionable message (e.g. _"Invalid Ed25519 signing key … run `ff-cli setup` to generate one"_) instead of dp1-js's cryptic OpenSSL ASN.1 error (`header too long` / `wrong tag`).
 
 - `playlist.role` (string): DP-1 signing role that travels with the private key. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`).
 
 ### Generate an Ed25519 private key
 
-You can generate a key locally. The CLI accepts either base64 (preferred) or hex
+The simplest path is `ff-cli setup`, which generates a key for you (base64 PKCS#8 DER) and writes it to your config. To generate one yourself:
 
-OpenSSL (recommended):
+OpenSSL (recommended — produces a PKCS#8 DER key):
 
 ```bash
-# Base64 (preferred)
+# Base64 PKCS#8 DER (recommended)
 openssl genpkey -algorithm ED25519 -outform DER | base64 | tr -d '\n'
 
-# Hex (alternative)
+# Hex of the same PKCS#8 DER (alternative)
 openssl genpkey -algorithm ED25519 -outform DER | xxd -p -c 256
 ```
 
-Paste either value into `playlist.privateKey`:
+Paste the value into `playlist.privateKey`. Any of these are accepted:
 
-- Hex example (either is valid):
-  - `0xabc123...` (with prefix)
-  - `abc123...` (without prefix)
-- Base64 example: `uQd9m8S...==`
+- **base64 PKCS#8 DER** (recommended): `MC4CAQAwBQYDK2Vw...`
+- **32-byte raw seed** as hex (`0x`-prefixed or not) or base64 — e.g. the bare seed, not the full PKCS#8 blob.
+- **PEM**: a `-----BEGIN PRIVATE KEY-----` block.
+- **PKCS#8 DER as hex**.
 
 If you need a different role, set `playlist.role` to one of the DP-1 signing roles such as `agent`, `feed`, `curator`, `institution`, or `licensor`. The CLI rejects any other string before it reaches `dp1-js`.
 
@@ -114,6 +121,12 @@ Configure devices you want to play content on.
 
 During `ff-cli setup`, the CLI will attempt local discovery via mDNS (`_ff1._tcp`). If devices are found, you can pick one and the host will be filled in automatically. If discovery returns nothing, setup falls back to manual entry.
 
+> **mDNS is best-effort.** It frequently does not cross subnets — a common case with mesh routers (e.g. eero) that put wired and Wi-Fi clients on different `/24`s. If discovery comes up empty even though the device is reachable by IP, skip it entirely and add the device directly:
+>
+> ```bash
+> ff-cli device add --host http://<device-ip>:1111 --name <name>
+> ```
+
 You can also manage devices independently with:
 
 - `ff-cli device add` – Add a device interactively (with mDNS discovery), or non-interactively with `--host` and `--name`.
@@ -127,6 +140,28 @@ Selection rules when sending:
 
 - If you omit `-d`, the first configured device is used.
 - If you pass `-d <name>`, the CLI matches the device by `name` (exact match). If not found, you’ll see an error listing available devices.
+
+Device cast contract:
+
+The device exposes a single HTTP endpoint, `POST http://<device>:1111/api/cast`. `ff-cli play` casts a DP-1 playlist with:
+
+```jsonc
+POST http://<device>:1111/api/cast
+Content-Type: application/json
+// API-KEY: <optional, only if the device requires one>
+
+{
+  "command": "displayPlaylist",
+  "request": {
+    "dp1_call": { /* the full signed DP-1 playlist object */ },
+    "intent": { "action": "now_display" }
+  }
+}
+```
+
+The `intent` field is **required** — without it the device returns `{"message":{"ok":false}}` with no further explanation. `dp1_call` may be the playlist inline (as above) or a hosted playlist URL string; ff-cli sends the resolved playlist object.
+
+On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
 Compatibility checks:
 
