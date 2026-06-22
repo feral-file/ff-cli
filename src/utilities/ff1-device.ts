@@ -216,8 +216,14 @@ export async function sendPlaylistToDevice({
       headers['API-KEY'] = device.apiKey;
     }
 
-    // Make the API request with bounded retries for transient local network errors.
+    // Make the API request with bounded retries for transient local network
+    // errors, device rate-limiting, and empty/non-JSON bodies (the device can
+    // return an empty response on the first cast after boot).
     let response: Response | null = null;
+    let responseData: Record<string, unknown> = {};
+    // Describes a 2xx response whose body could not be parsed, so the post-loop
+    // handler can report it clearly if every attempt is exhausted.
+    let lastBodyIssue: string | null = null;
     for (let attempt = 1; attempt <= SEND_RETRY_ATTEMPTS; attempt += 1) {
       try {
         response = await fetch(apiUrl, {
@@ -242,6 +248,39 @@ export async function sendPlaylistToDevice({
           await waitForRetry(retryDelay);
           continue;
         }
+
+        // Non-2xx (other than 429 handled above): surface via the post-loop
+        // handler, which re-reads the body as error text.
+        if (!response.ok) {
+          break;
+        }
+
+        // 2xx: read the body defensively. An empty or non-JSON body is a known
+        // transient hiccup (commonly the first cast after boot), so retry within
+        // the attempt budget instead of throwing "Unexpected end of JSON input".
+        const bodyText = (await response.text()).trim();
+        if (bodyText === '') {
+          lastBodyIssue = 'device returned an empty response body';
+        } else {
+          try {
+            responseData = JSON.parse(bodyText) as Record<string, unknown>;
+            lastBodyIssue = null;
+            break;
+          } catch {
+            lastBodyIssue = `device returned a non-JSON response body: ${bodyText.slice(0, 200)}`;
+          }
+        }
+
+        if (attempt < SEND_RETRY_ATTEMPTS) {
+          const retryDelay = SEND_RETRY_BASE_DELAY_MS * attempt;
+          logger.warn(
+            `${lastBodyIssue} (attempt ${attempt}/${SEND_RETRY_ATTEMPTS}); retrying in ${retryDelay}ms`
+          );
+          response = null;
+          await waitForRetry(retryDelay);
+          continue;
+        }
+        // Out of attempts; let the post-loop handler report the body issue.
         break;
       } catch (error) {
         const shouldRetry = attempt < SEND_RETRY_ATTEMPTS && isTransientDeviceNetworkError(error);
@@ -293,8 +332,22 @@ export async function sendPlaylistToDevice({
       };
     }
 
-    // Parse response
-    const responseData = (await response.json()) as Record<string, unknown>;
+    // 2xx but the body never parsed within the retry budget: report the HTTP
+    // status and what was wrong rather than crashing on a JSON parse error.
+    if (lastBodyIssue) {
+      const deviceLabel = device.name || device.host;
+      logger.error(
+        `Cast to "${deviceLabel}" returned HTTP ${response.status} but ${lastBodyIssue}`
+      );
+      return {
+        success: false,
+        error: `Device "${deviceLabel}" accepted the request (HTTP ${response.status}) but returned no usable response`,
+        details:
+          `${lastBodyIssue}. This is often transient on the first cast after boot — ` +
+          'wait a few seconds and try again.',
+      };
+    }
+
     logger.info('Successfully sent playlist to FF1 device');
     logger.debug(`Device response: ${JSON.stringify(responseData)}`);
 
