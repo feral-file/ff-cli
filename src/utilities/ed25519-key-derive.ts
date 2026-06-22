@@ -113,6 +113,19 @@ export function parsePlaylistPrivateKeyToKeyObject(material: string): KeyObject 
     } catch {
       // Continue to other strategies (e.g. hex path may apply for unusual configs)
     }
+    // A 32-byte base64 value is a raw Ed25519 seed (not PKCS#8). The example
+    // config's `_BASE64_OR_HEX` placeholder invites this, so accept it by
+    // wrapping the seed in a PKCS#8 envelope, mirroring the hex-seed path.
+    if (buf.length === 32) {
+      try {
+        const der = ed25519SeedBytesToPkcs8(buf);
+        const key = createPrivateKey({ key: der, format: 'der', type: 'pkcs8' });
+        assertEd25519(key);
+        return key;
+      } catch {
+        // fall through to remaining strategies
+      }
+    }
   }
 
   if (hexRegex.test(trimmed)) {

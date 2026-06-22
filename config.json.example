@@ -15,7 +15,7 @@
     }
   ],
   "playlist": {
-    "privateKey": "YOUR_ED25519_PRIVATE_KEY_BASE64_OR_HEX",
+    "privateKey": "YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended__or_32byte_raw_seed_as_hex_or_base64__run_ff-cli_setup_to_generate",
     "role": "agent"
   },
   "ff1Devices": {

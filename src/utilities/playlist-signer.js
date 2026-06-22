@@ -5,6 +5,30 @@
 
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
+const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
+
+/**
+ * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
+ * dp1-js's signer expects. This makes hex seeds, base64 seeds, and PEM work for
+ * signing (not just base64 PKCS#8), and replaces dp1-js's cryptic OpenSSL error
+ * (e.g. "header too long") with actionable guidance when the key is malformed.
+ *
+ * @param {string} material - Raw key string from config or --key
+ * @returns {string} base64-encoded PKCS#8 DER Ed25519 private key
+ */
+function normalizeSigningKeyToBase64Pkcs8(material) {
+  let keyObject;
+  try {
+    keyObject = parsePlaylistPrivateKeyToKeyObject(material);
+  } catch (error) {
+    throw new Error(
+      `Invalid Ed25519 signing key: ${error.message}. Provide a base64 PKCS#8 DER key ` +
+        '(recommended), a 32-byte raw seed as hex or base64, or a PEM key. ' +
+        'Run `ff-cli setup` to generate one.'
+    );
+  }
+  return keyObject.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+}
 
 /**
  * Sign a playlist using the DP-1 signing API.
@@ -38,9 +62,10 @@ async function signPlaylist(playlist, privateKeyBase64, roleOverride) {
     const raw = Buffer.from(JSON.stringify(playlistToSign));
     const config = getPlaylistConfig();
     const role = resolvePlaylistSigningRole(roleOverride || config.role);
+    const normalizedKey = normalizeSigningKeyToBase64Pkcs8(privateKey);
 
     if (typeof dp1.SignMultiEd25519 === 'function') {
-      return dp1.SignMultiEd25519(raw, privateKey, role, currentTimestamp());
+      return dp1.SignMultiEd25519(raw, normalizedKey, role, currentTimestamp());
     }
 
     throw new Error('dp1-js does not expose SignMultiEd25519');
@@ -190,6 +215,11 @@ async function buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role) {
   delete playlistToSign.signature;
   delete playlistToSign.signatures;
 
+  // Normalize to base64 PKCS#8 DER so any supported key encoding (hex/base64
+  // seed, PEM) works and a malformed key surfaces a clear error instead of
+  // dp1-js's cryptic OpenSSL ASN.1 failure ("header too long" / "wrong tag").
+  const normalizedKey = normalizeSigningKeyToBase64Pkcs8(privateKey);
+
   const existingSignatures = Array.isArray(playlist.signatures)
     ? playlist.signatures.filter((entry) => Boolean(entry))
     : [];
@@ -197,7 +227,7 @@ async function buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role) {
   if (typeof dp1.SignMultiEd25519 === 'function') {
     const signature = await dp1.SignMultiEd25519(
       Buffer.from(JSON.stringify(playlistToSign)),
-      privateKey,
+      normalizedKey,
       role,
       currentTimestamp()
     );
@@ -236,9 +266,13 @@ async function verifySignedPlaylistEnvelope(signedPlaylist, dp1) {
   return { valid: true };
 }
 
-/** Loads `dp1-js`; env overrides are not supported (see playlist-verifier). */
+/**
+ * Loads `dp1-js`; env overrides are not supported (see playlist-verifier).
+ * Uses dynamic `import()` so the single-file release bundle inlines dp1-js
+ * instead of leaving a runtime require that can't resolve.
+ */
 async function loadDp1() {
-  return require('dp1-js');
+  return import('dp1-js');
 }
 
 function currentTimestamp() {
