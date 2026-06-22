@@ -7,7 +7,6 @@
 import type { Playlist } from '../types';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { createRequire } from 'module';
 
 /**
  * Cryptographically verify a playlist via dp1-js (after parsing succeeds).
@@ -155,10 +154,15 @@ async function parseDp1Playlist(playlist: unknown): Promise<{
  * Loads the published DP-1 implementation bundled with the CLI (`dp1-js`).
  * Local checkout overrides via environment are intentionally unsupported so
  * resolution stays deterministic across machines and CI.
+ *
+ * Uses a dynamic `import()` (not `createRequire`) so the single-file release
+ * bundle inlines dp1-js: esbuild can follow `import('dp1-js')` and pull the
+ * module into the bundle, whereas a `createRequire(__filename)` require escapes
+ * bundling and fails at runtime with "Cannot find module 'dp1-js'". The import
+ * stays lazy, so dp1-js's transitive deps don't load on unrelated commands.
  */
 async function loadDp1(): Promise<Record<string, unknown>> {
-  const require = createRequire(__filename);
-  return require('dp1-js');
+  return (await import('dp1-js')) as unknown as Record<string, unknown>;
 }
 
 /**
