@@ -14,6 +14,14 @@ Context:
 Keep it simple. Prefer deletion over added process.
 Do not invent new requirements.
 
+Bootstrap (only if not yet installed/configured — skip when `ff-cli status` already works):
+- Install (most reliable): `npm i -g @feralfile/cli` (needs Node.js 22+).
+- Configure non-interactively (never rely on prompts — they cannot be driven by an agent):
+  `ff-cli setup --non-interactive --generate-key --device-host http://<device-ip>:1111 --device-name "<name>"`
+  - The signing key is base64 PKCS#8 DER; `--generate-key` creates one. To reuse a key, pass `--key "<value>"` (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM).
+  - Skip mDNS discovery entirely — it is unreliable across subnets. Always pass `--device-host`. Add more devices with `ff-cli device add --host http://<ip>:1111 --name "<name>"`.
+- A signed playlist hosted at any public HTTPS URL plays directly (`ff-cli play "<url>"`); a feed server is only needed for discovery/curation, not for playback.
+
 Flow:
 1) ff-cli status
 2) ff-cli config validate

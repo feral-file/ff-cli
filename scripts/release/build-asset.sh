@@ -54,11 +54,28 @@ mkdir -p "$PACKAGE_DIR/bin" "$PACKAGE_DIR/lib"
 cp "$ROOT_DIR/dist/ff-cli.js" "$PACKAGE_DIR/lib/ff-cli.js"
 cp "$ROOT_DIR/package.json" "$PACKAGE_DIR/package.json"
 cp "$ROOT_DIR/LICENSE" "$PACKAGE_DIR/LICENSE"
+# Ship the sample config alongside the bundle so `ff-cli config init` / `setup`
+# can seed a config. The installer extracts this to the package root, which the
+# CLI resolves via a `<bundle>/lib/../config.json.example` lookup candidate.
+cp "$ROOT_DIR/config.json.example" "$PACKAGE_DIR/config.json.example"
 
 cat > "$PACKAGE_DIR/bin/ff-cli" <<'EOF'
 #!/usr/bin/env bash
 set -e
-BASE_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve the launcher through any symlinks before computing the package dir.
+# The installer symlinks ~/.local/bin/ff-cli -> ~/.local/ff-cli/bin/ff-cli, and
+# without this resolution "$0"'s dir would be ~/.local/bin, making the wrapper
+# look for ~/.local/lib/ff-cli.js (wrong) instead of the real lib/ next to it.
+SOURCE="${BASH_SOURCE[0]:-$0}"
+while [ -h "$SOURCE" ]; do
+  DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
+  SOURCE="$(readlink "$SOURCE")"
+  case "$SOURCE" in
+    /*) ;;
+    *) SOURCE="$DIR/$SOURCE" ;;
+  esac
+done
+BASE_DIR="$(cd -P "$(dirname "$SOURCE")/.." && pwd)"
 APP="$BASE_DIR/lib/ff-cli.js"
 if ! command -v node >/dev/null 2>&1; then
   echo "Node.js 22+ is required. Install Node.js, then run this command again."

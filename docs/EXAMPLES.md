@@ -261,6 +261,8 @@ npm run dev -- play "https://example.com/video.mp4"
 npm run dev -- play playlist.json --skip-verify
 ```
 
+> **No feed server is required to cast.** A device can play any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli play "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply playing your own playlists.
+
 ## Publish to Feed Server
 
 Publish validated playlists to a DP-1 feed server for sharing and discovery.

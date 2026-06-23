@@ -61,4 +61,37 @@ describe('ed25519-key-derive', () => {
     const roundTripPub = createPublicKey(ko).export({ format: 'pem', type: 'spki' }).toString();
     assert.equal(roundTripPub, deriveEd25519PublicKeyForVerify(pkcs8B64));
   });
+
+  test('parsePlaylistPrivateKeyToKeyObject accepts a 32-byte raw seed as base64', () => {
+    // The example config invites a base64 "raw seed"; both seed encodings must
+    // resolve to the same key as the PKCS#8 form of that seed.
+    const seed = randomBytes(32);
+    const pkcs8 = Buffer.concat([Buffer.from('302e020100300506032b657004220420', 'hex'), seed]);
+    const expectedPub = createPublicKey(
+      createPrivateKey({ key: pkcs8, format: 'der', type: 'pkcs8' })
+    )
+      .export({ format: 'pem', type: 'spki' })
+      .toString();
+
+    const ko = parsePlaylistPrivateKeyToKeyObject(seed.toString('base64'));
+    assert.equal(ko.asymmetricKeyType, 'ed25519');
+    assert.equal(
+      createPublicKey(ko).export({ format: 'pem', type: 'spki' }).toString(),
+      expectedPub
+    );
+    // The base64 seed and hex seed must yield the same key.
+    assert.equal(
+      createPublicKey(parsePlaylistPrivateKeyToKeyObject(seed.toString('hex')))
+        .export({ format: 'pem', type: 'spki' })
+        .toString(),
+      expectedPub
+    );
+  });
+
+  test('parsePlaylistPrivateKeyToKeyObject rejects garbage with an actionable message', () => {
+    assert.throws(
+      () => parsePlaylistPrivateKeyToKeyObject('not-a-real-key-zzz'),
+      /Unrecognized Ed25519 private key format/
+    );
+  });
 });

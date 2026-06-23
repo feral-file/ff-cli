@@ -35,6 +35,12 @@ export async function discoverAndSelectDevice(
       ? discoveryResult.error
       : `${discoveryResult.error}.`;
     console.log(chalk.dim(`mDNS discovery failed: ${errorMessage} Continuing with manual entry.`));
+    console.log(
+      chalk.dim(
+        '  Tip: you can skip discovery entirely with ' +
+          'ff-cli device add --host http://<device-ip>:1111 --name <name>'
+      )
+    );
   } else if (discoveryResult.error) {
     console.log(chalk.dim(`mDNS discovery warning: ${discoveryResult.error}`));
   }
@@ -132,6 +138,15 @@ export async function discoverAndSelectDevice(
     }
   } else if (!discoveryResult.error) {
     console.log(chalk.dim('No FF1 devices found via mDNS. Continuing with manual entry.'));
+    // mDNS is best-effort and frequently fails across subnets (a common setup
+    // with mesh routers that put wired and Wi-Fi clients on different /24s).
+    // Point users at the reliable fallback.
+    console.log(
+      chalk.dim(
+        '  Tip: mDNS often does not cross subnets. If the device is reachable by IP, ' +
+          'add it directly: ff-cli device add --host http://<device-ip>:1111 --name <name>'
+      )
+    );
   }
 
   // Manual entry fallback

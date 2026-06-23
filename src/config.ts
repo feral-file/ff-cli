@@ -309,17 +309,24 @@ export async function createSampleConfig(targetPath?: string): Promise<string> {
     throw new Error('config.json already exists');
   }
 
-  // Look for config.json.example in the package directory
-  // When compiled, this file is in dist/src/config.js
-  // The template is at the package root: ../../config.json.example
+  // Look for config.json.example across the layouts we ship in:
+  //  - cwd: running from a source checkout
+  //  - __dirname/../..: npm install (this file is dist/src/config.js, template
+  //    sits at the package root)
+  //  - __dirname/..: single-file release bundle (this file is bundled into
+  //    lib/ff-cli.js, template sits one level up at the package root)
   const exampleCandidates = [
     path.join(process.cwd(), 'config.json.example'),
     path.join(__dirname, '../..', 'config.json.example'),
+    path.join(__dirname, '..', 'config.json.example'),
   ];
   const examplePath = exampleCandidates.find((candidate) => fs.existsSync(candidate));
 
   if (!examplePath) {
-    throw new Error('config.json.example not found. This is likely a package installation issue.');
+    throw new Error(
+      'config.json.example not found (likely an incomplete install). ' +
+        'Reinstall with: npm i -g @feralfile/cli'
+    );
   }
 
   const exampleConfig = fs.readFileSync(examplePath, 'utf-8');

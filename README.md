@@ -12,13 +12,15 @@ ff-cli is a set of deterministic commands for building DP-1–conformant playlis
 npm i -g @feralfile/cli
 ```
 
+This is the recommended path and the most reliable for the agent workflow — it installs a complete package (including `config.json.example` and the bundled `dp1-js`). Requires Node.js 22+.
+
 ## Install (curl)
 
 ```bash
 curl -fsSL https://feralfile.com/ff-cli-install | bash
 ```
 
-Installs a prebuilt binary for macOS/Linux (no Node.js required).
+Installs a prebuilt binary for macOS/Linux. Node.js 22+ must still be on your PATH (the bundle runs under `node`). If a command fails right after install, prefer the npm install above.
 
 ## One-off Usage (npx)
 
@@ -41,6 +43,23 @@ If you need manual config actions instead of guided setup:
 ff-cli config init
 ff-cli config validate
 ```
+
+### Non-interactive setup (agents / CI)
+
+`ff-cli setup` is fully scriptable — no TTY required. It runs non-interactively when stdin is not a terminal, or when you pass `-y/--non-interactive`, and takes flags for every step:
+
+```bash
+# Generate a signing key and register a device in one shot, no prompts
+ff-cli setup --non-interactive \
+  --generate-key \
+  --device-host http://192.168.1.50:1111 \
+  --device-name "Living Room"
+
+# Or supply your own key (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM)
+ff-cli setup -y --key "<private-key>" --role agent
+```
+
+Device pairing is also scriptable on its own: `ff-cli device add --host http://<ip>:1111 --name <name>` skips mDNS discovery entirely.
 
 ## Find an artwork
 
