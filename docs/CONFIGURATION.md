@@ -22,8 +22,11 @@ npm run dev -- config show
 ## Top‑level fields
 
 - **defaultDuration** (number, seconds)
-  - Default per‑item display duration for media without an intrinsic runtime (images, code-based works). Falls back to 10s when unset.
+  - Default per‑item display duration for static media without an intrinsic runtime (images). Falls back to 10s when unset.
   - Does NOT apply to video/audio items: with no explicit duration those are emitted without `duration` and with `display.loop: false`, so a DP-1 player advances at end-of-stream (§4.1) — the media plays its natural length.
+- **generativeDuration** (number, seconds)
+  - Display duration stamped on generative/interactive (HTML) works, which have no intrinsic runtime and no end-of-stream event. Defaults to **60s** (override via `DEFAULT_GENERATIVE_DURATION`).
+  - Set to **0** to omit the duration entirely, so a conformant player parks on the work open-ended instead of rotating. Note: some players (including FF1) require every item to carry a `duration` and will reject a playlist whose items omit it — keep this non-zero unless you know your player tolerates an absent duration.
 
 ## browser
 

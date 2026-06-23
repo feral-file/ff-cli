@@ -6,8 +6,10 @@
  * `display.loop: false` and no duration MUST advance at end-of-stream — the
  * media plays its natural length. These tests pin the auto-timing contract:
  * omitted duration → video/audio items carry no duration and loop=false,
- * static items fall back to the configured default, and an explicit duration
- * always wins regardless of media type.
+ * static items fall back to the configured default, generative/interactive
+ * (HTML) works carry the configured `generativeDuration` (default 60, or
+ * omitted when set to 0), and an explicit duration always wins regardless of
+ * media type.
  */
 
 import assert from 'node:assert/strict';
@@ -84,18 +86,53 @@ describe('applyItemTiming', () => {
     assert.ok((item.duration as number) >= 1);
   });
 
-  test('auto + interactive HTML: no duration (player parks indefinitely)', () => {
+  test('auto + interactive HTML: carries the generative duration (drives rotation)', () => {
     const item: Record<string, unknown> = { display: { scaling: 'fit' } };
     applyItemTiming(item, { mimeType: 'text/html', sourceUrl: 'https://e.com/art' });
-    assert.equal('duration' in item, false);
+    assert.equal(typeof item.duration, 'number');
+    assert.ok((item.duration as number) >= 1);
     // Unlike video, no loop:false — an HTML page has no end-of-stream event.
     assert.deepEqual(item.display, { scaling: 'fit' });
   });
 
-  test('auto + interactive HTML by .html extension: no duration', () => {
+  test('auto + interactive HTML by .html extension: carries the generative duration', () => {
     const item: Record<string, unknown> = {};
     applyItemTiming(item, { sourceUrl: 'https://e.com/page.html' });
-    assert.equal('duration' in item, false);
+    assert.equal(typeof item.duration, 'number');
+    assert.ok((item.duration as number) >= 1);
+  });
+
+  test('generativeDuration config controls the stamped value', () => {
+    const prev = process.env.DEFAULT_GENERATIVE_DURATION;
+    process.env.DEFAULT_GENERATIVE_DURATION = '75';
+    try {
+      const item: Record<string, unknown> = {};
+      applyItemTiming(item, { mimeType: 'text/html', sourceUrl: 'https://e.com/art' });
+      assert.equal(item.duration, 75);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.DEFAULT_GENERATIVE_DURATION;
+      } else {
+        process.env.DEFAULT_GENERATIVE_DURATION = prev;
+      }
+    }
+  });
+
+  test('generativeDuration=0 omits duration (open-ended escape hatch)', () => {
+    const prev = process.env.DEFAULT_GENERATIVE_DURATION;
+    process.env.DEFAULT_GENERATIVE_DURATION = '0';
+    try {
+      const item: Record<string, unknown> = { display: { scaling: 'fit' } };
+      applyItemTiming(item, { mimeType: 'text/html', sourceUrl: 'https://e.com/art' });
+      assert.equal('duration' in item, false);
+      assert.deepEqual(item.display, { scaling: 'fit' });
+    } finally {
+      if (prev === undefined) {
+        delete process.env.DEFAULT_GENERATIVE_DURATION;
+      } else {
+        process.env.DEFAULT_GENERATIVE_DURATION = prev;
+      }
+    }
   });
 });
 
@@ -154,15 +191,17 @@ describe('item builders honor auto timing', () => {
     assert.equal(item.display.loop, false);
   });
 
-  test('buildUrlItem: .html URL plays open-ended (no duration)', () => {
+  test('buildUrlItem: .html URL carries the generative duration', () => {
     const item = buildUrlItem('https://whorl.app/index_launch.html');
-    assert.equal('duration' in item, false);
+    assert.equal(typeof item.duration, 'number');
+    assert.ok(item.duration >= 1);
     assert.equal(item.display.loop, undefined);
   });
 
-  test('buildUrlItem: extensionless URL is treated as interactive web (no duration)', () => {
+  test('buildUrlItem: extensionless URL is treated as interactive web (generative duration)', () => {
     const item = buildUrlItem('https://whorl.app/output/abc123');
-    assert.equal('duration' in item, false);
+    assert.equal(typeof item.duration, 'number');
+    assert.ok(item.duration >= 1);
   });
 
   test('buildUrlItem: explicit duration still wins for an HTML page', () => {

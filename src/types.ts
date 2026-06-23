@@ -41,6 +41,12 @@ export interface IndexerConfig {
 
 export interface Config {
   defaultDuration: number;
+  /**
+   * Display seconds stamped on generative/interactive (HTML) works, which have
+   * no intrinsic runtime. Defaults to 60. Set to 0 to omit the duration so a
+   * conformant player parks on the work open-ended instead of rotating.
+   */
+  generativeDuration: number;
   browser: BrowserConfig;
   feed?: FeedConfig; // Legacy
   feedServers?: FeedServer[]; // New: array of feed servers with individual API keys

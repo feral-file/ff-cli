@@ -52,16 +52,18 @@ function isInteractiveWeb(mimeType, sourceUrl) {
  *   - a time-based source (video/audio) gets NO duration and
  *     `display.loop: false`, so a conformant player MUST advance at
  *     end-of-stream — the media plays its natural length;
- *   - an interactive web page (HTML) gets NO duration either, but for the
- *     opposite reason: it has no end-of-stream event, so a conformant player
- *     parks on it indefinitely (the generative/interactive art keeps running);
+ *   - an interactive web page (HTML) — generative art with no intrinsic
+ *     runtime and no end-of-stream event — gets the configured
+ *     `generativeDuration` (default 60s) so the playlist rotates. Set
+ *     `generativeDuration` to 0 to omit it and have a conformant player park
+ *     on the work open-ended instead;
  *   - static and code-based sources fall back to the configured
  *     `defaultDuration` because they have no intrinsic runtime to play out.
  *
- * Do not re-introduce an unconditional duration here: stamping a default on
- * video items silently truncates or pads them, and stamping one on an HTML
- * page cuts the artwork off and restarts it every `defaultDuration` seconds
- * (the bugs this guards against).
+ * Do not stamp a duration on video/audio: it silently truncates or pads them.
+ * (Earlier this also omitted duration for HTML works, which left them with no
+ * duration field. Players that require the field — notably FF1 — then rejected
+ * the entire playlist, so generative works now carry an explicit duration.)
  *
  * @param {Object} item - DP1 playlist item (mutated in place)
  * @param {Object} mediaHints - Media signals for the time-based check
@@ -82,8 +84,13 @@ function applyItemTiming(item, mediaHints = {}, duration) {
   }
 
   if (isInteractiveWeb(mediaHints.mimeType, mediaHints.sourceUrl)) {
-    // No duration: an open-ended interactive page should play until the
-    // playlist advances for another reason, not on a fixed timer.
+    // Generative/interactive works have no intrinsic runtime, so stamp the
+    // configured generative duration to drive playlist rotation. A configured
+    // value of 0 means "omit" — a conformant player then parks open-ended.
+    const generativeDuration = getGenerativeDuration();
+    if (generativeDuration > 0) {
+      item.duration = generativeDuration;
+    }
     return item;
   }
 
@@ -103,6 +110,23 @@ function getDefaultStaticDuration() {
     return getConfig().defaultDuration || 10;
   } catch (_error) {
     return 10;
+  }
+}
+
+/**
+ * getGenerativeDuration returns the configured display seconds for
+ * generative/interactive (HTML) works, which have no intrinsic runtime.
+ * Defaults to 60 when config is unavailable. A configured 0 is honored (the
+ * caller omits the duration so the work plays open-ended).
+ *
+ * @returns {number} Display duration in seconds (0 means "omit / open-ended")
+ */
+function getGenerativeDuration() {
+  try {
+    const configured = getConfig().generativeDuration;
+    return typeof configured === 'number' ? configured : 60;
+  } catch (_error) {
+    return 60;
   }
 }
 

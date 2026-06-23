@@ -1,5 +1,6 @@
 {
   "defaultDuration": 10,
+  "generativeDuration": 60,
   "browser": {
     "timeout": 90000,
     "sanitizationLevel": "medium"
