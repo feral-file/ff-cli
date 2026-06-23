@@ -34,6 +34,7 @@ function loadConfig(): Config {
 
   const defaultConfig: Config = {
     defaultDuration: parseInt(process.env.DEFAULT_DURATION || '10', 10),
+    generativeDuration: parseInt(process.env.DEFAULT_GENERATIVE_DURATION || '60', 10),
     browser: {
       timeout: parseInt(process.env.BROWSER_TIMEOUT || '90000', 10),
       sanitizationLevel: process.env.SANITIZATION_LEVEL || 'medium',
