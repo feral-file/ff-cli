@@ -16,7 +16,7 @@
  */
 
 import * as logger from '../logger';
-import type { TokenCoords } from './marketplace-url';
+import type { TokenCoords } from '@feralfile/source-resolver';
 import { USER_AGENT } from './user-agent';
 
 const FXHASH_GRAPHQL = 'https://api.fxhash.xyz/graphql';

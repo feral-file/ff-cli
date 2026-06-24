@@ -11,7 +11,7 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { parseFindInput } from '../src/utilities/marketplace-url';
+import { parseFindInput } from '@feralfile/source-resolver';
 import { parseLimitOption, decideActions, buildRasterMediaItems } from '../src/commands/find';
 import type { BuildToken, ResolvedTarget } from '../src/commands/find';
 
@@ -99,6 +99,18 @@ describe('parseFindInput', () => {
     assert.equal(r.coords.chain, 'ethereum');
   });
 
+  test('Art Blocks current token URL → token kind, source artblocks', () => {
+    const r = parseFindInput(
+      'https://www.artblocks.io/token/1/0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270/13000000'
+    );
+    assert.equal(r?.kind, 'token');
+    if (r?.kind !== 'token') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.source, 'artblocks');
+    assert.equal(r.coords.tokenId, '13000000');
+  });
+
   test('Art Blocks marketplace token URL → token kind', () => {
     const r = parseFindInput(
       'https://www.artblocks.io/marketplace/collections/0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270/tokens/78000123'
@@ -134,6 +146,18 @@ describe('parseFindInput', () => {
     }
     assert.equal(r.source, 'fxhash');
     assert.equal(r.coords.chain, 'tezos');
+  });
+
+  test('fxhash current iteration id URL → token kind, source fxhash', () => {
+    const r = parseFindInput(
+      'https://www.fxhash.xyz/iteration/id/FX1-KT1U6EHmNxJTkvaWJ4ThczG4FSDaHC21ssvi-1234'
+    );
+    assert.equal(r?.kind, 'token');
+    if (r?.kind !== 'token') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.source, 'fxhash');
+    assert.equal(r.coords.tokenId, '1234');
   });
 
   test('fxhash /iteration/{slug} URL → fxhash-iteration kind (needs async resolve)', () => {

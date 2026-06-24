@@ -57,6 +57,7 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
+    "@feralfile/source-resolver": "git+https://github.com/feral-file/ff-source-resolver.git#135de86b82f5b9dd0795d98aa1754217640d6b43",
     "axios": "^1.6.2",
     "bonjour-service": "^1.3.0",
     "chalk": "^4.1.2",

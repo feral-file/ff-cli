@@ -15,7 +15,7 @@
  * is wider than v1 supports.
  */
 import * as logger from '../logger';
-import type { TokenCoords, FeralFileUrlKind } from './marketplace-url';
+import type { FeralFileUrlKind, TokenCoords } from '@feralfile/source-resolver';
 import { resolveFeralFileArtwork } from './feral-file-artwork';
 import { USER_AGENT } from './user-agent';
 
