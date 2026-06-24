@@ -1,8 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { parseFindInput } from '@feralfile/source-resolver';
 import { getConfig } from '../config';
 import { isPlaylistSourceUrl, resolvePlaySource } from '../utilities/playlist-source';
-import { parseFindInput } from '../utilities/marketplace-url';
 import { castPlaylist } from '../utilities/playlist-cast';
 import {
   printPlaylistSourceLoadFailure,

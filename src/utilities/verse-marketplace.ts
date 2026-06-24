@@ -1,4 +1,4 @@
-import type { TokenCoords } from './marketplace-url';
+import type { TokenCoords } from '@feralfile/source-resolver';
 
 /**
  * Resolve a Verse series slug to representative Ethereum token coordinates.

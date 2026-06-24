@@ -14,8 +14,8 @@
 
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
+import { parseFindInput } from '@feralfile/source-resolver';
 import { resolveOpenSeaCollection } from '../src/utilities/opensea-marketplace';
-import { parseFindInput } from '../src/utilities/marketplace-url';
 
 type FetchFn = typeof global.fetch;
 
