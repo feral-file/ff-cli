@@ -1,0 +1,34 @@
+---
+description: ff-cli repo-specific conventions (Go-doc, terminology, CLI output). Hand-owned.
+alwaysApply: false
+---
+
+# ff-cli conventions
+
+Repo-specific application of the engineering voice. The shared voice lives in
+`05-engineering-voice.mdc` (generated from canon — do not edit there). This file
+is the ff-cli layer on top of it: how the voice applies to Go code and CLI
+output here. Edit this file freely.
+
+## Commenting standard
+- Follow a standard Go-style documentation approach for code comments.
+- Write comments as clear prose sentences.
+- Start doc comments with the symbol name they describe.
+- Prefer comments that preserve future maintenance context: design intent, trade-offs, invariants, edge cases, and constraints.
+- Do not waste comments on obvious line-by-line narration.
+
+## Terminology
+- Prefer precise repo terms: `FF1`, `DP-1 envelope`, `DP-1 conformance`, `computational art playlist`, `channel endorsement`, `FF1 device`.
+- Use `backticks` for commands, files, directories, functions, and config keys.
+
+## Docs
+- Start with why, then what/how, then examples.
+- Keep headings skimmable and paragraphs short.
+- Prefer concrete examples over abstractions.
+
+## CLI output
+- One idea per line.
+- Success output: one clear sentence describing the completed result.
+- Errors: cause, minimal context, and next action when recovery exists.
+- No stack traces unless debug mode is explicitly enabled.
+- Avoid filler, emoji, and vague pronouns.
