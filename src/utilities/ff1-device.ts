@@ -166,7 +166,7 @@ export async function sendPlaylistToDevice({
     if (!playlist || typeof playlist !== 'object') {
       return {
         success: false,
-        error: 'Invalid playlist: must provide a valid DP1 playlist object',
+        error: 'Invalid playlist: must provide a valid DP-1 playlist object',
       };
     }
 

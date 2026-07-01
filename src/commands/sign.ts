@@ -6,7 +6,7 @@ import chalk from 'chalk';
 const { signPlaylistFile } = require('../utilities/playlist-signer');
 
 export const signCommand = new Command('sign')
-  .description('Sign a DP1 playlist file with a DP-1 signature envelope')
+  .description('Sign a DP-1 playlist file with a DP-1 signature envelope')
   .argument('<file>', 'Path to the playlist file to sign')
   .option('-k, --key <privateKey>', 'Ed25519 private key in base64 format (overrides config)')
   .option('-r, --role <role>', 'DP-1 signing role (overrides config)')

@@ -569,7 +569,11 @@ async function buildPlaylistDirect(params, options = {}) {
     finalItems = shuffleArray([...allItems]);
   }
 
-  console.log(chalk.cyan(`Creating playlist with ${finalItems.length} items...`));
+  console.log(
+    chalk.cyan(
+      `Creating playlist with ${finalItems.length} ${finalItems.length === 1 ? 'item' : 'items'}...`
+    )
+  );
 
   // Build DP1 playlist
   const playlist = await buildDP1Playlist(
