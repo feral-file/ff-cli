@@ -80,7 +80,9 @@ export const playCommand = new Command('play')
             '\n`play` casts an exact playlist or media URL — it does not search marketplaces.'
           )
         );
-        console.error(chalk.dim(`  "${source}" looks like ${discovery} to resolve first.`));
+        console.error(
+          chalk.dim(`  "${source}" looks like ${discovery}, which needs to be resolved first.`)
+        );
         const deviceFlag = options.device ? ` -d "${options.device}"` : '';
         console.log(chalk.yellow(`\nTry:  ff-cli find "${source}" --play${deviceFlag}`));
         process.exit(1);

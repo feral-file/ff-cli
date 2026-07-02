@@ -338,7 +338,7 @@ function convertTokensToDP1Items(tokensInfo, duration) {
  */
 function generatePlaylistTitle(items) {
   if (!items || items.length === 0) {
-    return 'DP1 Playlist';
+    return 'DP-1 Playlist';
   }
 
   // Check if all items have provenance (likely NFT playlist)
@@ -361,7 +361,7 @@ function generatePlaylistTitle(items) {
   }
 
   // Fallback: use item count
-  return `DP1 Playlist (${items.length} ${items.length === 1 ? 'item' : 'items'})`;
+  return `DP-1 Playlist (${items.length} ${items.length === 1 ? 'item' : 'items'})`;
 }
 
 /**
