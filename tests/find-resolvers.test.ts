@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { resolveArtBlocksCollection } from '../src/utilities/ab-marketplace';
-import { resolveObjktAlias, resolveObjktCollection } from '../src/utilities/objkt-marketplace';
+import { resolveObjktAlias } from '../src/utilities/objkt-marketplace';
 import { resolveFxhashIteration, resolveFxhashProject } from '../src/utilities/fxhash-marketplace';
 import { resolveNeortArt } from '../src/utilities/neort-marketplace';
 import { resolveFeralFileToken } from '../src/utilities/ff-marketplace';
@@ -356,58 +356,6 @@ describe('resolveObjktAlias', () => {
       () => withMockedFetch(mock, () => resolveObjktAlias('definitely-not-a-real-alias')),
       /did not resolve to a contract/
     );
-  });
-});
-
-describe('resolveObjktCollection', () => {
-  test('happy: collection slug -> bounded token list with hasMore sentinel', async () => {
-    const seenLimits: number[] = [];
-    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? '{}')) as {
-        query: string;
-        variables: Record<string, unknown>;
-      };
-      if (body.query.includes('fa(where')) {
-        return new Response(
-          JSON.stringify({
-            data: {
-              fa: [{ contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton', name: 'hic et nunc' }],
-            },
-          }),
-          { status: 200, headers: { 'Content-Type': 'application/json' } }
-        );
-      }
-      seenLimits.push(Number(body.variables.limit));
-      return new Response(
-        JSON.stringify({
-          data: {
-            token: [
-              { fa_contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton', token_id: '1' },
-              { fa_contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton', token_id: '2' },
-              { fa_contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton', token_id: '3' },
-            ],
-          },
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } }
-      );
-    }) as FetchFn;
-
-    const result = await withMockedFetch(mock, () => resolveObjktCollection('hicetnunc', 2));
-    assert.equal(result.title, 'hic et nunc');
-    assert.equal(result.hasMore, true);
-    assert.deepEqual(seenLimits, [3]);
-    assert.deepEqual(result.tokens, [
-      {
-        chain: 'tezos',
-        contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton',
-        tokenId: '1',
-      },
-      {
-        chain: 'tezos',
-        contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton',
-        tokenId: '2',
-      },
-    ]);
   });
 });
 

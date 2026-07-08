@@ -6,7 +6,7 @@ import type { TokenCoords } from '@feralfile/source-resolver';
 import type { Playlist } from '../types';
 import { createPrompt, promptYesNo } from './helpers/prompt';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
-import { resolveObjktAlias, resolveObjktCollection } from '../utilities/objkt-marketplace';
+import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
 import { resolveOpenSeaCollection } from '../utilities/opensea-marketplace';
 import { resolveFxhashIteration, resolveFxhashProject } from '../utilities/fxhash-marketplace';
@@ -113,12 +113,10 @@ export const findCommand = new Command('find')
         process.exit(1);
       }
       if (parsed.kind === 'unsupported') {
-        if (isSuperRareCollectionUrl(input)) {
-          const resolved = await resolveTokenListInput(input);
-          if (resolved) {
-            await runResolvedTarget(resolved, options);
-            return;
-          }
+        const resolved = await resolveTokenListInput(input);
+        if (resolved) {
+          await runResolvedTarget(resolved, options);
+          return;
         }
         console.error(chalk.red(parsed.reason));
         process.exit(1);
@@ -300,16 +298,11 @@ async function resolveTarget(
     return resolveCoords({ chain: 'tezos', contract, tokenId: parsed.tokenId });
   }
   if (parsed.kind === 'objkt-collection') {
-    const collection = await resolveObjktCollection(parsed.slug, DP1_MAX_ITEMS);
-    if (collection.tokens.length === 0) {
+    const target = await resolveTokenListInput(input, `Objkt collection ${parsed.slug}`);
+    if (target === null) {
       throw new Error(`Objkt: no supported tokens found for collection "${parsed.slug}".`);
     }
-    return {
-      kind: 'token-list',
-      title: collection.title,
-      coords: collection.tokens,
-      hasMore: collection.hasMore,
-    };
+    return target;
   }
   if (parsed.kind === 'ab-collection') {
     const coords = await resolveArtBlocksCollection(parsed.slug);
@@ -377,7 +370,7 @@ async function resolveTokenListInput(
   input: string,
   fallbackTitle = 'Resolved source'
 ): Promise<ResolvedTarget | null> {
-  const result = await resolveTokenInfos(input);
+  const result = await resolveTokenInfos(input, { limit: DP1_MAX_ITEMS });
   if (result.kind !== 'tokens') {
     return null;
   }
@@ -385,25 +378,8 @@ async function resolveTokenListInput(
     kind: 'token-list',
     title: result.title ?? fallbackTitle,
     coords: result.coords,
+    hasMore: result.hasMore,
   };
-}
-
-/**
- * isSuperRareCollectionUrl identifies the one currently supported URL family
- * whose synchronous parser still returns `unsupported`: SuperRare per-contract
- * collection pages. Keeping the fallback narrow avoids surprising network
- * calls for every unsupported URL typo.
- */
-function isSuperRareCollectionUrl(input: string): boolean {
-  try {
-    const url = new URL(input);
-    return (
-      (url.hostname === 'superrare.com' || url.hostname === 'www.superrare.com') &&
-      /^\/collection\/0x[a-fA-F0-9]{40}\/?$/.test(url.pathname)
-    );
-  } catch {
-    return false;
-  }
 }
 
 /**
