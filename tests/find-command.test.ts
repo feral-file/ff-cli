@@ -33,6 +33,8 @@ let server: Server;
 let serverUrl: string;
 let handler: GraphQLHandler;
 
+const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
+
 before(async () => {
   server = createServer((req, res) => {
     let body = '';
@@ -187,7 +189,7 @@ const ETH_TOKEN = (
   tokenId: string
 ): { chainId: string; contractAddress: string; tokenId: string } => ({
   chainId: 'eip155:1',
-  contractAddress: '0xabc',
+  contractAddress: VALID_ETH_CONTRACT,
   tokenId,
 });
 
@@ -199,7 +201,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Test Artist — Test Series/);
     assert.match(result.stdout, /Build playlist with 2 tokens\?/);
@@ -217,7 +219,9 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       // detected from leftover rows, with more pages still advertised.
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2'), ETH_TOKEN('3')], true);
     };
-    const result = await runFind(['ethereum:0xabc:1', '--limit', '2'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--limit', '2'], {
+      stdin: 'n\n',
+    });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Build playlist with the first 2 tokens\?/);
     assert.match(result.stdout, /Cancelled\./);
@@ -232,7 +236,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     };
     // killOn stops the run once it has provably passed the prompt — the
     // next step would call the real FF indexer.
-    const result = await runFind(['ethereum:0xabc:1', '--output', 'out.json'], {
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
       killOn: /Indexing 2 tokens via FF indexer/,
     });
     assert.equal(result.code, null);
@@ -252,7 +256,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
         false
       );
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 1);
     assert.match(result.stdout, /Skipped 2 tokens on unsupported chains/);
     assert.match(result.stderr, /Series has no tokens on supported chains/);
@@ -265,9 +269,9 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       }
       return { errors: [{ message: 'unexpected query for single-token path' }] };
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Single token — ethereum 0xabc:1/);
+    assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
     assert.match(result.stdout, /Raster doesn't index this series/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
     assert.match(result.stdout, /Cancelled\./);
