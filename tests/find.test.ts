@@ -82,9 +82,13 @@ describe('parseFindInput', () => {
     assert.equal(r?.kind, 'token');
   });
 
-  test('Objkt collection URL → unsupported', () => {
+  test('Objkt collection URL → objkt-collection kind', () => {
     const r = parseFindInput('https://objkt.com/collections/KT1Whatever');
-    assert.equal(r?.kind, 'unsupported');
+    assert.equal(r?.kind, 'objkt-collection');
+    if (r?.kind !== 'objkt-collection') {
+      throw new Error('narrowing');
+    }
+    assert.equal(r.slug, 'KT1Whatever');
   });
 
   test('Art Blocks token URL → token kind, source artblocks', () => {
@@ -401,6 +405,264 @@ describe('parseFindInput', () => {
   test('URL from an unrecognized host → null', () => {
     assert.equal(parseFindInput('https://example.com/foo'), null);
   });
+});
+
+describe('parseFindInput - browsed supported website URLs', () => {
+  const fixtures = [
+    {
+      site: 'Objkt',
+      page: 'token',
+      url: 'https://objkt.com/tokens/KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton/9201',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'tezos',
+          contract: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton',
+          tokenId: '9201',
+        },
+        source: 'objkt',
+      },
+    },
+    {
+      site: 'Objkt',
+      page: 'alias token',
+      url: 'https://objkt.com/tokens/hicetnunc/111068',
+      expected: { kind: 'objkt-alias', alias: 'hicetnunc', tokenId: '111068' },
+    },
+    {
+      site: 'Objkt',
+      page: 'collection',
+      url: 'https://objkt.com/collections/KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton',
+      expected: { kind: 'objkt-collection', slug: 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton' },
+    },
+    {
+      site: 'Art Blocks',
+      page: 'current token',
+      url: 'https://www.artblocks.io/token/1/0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270/13000000',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270',
+          tokenId: '13000000',
+        },
+        source: 'artblocks',
+      },
+    },
+    {
+      site: 'Art Blocks',
+      page: 'legacy token',
+      url: 'https://www.artblocks.io/token/0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270-13000000',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0xa7d8d9ef8d8ce8992df33d8b8cf4aebabd5bd270',
+          tokenId: '13000000',
+        },
+        source: 'artblocks',
+      },
+    },
+    {
+      site: 'Art Blocks',
+      page: 'collection',
+      url: 'https://www.artblocks.io/collection/ringers-by-dmitri-cherniak',
+      expected: { kind: 'ab-collection', slug: 'ringers-by-dmitri-cherniak' },
+    },
+    {
+      site: 'fxhash',
+      page: 'gentk',
+      url: 'https://www.fxhash.xyz/gentk/FX1-KT1U6EHmNxJTkvaWJ4ThczG4FSDaHC21ssvi-1234',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'tezos',
+          contract: 'KT1U6EHmNxJTkvaWJ4ThczG4FSDaHC21ssvi',
+          tokenId: '1234',
+        },
+        source: 'fxhash',
+      },
+    },
+    {
+      site: 'fxhash',
+      page: 'iteration',
+      url: 'https://www.fxhash.xyz/iteration/garden-monoliths-215',
+      expected: { kind: 'fxhash-iteration', slug: 'garden-monoliths-215' },
+    },
+    {
+      site: 'fxhash',
+      page: 'project id',
+      url: 'https://www.fxhash.xyz/project/id/garden-monoliths',
+      expected: { kind: 'fxhash-project', slug: 'garden-monoliths' },
+    },
+    {
+      site: 'OpenSea',
+      page: 'item',
+      url: 'https://opensea.io/item/ethereum/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d/1',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d',
+          tokenId: '1',
+        },
+        source: 'opensea',
+      },
+    },
+    {
+      site: 'OpenSea',
+      page: 'asset',
+      url: 'https://opensea.io/assets/ethereum/0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d/1',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d',
+          tokenId: '1',
+        },
+        source: 'opensea',
+      },
+    },
+    {
+      site: 'OpenSea',
+      page: 'collection',
+      url: 'https://opensea.io/collection/azuki',
+      expected: { kind: 'os-collection', slug: 'azuki' },
+    },
+    {
+      site: 'SuperRare',
+      page: 'artwork',
+      url: 'https://superrare.com/artwork/eth/0x3e930455dcbf4bc69de9926bdaf8ef782398786f/1',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0x3e930455dcbf4bc69de9926bdaf8ef782398786f',
+          tokenId: '1',
+        },
+        source: 'superrare',
+      },
+    },
+    {
+      site: 'SuperRare',
+      page: 'collection',
+      url: 'https://superrare.com/collection/0x3e930455dcbf4bc69de9926bdaf8ef782398786f',
+      expected: { kind: 'unsupported', reasonIncludes: '/collection/' },
+    },
+    {
+      site: 'SuperRare',
+      page: 'artist slug',
+      url: 'https://superrare.com/louisdazy/disassociative-1',
+      expected: { kind: 'unsupported', reasonIncludes: '/artwork/eth/' },
+    },
+    {
+      site: 'Neort',
+      page: 'art',
+      url: 'https://neort.io/art/ce3lvgkn70rlpj69ccc0',
+      expected: { kind: 'neort-art', id: 'ce3lvgkn70rlpj69ccc0' },
+    },
+    {
+      site: 'Neort',
+      page: 'localized en art',
+      url: 'https://neort.io/en/art/ce3lvgkn70rlpj69ccc0',
+      expected: { kind: 'neort-art', id: 'ce3lvgkn70rlpj69ccc0' },
+    },
+    {
+      site: 'Neort',
+      page: 'localized ja art',
+      url: 'https://neort.io/ja/art/ce3lvgkn70rlpj69ccc0',
+      expected: { kind: 'neort-art', id: 'ce3lvgkn70rlpj69ccc0' },
+    },
+    {
+      site: 'Verse',
+      page: 'item',
+      url: 'https://verse.works/items/ethereum/0x23b72f7458a204446983f544d655df10f70533e9/139',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0x23b72f7458a204446983f544d655df10f70533e9',
+          tokenId: '139',
+        },
+        source: 'verse',
+      },
+    },
+    {
+      site: 'Verse',
+      page: 'series',
+      url: 'https://verse.works/series/quantizer-by-harm-van-den-dorpel',
+      expected: { kind: 'verse-series', slug: 'quantizer-by-harm-van-den-dorpel' },
+    },
+    {
+      site: 'Verse',
+      page: 'unsupported chain item',
+      url: 'https://verse.works/items/base/0xabc/1',
+      expected: { kind: 'unsupported', reasonIncludes: 'base' },
+    },
+    {
+      site: 'Raster',
+      page: 'artwork',
+      url: 'https://raster.art/artwork/split-logic-by-ricky-retouch',
+      expected: { kind: 'raster-artwork', slug: 'split-logic-by-ricky-retouch' },
+    },
+    {
+      site: 'Raster',
+      page: 'www artwork',
+      url: 'https://www.raster.art/artwork/split-logic-by-ricky-retouch',
+      expected: { kind: 'raster-artwork', slug: 'split-logic-by-ricky-retouch' },
+    },
+    {
+      site: 'Raster',
+      page: 'token',
+      url: 'https://www.raster.art/token/ethereum/0xf5705202462f066ac55c293f5798ae027b2f27b5/95',
+      expected: {
+        kind: 'token',
+        coords: {
+          chain: 'ethereum',
+          contract: '0xf5705202462f066ac55c293f5798ae027b2f27b5',
+          tokenId: '95',
+        },
+        source: 'raster',
+      },
+    },
+    {
+      site: 'Feral File',
+      page: 'artwork',
+      url: 'https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf',
+      expected: {
+        kind: 'ff-url',
+        urlKind: 'artwork',
+        identifier: 'f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf',
+      },
+    },
+    {
+      site: 'Feral File',
+      page: 'show',
+      url: 'https://feralfile.com/exhibitions/shows/ex-nihilo-a3c',
+      expected: { kind: 'ff-url', urlKind: 'show', identifier: 'ex-nihilo-a3c' },
+    },
+    {
+      site: 'Feral File',
+      page: 'series',
+      url: 'https://feralfile.com/exhibitions/series/liminal-6jt?viewMode=Grid',
+      expected: { kind: 'ff-url', urlKind: 'series', identifier: 'liminal-6jt' },
+    },
+  ];
+
+  for (const fixture of fixtures) {
+    test(`${fixture.site} ${fixture.page}`, () => {
+      const actual = parseFindInput(fixture.url);
+      assert.equal(actual?.kind, fixture.expected.kind);
+      if (fixture.expected.kind === 'unsupported') {
+        assert.equal(actual?.kind, 'unsupported');
+        if (actual?.kind === 'unsupported') {
+          assert.ok(actual.reason.includes(fixture.expected.reasonIncludes));
+        }
+      } else {
+        assert.deepEqual(actual, fixture.expected);
+      }
+    });
+  }
 });
 
 describe('parseLimitOption', () => {

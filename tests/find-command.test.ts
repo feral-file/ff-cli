@@ -17,11 +17,13 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const projectRoot = resolve(__dirname, '..');
+const testRequire = createRequire(__filename);
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim
 // limitations in spawn (Node refuses to execute .bat/.cmd without shell).
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
@@ -32,6 +34,8 @@ type GraphQLHandler = (query: string, variables: Record<string, unknown>) => unk
 let server: Server;
 let serverUrl: string;
 let handler: GraphQLHandler;
+
+const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
 
 before(async () => {
   server = createServer((req, res) => {
@@ -187,7 +191,7 @@ const ETH_TOKEN = (
   tokenId: string
 ): { chainId: string; contractAddress: string; tokenId: string } => ({
   chainId: 'eip155:1',
-  contractAddress: '0xabc',
+  contractAddress: VALID_ETH_CONTRACT,
   tokenId,
 });
 
@@ -199,7 +203,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Test Artist — Test Series/);
     assert.match(result.stdout, /Build playlist with 2 tokens\?/);
@@ -217,7 +221,9 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       // detected from leftover rows, with more pages still advertised.
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2'), ETH_TOKEN('3')], true);
     };
-    const result = await runFind(['ethereum:0xabc:1', '--limit', '2'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--limit', '2'], {
+      stdin: 'n\n',
+    });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Build playlist with the first 2 tokens\?/);
     assert.match(result.stdout, /Cancelled\./);
@@ -232,7 +238,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     };
     // killOn stops the run once it has provably passed the prompt — the
     // next step would call the real FF indexer.
-    const result = await runFind(['ethereum:0xabc:1', '--output', 'out.json'], {
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
       killOn: /Indexing 2 tokens via FF indexer/,
     });
     assert.equal(result.code, null);
@@ -252,7 +258,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
         false
       );
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 1);
     assert.match(result.stdout, /Skipped 2 tokens on unsupported chains/);
     assert.match(result.stderr, /Series has no tokens on supported chains/);
@@ -265,11 +271,296 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       }
       return { errors: [{ message: 'unexpected query for single-token path' }] };
     };
-    const result = await runFind(['ethereum:0xabc:1'], { stdin: 'n\n' });
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Single token — ethereum 0xabc:1/);
+    assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
     assert.match(result.stdout, /Raster doesn't index this series/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
     assert.match(result.stdout, /Cancelled\./);
+  });
+});
+
+describe('find command — resolver-backed token-list flow', () => {
+  test('passes --limit through parsed and unsupported resolver-backed token-list paths', async () => {
+    const objktCollectionUrl = 'https://objkt.com/collections/KT1TokenListContract';
+    const superRareCollectionUrl =
+      'https://superrare.com/collection/0x1234567890123456789012345678901234567890';
+    const feralFileShowUrl = 'https://feralfile.com/exhibitions/shows/mock-show';
+    const dir = mkdtempSync(join(tmpdir(), 'ff-find-token-list-'));
+    const originalCwd = process.cwd();
+    const resolverCalls: Array<{ input: string; options: { limit: number } }> = [];
+    const promptQuestions: string[] = [];
+    const promptAnswers = ['yes', 's', 'yes', 's', 'yes', 's'];
+    const indexedBatches: unknown[][] = [];
+    const stdoutWrites: string[] = [];
+    const stderrWrites: string[] = [];
+    const resolverMissInputs = new Set<string>();
+    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    const originalExit = process.exit;
+
+    const sourceResolver = testRequire('@feralfile/source-resolver');
+    const originalResolveTokenInfos = Object.getOwnPropertyDescriptor(
+      sourceResolver,
+      'resolveTokenInfos'
+    );
+    const promptPath = testRequire.resolve('../src/commands/helpers/prompt');
+    const nftIndexerPath = testRequire.resolve('../src/utilities/nft-indexer');
+    const playlistBuilderPath = testRequire.resolve('../src/utilities/playlist-builder');
+    const originalPromptCache = testRequire.cache[promptPath];
+    const originalNftIndexerCache = testRequire.cache[nftIndexerPath];
+    const originalPlaylistBuilderCache = testRequire.cache[playlistBuilderPath];
+
+    Object.defineProperty(sourceResolver, 'resolveTokenInfos', {
+      configurable: true,
+      value: async (input: string, options: { limit: number }) => {
+        resolverCalls.push({ input, options });
+        if (resolverMissInputs.has(input)) {
+          return {
+            kind: 'not-found',
+            reason: 'mock resolver miss',
+          };
+        }
+        const isSuperRareCollection = input === superRareCollectionUrl;
+        const isFeralFileShow = input === feralFileShowUrl;
+        return {
+          kind: 'tokens',
+          title: isSuperRareCollection
+            ? 'Mock SuperRare Collection'
+            : isFeralFileShow
+              ? 'Mock Feral File Show'
+              : 'Mock Objkt Collection',
+          coords: [
+            {
+              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
+              contract:
+                isSuperRareCollection || isFeralFileShow
+                  ? '0x1234567890123456789012345678901234567890'
+                  : 'KT1TokenListContract',
+              tokenId: isSuperRareCollection ? '7' : isFeralFileShow ? '11' : '1',
+            },
+            {
+              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
+              contract:
+                isSuperRareCollection || isFeralFileShow
+                  ? '0x1234567890123456789012345678901234567890'
+                  : 'KT1TokenListContract',
+              tokenId: isSuperRareCollection ? '8' : isFeralFileShow ? '12' : '2',
+            },
+          ],
+          hasMore: true,
+        };
+      },
+    });
+
+    testRequire.cache[promptPath] = {
+      id: promptPath,
+      filename: promptPath,
+      loaded: true,
+      exports: {
+        createPrompt: () => ({
+          ask: async (question: string) => {
+            promptQuestions.push(question);
+            return promptAnswers.shift() ?? 's';
+          },
+          close: () => undefined,
+        }),
+        promptYesNo: async (ask: (question: string) => Promise<string>, question: string) => {
+          const answer = await ask(`${question} [Y/n] `);
+          return answer === 'yes';
+        },
+      },
+    };
+    testRequire.cache[nftIndexerPath] = {
+      id: nftIndexerPath,
+      filename: nftIndexerPath,
+      loaded: true,
+      exports: {
+        getNFTTokenInfoBatch: async (tokens: unknown[]) => {
+          indexedBatches.push(tokens);
+          return [{ title: 'Indexed token', media: { uri: 'ipfs://token-1' } }];
+        },
+      },
+    };
+    testRequire.cache[playlistBuilderPath] = {
+      id: playlistBuilderPath,
+      filename: playlistBuilderPath,
+      loaded: true,
+      exports: {
+        buildDP1Playlist: async ({ items, title }: { items: unknown[]; title: string }) => ({
+          slug: 'mock-objkt-collection',
+          title,
+          items,
+        }),
+        buildUrlItem: () => {
+          throw new Error('token-list flow should not build direct URL items');
+        },
+      },
+    };
+
+    try {
+      process.chdir(dir);
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        stdoutWrites.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write;
+      process.stderr.write = ((chunk: string | Uint8Array) => {
+        stderrWrites.push(String(chunk));
+        return true;
+      }) as typeof process.stderr.write;
+      process.exit = ((code?: string | number | null) => {
+        throw new Error(`process.exit(${code ?? 0})`);
+      }) as typeof process.exit;
+      const imported = await import('../src/commands/find');
+      const findCommand = imported.findCommand ?? imported.default.findCommand;
+
+      await findCommand.parseAsync(['node', 'find', objktCollectionUrl, '--limit', '1'], {
+        from: 'node',
+      });
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: objktCollectionUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [{ chain: 'tezos', contractAddress: 'KT1TokenListContract', tokenId: '1' }],
+      ]);
+      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
+      assert.match(promptQuestions[1], /^Next\? \[P\]lay on FF1/);
+      assert.match(stdoutWrites.join(''), /Mock Objkt Collection/);
+      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+      assert.ok(existsSync(join(dir, 'mock-objkt-collection.json')));
+      assert.equal(
+        JSON.parse(readFileSync(join(dir, 'mock-objkt-collection.json'), 'utf8')).title,
+        'Mock Objkt Collection'
+      );
+
+      resolverCalls.length = 0;
+      promptQuestions.length = 0;
+      indexedBatches.length = 0;
+      stdoutWrites.length = 0;
+
+      await findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
+        from: 'node',
+      });
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: superRareCollectionUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [
+          {
+            chain: 'ethereum',
+            contractAddress: '0x1234567890123456789012345678901234567890',
+            tokenId: '7',
+          },
+        ],
+      ]);
+      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
+      assert.match(stdoutWrites.join(''), /Mock SuperRare Collection/);
+      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+
+      resolverCalls.length = 0;
+      stderrWrites.length = 0;
+      resolverMissInputs.add(superRareCollectionUrl);
+
+      await assert.rejects(
+        () =>
+          findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
+            from: 'node',
+          }),
+        /process\.exit\(1\)/
+      );
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: superRareCollectionUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.match(stderrWrites.join(''), /SuperRare collection URLs/);
+      assert.match(stderrWrites.join(''), /Paste a specific token URL/);
+
+      resolverCalls.length = 0;
+      promptQuestions.length = 0;
+      indexedBatches.length = 0;
+      stdoutWrites.length = 0;
+      resolverMissInputs.delete(superRareCollectionUrl);
+
+      await findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
+        from: 'node',
+      });
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: feralFileShowUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [
+          {
+            chain: 'ethereum',
+            contractAddress: '0x1234567890123456789012345678901234567890',
+            tokenId: '11',
+          },
+        ],
+      ]);
+      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
+      assert.match(stdoutWrites.join(''), /Mock Feral File Show/);
+      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+
+      resolverCalls.length = 0;
+      stderrWrites.length = 0;
+      resolverMissInputs.add(feralFileShowUrl);
+
+      await assert.rejects(
+        () =>
+          findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
+            from: 'node',
+          }),
+        /process\.exit\(1\)/
+      );
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: feralFileShowUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.match(
+        stderrWrites.join(''),
+        /Feral File: no supported tokens found for show "mock-show"/
+      );
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.stderr.write = originalStderrWrite;
+      process.exit = originalExit;
+      process.chdir(originalCwd);
+      rmSync(dir, { recursive: true, force: true });
+      if (originalResolveTokenInfos) {
+        Object.defineProperty(sourceResolver, 'resolveTokenInfos', originalResolveTokenInfos);
+      }
+      if (originalPromptCache) {
+        testRequire.cache[promptPath] = originalPromptCache;
+      } else {
+        delete testRequire.cache[promptPath];
+      }
+      if (originalNftIndexerCache) {
+        testRequire.cache[nftIndexerPath] = originalNftIndexerCache;
+      } else {
+        delete testRequire.cache[nftIndexerPath];
+      }
+      if (originalPlaylistBuilderCache) {
+        testRequire.cache[playlistBuilderPath] = originalPlaylistBuilderCache;
+      } else {
+        delete testRequire.cache[playlistBuilderPath];
+      }
+    }
   });
 });

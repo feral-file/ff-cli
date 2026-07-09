@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { parseFindInput } from '@feralfile/source-resolver';
+import { parseFindInput, resolveTokenInfos } from '@feralfile/source-resolver';
 import type { TokenCoords } from '@feralfile/source-resolver';
 import type { Playlist } from '../types';
 import { createPrompt, promptYesNo } from './helpers/prompt';
@@ -57,10 +57,14 @@ type PostBuildAction = 'play' | 'publish' | 'skip';
  * `series` — Raster knows the artwork; we'll enumerate every token in it.
  * `single` — Raster doesn't index this token's series (returns 404); fall
  *   back to a one-item playlist using the FF indexer for the pasted token.
+ * `token-list` — the source-resolver library returned concrete token
+ *   coordinates for a collection-like page, so no Raster series lookup is
+ *   needed before handing tokens to the FF indexer.
  */
 type ResolvedTarget =
   | { kind: 'series'; summary: RasterArtworkSummary }
-  | { kind: 'single'; coords: TokenCoords };
+  | { kind: 'single'; coords: TokenCoords }
+  | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
 
 /**
  * A token to build into the playlist. `mediaUrl` is Raster's own playable
@@ -109,6 +113,11 @@ export const findCommand = new Command('find')
         process.exit(1);
       }
       if (parsed.kind === 'unsupported') {
+        const resolved = await resolveTokenListInput(input, resolverLimitFromOption(options.limit));
+        if (resolved) {
+          await runResolvedTarget(resolved, options);
+          return;
+        }
         console.error(chalk.red(parsed.reason));
         process.exit(1);
       }
@@ -120,160 +129,189 @@ export const findCommand = new Command('find')
         return;
       }
 
-      const target = await resolveTarget(parsed, !!options.yes);
-
-      if (target.kind === 'series') {
-        console.log(chalk.cyan(formatSummaryLine(target.summary)));
-      } else {
-        const { chain, contract, tokenId } = target.coords;
-        console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
-        console.log(
-          chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)")
-        );
-      }
-      console.log();
-
-      const userLimit = parseLimitOption(options.limit);
-      // Implicit cap: no --limit + series > 1024 → cap to DP-1 max with a
-      // clear warning. Explicit `--limit > 1024` was already rejected by
-      // parseLimitOption, so reaching here means either capped-by-default or
-      // the user picked a value within spec.
-      const limit = Math.min(userLimit, DP1_MAX_ITEMS);
-
-      // Raster's GraphQL API exposes no series token counts, so enumerate
-      // tokens first (up to the effective limit) and confirm with the real
-      // number afterward. `hasMore` means the series continues past `limit`.
-      let tokens: BuildToken[];
-      let seriesHasMore = false;
-      if (target.kind === 'series') {
-        const fetched = await fetchTokens(target.summary, limit);
-        tokens = fetched.tokens;
-        seriesHasMore = fetched.hasMore;
-      } else {
-        tokens = [{ ...target.coords, mediaUrl: null, mediaType: null }];
-      }
-
-      if (tokens.length === 0) {
-        console.error(
-          chalk.red('Series has no tokens on supported chains (Ethereum + Tezos mainnet).')
-        );
-        process.exit(1);
-      }
-
-      if (userLimit === Number.POSITIVE_INFINITY && seriesHasMore) {
-        console.log(
-          chalk.yellow(
-            `Series has more than ${DP1_MAX_ITEMS} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
-              `Building with the first ${DP1_MAX_ITEMS} — pass \`--limit N\` (≤ ${DP1_MAX_ITEMS}) for fewer.`
-          )
-        );
-        console.log();
-      }
-
-      const shouldBuild =
-        !!options.yes ||
-        !!options.output ||
-        (await confirmMakePlaylist(tokens.length, seriesHasMore));
-      if (!shouldBuild) {
-        console.log(chalk.dim('Cancelled.'));
-        return;
-      }
-      console.log(
-        chalk.dim(
-          `Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`
-        )
-      );
-
-      // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
-      // display seconds), not concurrency — concurrency is hardcoded inside.
-      // Omit it for auto timing: video/audio items carry no duration and play
-      // their natural length (DP-1 §4.1); static items get the config default.
-      let items = await getNFTTokenInfoBatch(
-        tokens.map((t) => ({
-          chain: t.chain,
-          contractAddress: t.contract,
-          tokenId: t.tokenId,
-        }))
-      );
-
-      // FF-indexer bypass for Raster-minted tokens. The indexer doesn't carry
-      // Raster's tokens, so it returns nothing — but Raster handed us each
-      // token's playable `media.contentUrl`. Build DP-1 items straight from
-      // that (off-chain provenance, same shape as the Neort path), so the
-      // series still builds into a signable, verifiable playlist instead of
-      // failing the way it did before. The indexer is tried first so tokens
-      // it *can* resolve keep their richer on-chain provenance.
-      if (!Array.isArray(items) || items.length === 0) {
-        const rasterItems = buildRasterMediaItems(tokens, target);
-        if (rasterItems.length > 0) {
-          console.log(
-            chalk.dim(
-              `  FF indexer returned nothing; building ${rasterItems.length} item${
-                rasterItems.length === 1 ? '' : 's'
-              } directly from Raster media.`
-            )
-          );
-          items = rasterItems;
-        }
-      }
-
-      if (!Array.isArray(items) || items.length === 0) {
-        console.error(chalk.red('No tokens could be indexed; cannot build playlist.'));
-        console.error(
-          chalk.dim(
-            '  The FF indexer may be under load when warming a series of previously-unseen tokens.'
-          )
-        );
-        console.error(
-          chalk.dim('  Try `--limit 5` first to warm the cache, then re-run without --limit.')
-        );
-        process.exit(1);
-      }
-
-      const title = playlistTitleFor(target, items);
-      const playlist = await buildDP1Playlist({ items, title });
-
-      const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
-      await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
-
-      console.log(chalk.green(`✓ Playlist saved to ${outputPath}`));
-      console.log(chalk.dim(`  ${items.length} item${items.length === 1 ? '' : 's'}`));
-      const dropped = tokens.length - items.length;
-      if (dropped > 0) {
-        console.log(
-          chalk.dim(`  ${dropped} token${dropped === 1 ? '' : 's'} dropped during indexing`)
-        );
-      }
-      console.log();
-
-      const actions = await decideActions(options);
-      for (const action of actions) {
-        if (action === 'play') {
-          await doPlay(playlist, options.device, !!options.skipVerify);
-        } else if (action === 'publish') {
-          await doPublish(outputPath, options.server, !!options.yes);
-        }
-      }
+      const target = await resolveTarget(input, parsed, !!options.yes, options.limit);
+      await runResolvedTarget(target, options);
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
       process.exit(1);
     }
   });
 
+async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): Promise<void> {
+  if (target.kind === 'series') {
+    console.log(chalk.cyan(formatSummaryLine(target.summary)));
+  } else if (target.kind === 'token-list') {
+    console.log(chalk.cyan(target.title));
+  } else {
+    const { chain, contract, tokenId } = target.coords;
+    console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
+    console.log(chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)"));
+  }
+  console.log();
+
+  const userLimit = parseLimitOption(options.limit);
+  // Implicit cap: no --limit + series > 1024 → cap to DP-1 max with a
+  // clear warning. Explicit `--limit > 1024` was already rejected by
+  // parseLimitOption, so reaching here means either capped-by-default or
+  // the user picked a value within spec.
+  const limit = Math.min(userLimit, DP1_MAX_ITEMS);
+
+  // Raster's GraphQL API exposes no series token counts, so enumerate
+  // tokens first (up to the effective limit) and confirm with the real
+  // number afterward. `hasMore` means the series continues past `limit`.
+  let tokens: BuildToken[];
+  let seriesHasMore = false;
+  if (target.kind === 'series') {
+    const fetched = await fetchTokens(target.summary, limit);
+    tokens = fetched.tokens;
+    seriesHasMore = fetched.hasMore;
+  } else if (target.kind === 'token-list') {
+    const allTokens = target.coords.map((coords) => ({
+      ...coords,
+      mediaUrl: null,
+      mediaType: null,
+    }));
+    tokens = allTokens.slice(0, limit);
+    seriesHasMore = allTokens.length > limit || !!target.hasMore;
+  } else {
+    tokens = [{ ...target.coords, mediaUrl: null, mediaType: null }];
+  }
+
+  if (tokens.length === 0) {
+    console.error(
+      chalk.red('Series has no tokens on supported chains (Ethereum + Tezos mainnet).')
+    );
+    process.exit(1);
+  }
+
+  if (userLimit === Number.POSITIVE_INFINITY && seriesHasMore) {
+    console.log(
+      chalk.yellow(
+        `Series has more than ${DP1_MAX_ITEMS} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
+          `Building with the first ${DP1_MAX_ITEMS} — pass \`--limit N\` (≤ ${DP1_MAX_ITEMS}) for fewer.`
+      )
+    );
+    console.log();
+  }
+
+  const shouldBuild =
+    !!options.yes || !!options.output || (await confirmMakePlaylist(tokens.length, seriesHasMore));
+  if (!shouldBuild) {
+    console.log(chalk.dim('Cancelled.'));
+    return;
+  }
+  console.log(
+    chalk.dim(`Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`)
+  );
+
+  // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
+  // display seconds), not concurrency — concurrency is hardcoded inside.
+  // Omit it for auto timing: video/audio items carry no duration and play
+  // their natural length (DP-1 §4.1); static items get the config default.
+  let items = await getNFTTokenInfoBatch(
+    tokens.map((t) => ({
+      chain: t.chain,
+      contractAddress: t.contract,
+      tokenId: t.tokenId,
+    }))
+  );
+
+  // FF-indexer bypass for Raster-minted tokens. The indexer doesn't carry
+  // Raster's tokens, so it returns nothing — but Raster handed us each
+  // token's playable `media.contentUrl`. Build DP-1 items straight from
+  // that (off-chain provenance, same shape as the Neort path), so the
+  // series still builds into a signable, verifiable playlist instead of
+  // failing the way it did before. The indexer is tried first so tokens
+  // it *can* resolve keep their richer on-chain provenance.
+  if (!Array.isArray(items) || items.length === 0) {
+    const rasterItems = buildRasterMediaItems(tokens, target);
+    if (rasterItems.length > 0) {
+      console.log(
+        chalk.dim(
+          `  FF indexer returned nothing; building ${rasterItems.length} item${
+            rasterItems.length === 1 ? '' : 's'
+          } directly from Raster media.`
+        )
+      );
+      items = rasterItems;
+    }
+  }
+
+  if (!Array.isArray(items) || items.length === 0) {
+    console.error(chalk.red('No tokens could be indexed; cannot build playlist.'));
+    console.error(
+      chalk.dim(
+        '  The FF indexer may be under load when warming a series of previously-unseen tokens.'
+      )
+    );
+    console.error(
+      chalk.dim('  Try `--limit 5` first to warm the cache, then re-run without --limit.')
+    );
+    process.exit(1);
+  }
+
+  const title = playlistTitleFor(target, items);
+  const playlist = await buildDP1Playlist({ items, title });
+
+  const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
+  await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
+
+  console.log(chalk.green(`✓ Playlist saved to ${outputPath}`));
+  console.log(chalk.dim(`  ${items.length} item${items.length === 1 ? '' : 's'}`));
+  const dropped = tokens.length - items.length;
+  if (dropped > 0) {
+    console.log(chalk.dim(`  ${dropped} token${dropped === 1 ? '' : 's'} dropped during indexing`));
+  }
+  console.log();
+
+  const actions = await decideActions(options);
+  for (const action of actions) {
+    if (action === 'play') {
+      await doPlay(playlist, options.device, !!options.skipVerify);
+    } else if (action === 'publish') {
+      await doPublish(outputPath, options.server, !!options.yes);
+    }
+  }
+}
+
 async function resolveTarget(
+  input: string,
   parsed: NonNullable<ReturnType<typeof parseFindInput>>,
-  skipPrompt: boolean
+  skipPrompt: boolean,
+  limitOption: string | undefined
 ): Promise<ResolvedTarget> {
   if (parsed.kind === 'token') {
     return resolveCoords(parsed.coords);
   }
   if (parsed.kind === 'ff-url') {
+    if (parsed.urlKind === 'show') {
+      const target = await resolveTokenListInput(
+        input,
+        resolverLimitFromOption(limitOption),
+        `Feral File show ${parsed.identifier}`
+      );
+      if (target === null) {
+        throw new Error(`Feral File: no supported tokens found for show "${parsed.identifier}".`);
+      }
+      return target;
+    }
     const coords = await resolveFeralFileToken(parsed);
     return resolveCoords(coords);
   }
   if (parsed.kind === 'objkt-alias') {
     const contract = await resolveObjktAlias(parsed.alias);
     return resolveCoords({ chain: 'tezos', contract, tokenId: parsed.tokenId });
+  }
+  if (parsed.kind === 'objkt-collection') {
+    const target = await resolveTokenListInput(
+      input,
+      resolverLimitFromOption(limitOption),
+      `Objkt collection ${parsed.slug}`
+    );
+    if (target === null) {
+      throw new Error(`Objkt: no supported tokens found for collection "${parsed.slug}".`);
+    }
+    return target;
   }
   if (parsed.kind === 'ab-collection') {
     const coords = await resolveArtBlocksCollection(parsed.slug);
@@ -292,6 +330,14 @@ async function resolveTarget(
     return resolveCoords(coords);
   }
   if (parsed.kind === 'verse-series') {
+    const target = await resolveTokenListInput(
+      input,
+      resolverLimitFromOption(limitOption),
+      `Verse series ${parsed.slug}`
+    );
+    if (target !== null) {
+      return target;
+    }
     const coords = await resolveVerseSeries(parsed.slug);
     return resolveCoords(coords);
   }
@@ -328,6 +374,40 @@ async function resolveTarget(
 }
 
 /**
+ * resolverLimitFromOption returns the exact bound to give source-resolver
+ * before any collection-like network fetch starts. The CLI still slices
+ * locally in `runResolvedTarget`, but passing this value early keeps large
+ * marketplace catalogs from being over-resolved when the user requested a
+ * smaller playlist.
+ */
+function resolverLimitFromOption(limitStr: string | undefined): number {
+  return Math.min(parseLimitOption(limitStr), DP1_MAX_ITEMS);
+}
+
+/**
+ * Resolve collection-like URLs through the source-resolver package when its
+ * committed support goes beyond the synchronous parser marker. This keeps the
+ * CLI aligned with the library without duplicating every marketplace API and
+ * DOM extraction fallback locally.
+ */
+async function resolveTokenListInput(
+  input: string,
+  limit: number,
+  fallbackTitle = 'Resolved source'
+): Promise<ResolvedTarget | null> {
+  const result = await resolveTokenInfos(input, { limit });
+  if (result.kind !== 'tokens') {
+    return null;
+  }
+  return {
+    kind: 'token-list',
+    title: result.title ?? fallbackTitle,
+    coords: result.coords,
+    hasMore: result.hasMore,
+  };
+}
+
+/**
  * Resolve on-chain coords to a target. If Raster doesn't index this token,
  * fall back to single-token mode so we still build something playable.
  */
@@ -348,6 +428,9 @@ function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string 
   if (target.kind === 'series') {
     const artistLabel = target.summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
     return `${artistLabel} — ${target.summary.title}`;
+  }
+  if (target.kind === 'token-list') {
+    return target.title;
   }
   return items[0]?.title ?? `Token ${target.coords.tokenId}`;
 }
