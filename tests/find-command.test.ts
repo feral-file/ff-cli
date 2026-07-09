@@ -282,15 +282,19 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
 
 describe('find command — resolver-backed token-list flow', () => {
   test('passes --limit through parsed and unsupported resolver-backed token-list paths', async () => {
+    const objktCollectionUrl = 'https://objkt.com/collections/KT1TokenListContract';
+    const superRareCollectionUrl =
+      'https://superrare.com/collection/0x1234567890123456789012345678901234567890';
+    const feralFileShowUrl = 'https://feralfile.com/exhibitions/shows/mock-show';
     const dir = mkdtempSync(join(tmpdir(), 'ff-find-token-list-'));
     const originalCwd = process.cwd();
     const resolverCalls: Array<{ input: string; options: { limit: number } }> = [];
     const promptQuestions: string[] = [];
-    const promptAnswers = ['yes', 's', 'yes', 's'];
+    const promptAnswers = ['yes', 's', 'yes', 's', 'yes', 's'];
     const indexedBatches: unknown[][] = [];
     const stdoutWrites: string[] = [];
     const stderrWrites: string[] = [];
-    let unsupportedResolverMiss = false;
+    const resolverMissInputs = new Set<string>();
     const originalStdoutWrite = process.stdout.write.bind(process.stdout);
     const originalStderrWrite = process.stderr.write.bind(process.stderr);
     const originalExit = process.exit;
@@ -311,31 +315,37 @@ describe('find command — resolver-backed token-list flow', () => {
       configurable: true,
       value: async (input: string, options: { limit: number }) => {
         resolverCalls.push({ input, options });
-        if (unsupportedResolverMiss) {
+        if (resolverMissInputs.has(input)) {
           return {
             kind: 'not-found',
             reason: 'mock resolver miss',
           };
         }
+        const isSuperRareCollection = input === superRareCollectionUrl;
+        const isFeralFileShow = input === feralFileShowUrl;
         return {
           kind: 'tokens',
-          title: input.includes('superrare.com')
+          title: isSuperRareCollection
             ? 'Mock SuperRare Collection'
-            : 'Mock Objkt Collection',
+            : isFeralFileShow
+              ? 'Mock Feral File Show'
+              : 'Mock Objkt Collection',
           coords: [
             {
-              chain: input.includes('superrare.com') ? 'ethereum' : 'tezos',
-              contract: input.includes('superrare.com')
-                ? '0x1234567890123456789012345678901234567890'
-                : 'KT1TokenListContract',
-              tokenId: input.includes('superrare.com') ? '7' : '1',
+              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
+              contract:
+                isSuperRareCollection || isFeralFileShow
+                  ? '0x1234567890123456789012345678901234567890'
+                  : 'KT1TokenListContract',
+              tokenId: isSuperRareCollection ? '7' : isFeralFileShow ? '11' : '1',
             },
             {
-              chain: input.includes('superrare.com') ? 'ethereum' : 'tezos',
-              contract: input.includes('superrare.com')
-                ? '0x1234567890123456789012345678901234567890'
-                : 'KT1TokenListContract',
-              tokenId: input.includes('superrare.com') ? '8' : '2',
+              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
+              contract:
+                isSuperRareCollection || isFeralFileShow
+                  ? '0x1234567890123456789012345678901234567890'
+                  : 'KT1TokenListContract',
+              tokenId: isSuperRareCollection ? '8' : isFeralFileShow ? '12' : '2',
             },
           ],
           hasMore: true,
@@ -404,14 +414,13 @@ describe('find command — resolver-backed token-list flow', () => {
       const imported = await import('../src/commands/find');
       const findCommand = imported.findCommand ?? imported.default.findCommand;
 
-      await findCommand.parseAsync(
-        ['node', 'find', 'https://objkt.com/collections/KT1TokenListContract', '--limit', '1'],
-        { from: 'node' }
-      );
+      await findCommand.parseAsync(['node', 'find', objktCollectionUrl, '--limit', '1'], {
+        from: 'node',
+      });
 
       assert.deepEqual(resolverCalls, [
         {
-          input: 'https://objkt.com/collections/KT1TokenListContract',
+          input: objktCollectionUrl,
           options: { limit: 1 },
         },
       ]);
@@ -433,20 +442,13 @@ describe('find command — resolver-backed token-list flow', () => {
       indexedBatches.length = 0;
       stdoutWrites.length = 0;
 
-      await findCommand.parseAsync(
-        [
-          'node',
-          'find',
-          'https://superrare.com/collection/0x1234567890123456789012345678901234567890',
-          '--limit',
-          '1',
-        ],
-        { from: 'node' }
-      );
+      await findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
+        from: 'node',
+      });
 
       assert.deepEqual(resolverCalls, [
         {
-          input: 'https://superrare.com/collection/0x1234567890123456789012345678901234567890',
+          input: superRareCollectionUrl,
           options: { limit: 1 },
         },
       ]);
@@ -465,31 +467,76 @@ describe('find command — resolver-backed token-list flow', () => {
 
       resolverCalls.length = 0;
       stderrWrites.length = 0;
-      unsupportedResolverMiss = true;
+      resolverMissInputs.add(superRareCollectionUrl);
 
       await assert.rejects(
         () =>
-          findCommand.parseAsync(
-            [
-              'node',
-              'find',
-              'https://superrare.com/collection/0x1234567890123456789012345678901234567890',
-              '--limit',
-              '1',
-            ],
-            { from: 'node' }
-          ),
+          findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
+            from: 'node',
+          }),
         /process\.exit\(1\)/
       );
 
       assert.deepEqual(resolverCalls, [
         {
-          input: 'https://superrare.com/collection/0x1234567890123456789012345678901234567890',
+          input: superRareCollectionUrl,
           options: { limit: 1 },
         },
       ]);
       assert.match(stderrWrites.join(''), /SuperRare collection URLs/);
       assert.match(stderrWrites.join(''), /Paste a specific token URL/);
+
+      resolverCalls.length = 0;
+      promptQuestions.length = 0;
+      indexedBatches.length = 0;
+      stdoutWrites.length = 0;
+      resolverMissInputs.delete(superRareCollectionUrl);
+
+      await findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
+        from: 'node',
+      });
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: feralFileShowUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [
+          {
+            chain: 'ethereum',
+            contractAddress: '0x1234567890123456789012345678901234567890',
+            tokenId: '11',
+          },
+        ],
+      ]);
+      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
+      assert.match(stdoutWrites.join(''), /Mock Feral File Show/);
+      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+
+      resolverCalls.length = 0;
+      stderrWrites.length = 0;
+      resolverMissInputs.add(feralFileShowUrl);
+
+      await assert.rejects(
+        () =>
+          findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
+            from: 'node',
+          }),
+        /process\.exit\(1\)/
+      );
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: feralFileShowUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.match(
+        stderrWrites.join(''),
+        /Feral File: no supported tokens found for show "mock-show"/
+      );
     } finally {
       process.stdout.write = originalStdoutWrite;
       process.stderr.write = originalStderrWrite;
