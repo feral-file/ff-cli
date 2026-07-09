@@ -17,11 +17,13 @@ import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const projectRoot = resolve(__dirname, '..');
+const testRequire = createRequire(__filename);
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim
 // limitations in spawn (Node refuses to execute .bat/.cmd without shell).
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
@@ -275,5 +277,155 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.match(result.stdout, /Raster doesn't index this series/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
     assert.match(result.stdout, /Cancelled\./);
+  });
+});
+
+describe('find command — resolver-backed token-list flow', () => {
+  test('passes --limit to source-resolver and prompts for the first N token-list results', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff-find-token-list-'));
+    const originalCwd = process.cwd();
+    const resolverCalls: Array<{ input: string; options: { limit: number } }> = [];
+    const promptQuestions: string[] = [];
+    const promptAnswers = ['yes', 's'];
+    const indexedBatches: unknown[][] = [];
+    const stdoutWrites: string[] = [];
+    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
+
+    const sourceResolver = testRequire('@feralfile/source-resolver');
+    const originalResolveTokenInfos = Object.getOwnPropertyDescriptor(
+      sourceResolver,
+      'resolveTokenInfos'
+    );
+    const promptPath = testRequire.resolve('../src/commands/helpers/prompt');
+    const nftIndexerPath = testRequire.resolve('../src/utilities/nft-indexer');
+    const playlistBuilderPath = testRequire.resolve('../src/utilities/playlist-builder');
+    const originalPromptCache = testRequire.cache[promptPath];
+    const originalNftIndexerCache = testRequire.cache[nftIndexerPath];
+    const originalPlaylistBuilderCache = testRequire.cache[playlistBuilderPath];
+
+    Object.defineProperty(sourceResolver, 'resolveTokenInfos', {
+      configurable: true,
+      value: async (input: string, options: { limit: number }) => {
+        resolverCalls.push({ input, options });
+        return {
+          kind: 'tokens',
+          title: 'Mock Objkt Collection',
+          coords: [
+            {
+              chain: 'tezos',
+              contract: 'KT1TokenListContract',
+              tokenId: '1',
+            },
+            {
+              chain: 'tezos',
+              contract: 'KT1TokenListContract',
+              tokenId: '2',
+            },
+          ],
+          hasMore: true,
+        };
+      },
+    });
+
+    testRequire.cache[promptPath] = {
+      id: promptPath,
+      filename: promptPath,
+      loaded: true,
+      exports: {
+        createPrompt: () => ({
+          ask: async (question: string) => {
+            promptQuestions.push(question);
+            return promptAnswers.shift() ?? 's';
+          },
+          close: () => undefined,
+        }),
+        promptYesNo: async (ask: (question: string) => Promise<string>, question: string) => {
+          const answer = await ask(`${question} [Y/n] `);
+          return answer === 'yes';
+        },
+      },
+    };
+    testRequire.cache[nftIndexerPath] = {
+      id: nftIndexerPath,
+      filename: nftIndexerPath,
+      loaded: true,
+      exports: {
+        getNFTTokenInfoBatch: async (tokens: unknown[]) => {
+          indexedBatches.push(tokens);
+          return [{ title: 'Indexed token', media: { uri: 'ipfs://token-1' } }];
+        },
+      },
+    };
+    testRequire.cache[playlistBuilderPath] = {
+      id: playlistBuilderPath,
+      filename: playlistBuilderPath,
+      loaded: true,
+      exports: {
+        buildDP1Playlist: async ({ items, title }: { items: unknown[]; title: string }) => ({
+          slug: 'mock-objkt-collection',
+          title,
+          items,
+        }),
+        buildUrlItem: () => {
+          throw new Error('token-list flow should not build direct URL items');
+        },
+      },
+    };
+
+    try {
+      process.chdir(dir);
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        stdoutWrites.push(String(chunk));
+        return true;
+      }) as typeof process.stdout.write;
+      const imported = await import('../src/commands/find');
+      const findCommand = imported.findCommand ?? imported.default.findCommand;
+
+      await findCommand.parseAsync(
+        ['node', 'find', 'https://objkt.com/collections/KT1TokenListContract', '--limit', '1'],
+        { from: 'node' }
+      );
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: 'https://objkt.com/collections/KT1TokenListContract',
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [{ chain: 'tezos', contractAddress: 'KT1TokenListContract', tokenId: '1' }],
+      ]);
+      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
+      assert.match(promptQuestions[1], /^Next\? \[P\]lay on FF1/);
+      assert.match(stdoutWrites.join(''), /Mock Objkt Collection/);
+      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+      assert.ok(existsSync(join(dir, 'mock-objkt-collection.json')));
+      assert.equal(
+        JSON.parse(readFileSync(join(dir, 'mock-objkt-collection.json'), 'utf8')).title,
+        'Mock Objkt Collection'
+      );
+    } finally {
+      process.stdout.write = originalStdoutWrite;
+      process.chdir(originalCwd);
+      rmSync(dir, { recursive: true, force: true });
+      if (originalResolveTokenInfos) {
+        Object.defineProperty(sourceResolver, 'resolveTokenInfos', originalResolveTokenInfos);
+      }
+      if (originalPromptCache) {
+        testRequire.cache[promptPath] = originalPromptCache;
+      } else {
+        delete testRequire.cache[promptPath];
+      }
+      if (originalNftIndexerCache) {
+        testRequire.cache[nftIndexerPath] = originalNftIndexerCache;
+      } else {
+        delete testRequire.cache[nftIndexerPath];
+      }
+      if (originalPlaylistBuilderCache) {
+        testRequire.cache[playlistBuilderPath] = originalPlaylistBuilderCache;
+      } else {
+        delete testRequire.cache[playlistBuilderPath];
+      }
+    }
   });
 });

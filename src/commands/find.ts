@@ -113,7 +113,7 @@ export const findCommand = new Command('find')
         process.exit(1);
       }
       if (parsed.kind === 'unsupported') {
-        const resolved = await resolveTokenListInput(input);
+        const resolved = await resolveTokenListInput(input, resolverLimitFromOption(options.limit));
         if (resolved) {
           await runResolvedTarget(resolved, options);
           return;
@@ -129,7 +129,7 @@ export const findCommand = new Command('find')
         return;
       }
 
-      const target = await resolveTarget(input, parsed, !!options.yes);
+      const target = await resolveTarget(input, parsed, !!options.yes, options.limit);
       await runResolvedTarget(target, options);
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
@@ -277,14 +277,19 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
 async function resolveTarget(
   input: string,
   parsed: NonNullable<ReturnType<typeof parseFindInput>>,
-  skipPrompt: boolean
+  skipPrompt: boolean,
+  limitOption: string | undefined
 ): Promise<ResolvedTarget> {
   if (parsed.kind === 'token') {
     return resolveCoords(parsed.coords);
   }
   if (parsed.kind === 'ff-url') {
     if (parsed.urlKind === 'show') {
-      const target = await resolveTokenListInput(input, `Feral File show ${parsed.identifier}`);
+      const target = await resolveTokenListInput(
+        input,
+        resolverLimitFromOption(limitOption),
+        `Feral File show ${parsed.identifier}`
+      );
       if (target === null) {
         throw new Error(`Feral File: no supported tokens found for show "${parsed.identifier}".`);
       }
@@ -298,7 +303,11 @@ async function resolveTarget(
     return resolveCoords({ chain: 'tezos', contract, tokenId: parsed.tokenId });
   }
   if (parsed.kind === 'objkt-collection') {
-    const target = await resolveTokenListInput(input, `Objkt collection ${parsed.slug}`);
+    const target = await resolveTokenListInput(
+      input,
+      resolverLimitFromOption(limitOption),
+      `Objkt collection ${parsed.slug}`
+    );
     if (target === null) {
       throw new Error(`Objkt: no supported tokens found for collection "${parsed.slug}".`);
     }
@@ -321,7 +330,11 @@ async function resolveTarget(
     return resolveCoords(coords);
   }
   if (parsed.kind === 'verse-series') {
-    const target = await resolveTokenListInput(input, `Verse series ${parsed.slug}`);
+    const target = await resolveTokenListInput(
+      input,
+      resolverLimitFromOption(limitOption),
+      `Verse series ${parsed.slug}`
+    );
     if (target !== null) {
       return target;
     }
@@ -361,6 +374,17 @@ async function resolveTarget(
 }
 
 /**
+ * resolverLimitFromOption returns the exact bound to give source-resolver
+ * before any collection-like network fetch starts. The CLI still slices
+ * locally in `runResolvedTarget`, but passing this value early keeps large
+ * marketplace catalogs from being over-resolved when the user requested a
+ * smaller playlist.
+ */
+function resolverLimitFromOption(limitStr: string | undefined): number {
+  return Math.min(parseLimitOption(limitStr), DP1_MAX_ITEMS);
+}
+
+/**
  * Resolve collection-like URLs through the source-resolver package when its
  * committed support goes beyond the synchronous parser marker. This keeps the
  * CLI aligned with the library without duplicating every marketplace API and
@@ -368,9 +392,10 @@ async function resolveTarget(
  */
 async function resolveTokenListInput(
   input: string,
+  limit: number,
   fallbackTitle = 'Resolved source'
 ): Promise<ResolvedTarget | null> {
-  const result = await resolveTokenInfos(input, { limit: DP1_MAX_ITEMS });
+  const result = await resolveTokenInfos(input, { limit });
   if (result.kind !== 'tokens') {
     return null;
   }
