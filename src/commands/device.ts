@@ -10,7 +10,8 @@ import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
 import { resolveConfiguredDevice } from '../utilities/ff1-compatibility';
 import { TopicHandoffReceiver } from '../utilities/handoff-client';
-import { deleteTopicId, getTopicId, storeTopicId } from '../utilities/topic-store';
+import { storeTopicId } from '../utilities/topic-store';
+import { persistDeviceRemoval } from './helpers/device-removal';
 
 const deviceCommand = new Command('device').description('Manage configured FF1 devices');
 
@@ -321,14 +322,12 @@ deviceCommand
         process.exit(1);
       }
 
-      const removed = existingDevices[deviceIndex];
-      const updatedDevices = existingDevices.filter((_, i) => i !== deviceIndex);
-      if (removed.id && getTopicId(removed.id)) {
-        deleteTopicId(removed.id);
-      }
-      config.ff1Devices = { devices: updatedDevices };
-
-      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+      const { removed, updatedDevices } = await persistDeviceRemoval(config, deviceIndex, {
+        persistConfig: async (updatedConfig) => {
+          await fs.writeFile(configPath, `${JSON.stringify(updatedConfig, null, 2)}\n`, 'utf-8');
+        },
+        warn: (message) => console.warn(chalk.yellow(message)),
+      });
       console.log(chalk.green(`\nRemoved device: ${removed.name || removed.host}`));
       console.log(chalk.dim(`Remaining devices: ${updatedDevices.length}\n`));
     } catch (error) {
