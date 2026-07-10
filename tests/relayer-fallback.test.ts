@@ -15,6 +15,10 @@ const playlist = {
   items: [],
 } as unknown as Parameters<typeof sendPlaylistToDevice>[0]['playlist'];
 
+function isTestLanUrl(input: string | URL | Request): boolean {
+  return new URL(input.toString()).origin === 'http://ff1-skyz2e3a.local:1111';
+}
+
 describe('relayer fallback', () => {
   beforeEach(() => {
     fixtureDir = mkdtempSync(path.join(os.tmpdir(), 'ff1-relayer-fallback-'));
@@ -49,7 +53,7 @@ describe('relayer fallback', () => {
     const fetchFn: typeof fetch = async (input, init) => {
       const url = input.toString();
       requests.push({ url, headers: init?.headers });
-      if (url.startsWith('http://ff1-skyz2e3a.local')) {
+      if (isTestLanUrl(url)) {
         throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
       }
       return new Response(JSON.stringify({ message: { message: { ok: true } } }), {
@@ -111,7 +115,7 @@ describe('relayer fallback', () => {
 
     assert.equal(result.success, false);
     assert.match(result.error ?? '', /Device returned error 500/);
-    assert.ok(urls.every((url) => url.startsWith('http://ff1-skyz2e3a.local')));
+    assert.ok(urls.every(isTestLanUrl));
   });
 
   test('does not fall back after a LAN application rejection', async () => {
@@ -156,7 +160,7 @@ describe('relayer fallback', () => {
       { playlist },
       {
         fetchFn: async (input) => {
-          if (input.toString().startsWith('http://ff1-skyz2e3a.local')) {
+          if (isTestLanUrl(input)) {
             throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
           }
           return new Response('relayer unavailable', { status: 503 });
