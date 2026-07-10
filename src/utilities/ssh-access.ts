@@ -76,11 +76,7 @@ export async function sendSshAccessCommand({
       };
     }
 
-    let apiUrl = `${device.host}/api/cast`;
-    if (device.topicID && device.topicID.trim() !== '') {
-      apiUrl += `?topicID=${encodeURIComponent(device.topicID)}`;
-      logger.debug(`Using topicID: ${device.topicID}`);
-    }
+    const apiUrl = `${device.host}/api/cast`;
 
     const request: Record<string, unknown> = {
       enabled,

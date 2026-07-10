@@ -13,7 +13,7 @@ interface FF1DeviceForTest {
   host?: string;
   name?: string;
   apiKey?: string;
-  topicID?: string;
+  id?: string;
 }
 
 interface MockApiResponse {

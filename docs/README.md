@@ -117,8 +117,9 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
 - `device list` – List all configured FF1 devices
-- `device add` – Add a new FF1 device (with mDNS discovery)
-  - Options: `--host <host>`, `--name <name>`
+- `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
+  - Options: `--host <host>`, `--name <name>`, `--id <id>`
+- `device pair [name]` – Securely receive relayer access from Feral File mobile
 - `device remove <name>` – Remove a configured FF1 device
 - `device default <name>` – Set the default FF1 device (used when `-d` is omitted)
 - `config <init|show|validate>` – Manage configuration
@@ -271,7 +272,7 @@ ff-cli device list
 ff-cli device add
 
 # Add a device non-interactively
-ff-cli device add --host 192.168.1.100 --name kitchen
+ff-cli device add --host 192.168.1.100 --name kitchen --id FF1-XXXXXXXX
 
 # Remove a device by name
 ff-cli device remove kitchen

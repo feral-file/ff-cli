@@ -58,6 +58,11 @@ cp "$ROOT_DIR/LICENSE" "$PACKAGE_DIR/LICENSE"
 # can seed a config. The installer extracts this to the package root, which the
 # CLI resolves via a `<bundle>/lib/../config.json.example` lookup candidate.
 cp "$ROOT_DIR/config.json.example" "$PACKAGE_DIR/config.json.example"
+# The single-file bundle keeps @napi-rs/keyring external because it loads a
+# platform-native .node binary. npm installs only the current platform package,
+# so copying this namespace keeps release archives small and functional.
+mkdir -p "$PACKAGE_DIR/lib/node_modules"
+cp -R "$ROOT_DIR/node_modules/@napi-rs" "$PACKAGE_DIR/lib/node_modules/@napi-rs"
 
 cat > "$PACKAGE_DIR/bin/ff-cli" <<'EOF'
 #!/usr/bin/env bash

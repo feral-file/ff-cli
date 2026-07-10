@@ -26,12 +26,20 @@ export interface FeedServer {
 export interface FF1Device {
   host: string;
   apiKey?: string;
-  topicID?: string;
   name?: string;
+  /** Stable physical FF1 identifier used as the secure topic-store account. */
+  id?: string;
+  addresses?: string[];
 }
 
 export interface FF1DeviceConfig {
   devices: FF1Device[];
+}
+
+export interface FF1RelayerConfig {
+  baseUrl?: string;
+  /** Optional deployment compatibility gate; never required by the topic credential model. */
+  apiKey?: string;
 }
 
 export interface IndexerConfig {
@@ -52,6 +60,7 @@ export interface Config {
   feedServers?: FeedServer[]; // New: array of feed servers with individual API keys
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
+  ff1Relayer?: FF1RelayerConfig;
   indexer?: IndexerConfig;
 }
 

@@ -10,7 +10,7 @@ interface FF1DeviceForTest {
   host?: string;
   name?: string;
   apiKey?: string;
-  topicID?: string;
+  id?: string;
 }
 
 let fixtureDir: string;
@@ -100,16 +100,16 @@ describe('multi-device resolution', () => {
     assert.equal(result.device?.host, 'http://192.168.1.11:1111');
   });
 
-  test('preserves device-specific apiKey and topicID', () => {
+  test('preserves device-specific apiKey and stable ID', () => {
     writeDeviceConfig([
-      { name: 'kitchen', host: 'http://192.168.1.10:1111', apiKey: 'key-k', topicID: 'topic-k' },
-      { name: 'office', host: 'http://192.168.1.11:1111', apiKey: 'key-o', topicID: 'topic-o' },
+      { name: 'kitchen', host: 'http://192.168.1.10:1111', apiKey: 'key-k', id: 'FF1-K' },
+      { name: 'office', host: 'http://192.168.1.11:1111', apiKey: 'key-o', id: 'FF1-O' },
     ]);
 
     const result = resolveConfiguredDevice('office');
     assert.equal(result.success, true);
     assert.equal(result.device?.apiKey, 'key-o');
-    assert.equal(result.device?.topicID, 'topic-o');
+    assert.equal(result.device?.id, 'FF1-O');
   });
 
   test('works with device that has no name when selecting by default', () => {

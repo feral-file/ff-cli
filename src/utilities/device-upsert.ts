@@ -4,7 +4,6 @@ export interface DeviceEntry {
   /** mDNS device ID (e.g. 'ff1-hh9jsnoc'). Stored so host-change lookups can match by ID. */
   id?: string;
   apiKey?: string;
-  topicID?: string;
   /** Resolved IP addresses last observed for this device. Stored so --host <ip> can match
    *  an existing .local entry without requiring a new mDNS scan. */
   addresses?: string[];
@@ -44,7 +43,17 @@ function applyPatch(existing: DeviceEntry, patch: Partial<DeviceEntry>): DeviceE
   } else {
     addresses = existing.addresses; // same host, no new IPs: keep stored set
   }
-  return { ...existing, ...patch, addresses };
+  const updated = { ...existing, ...patch };
+  // Rebuild the row from supported fields so an old plaintext topicID cannot
+  // survive a normal device update. Topics now belong exclusively in the OS
+  // credential vault under the stable device ID.
+  return {
+    host: updated.host,
+    name: updated.name,
+    id: updated.id,
+    apiKey: updated.apiKey,
+    addresses,
+  };
 }
 
 /**
@@ -67,7 +76,6 @@ export function upsertDevice(
     host: string;
     id?: string;
     apiKey?: string;
-    topicID?: string;
     addresses?: string[];
   },
   /** Pre-resolved row index from findExistingDeviceEntry. When provided, the
@@ -102,7 +110,7 @@ export function upsertDevice(
   }
 
   // Case 3: same name, different host — replace in-place to preserve array order.
-  // Spread existing entry first so apiKey/topicID survive a host change.
+  // Spread existing entry first so non-secret device metadata survives a host change.
   const staleNameIndex = devices.findIndex((d) => d.name === newDevice.name);
   if (staleNameIndex !== -1) {
     devices[staleNameIndex] = applyPatch(devices[staleNameIndex], patch);

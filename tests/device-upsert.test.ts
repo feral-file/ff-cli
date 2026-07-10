@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { upsertDevice } from '../src/utilities/device-upsert';
+import type { DeviceEntry } from '../src/utilities/device-upsert';
 
 describe('upsertDevice', () => {
   test('inserts a new device', () => {
@@ -48,10 +49,15 @@ describe('upsertDevice', () => {
     assert.equal(devices[existingIndex].name, 'kitchen');
   });
 
-  // Regression: same-name/different-host replace used to drop apiKey and topicID
-  test('preserves apiKey and topicID when same-name device moves to a new host', () => {
+  // Regression: same-name/different-host replace used to drop non-secret metadata.
+  test('preserves apiKey but drops legacy plaintext topic when a device moves', () => {
     const existing = [
-      { name: 'kitchen', host: 'http://10.0.0.1:1111', apiKey: 'key-k', topicID: 'topic-k' },
+      {
+        name: 'kitchen',
+        host: 'http://10.0.0.1:1111',
+        apiKey: 'key-k',
+        topicID: 'legacy-topic-k',
+      } as DeviceEntry & { topicID: string },
     ];
     const { devices } = upsertDevice(existing, {
       name: 'kitchen',
@@ -59,7 +65,7 @@ describe('upsertDevice', () => {
     });
     assert.equal(devices[0].host, 'http://10.0.0.99:1111');
     assert.equal(devices[0].apiKey, 'key-k');
-    assert.equal(devices[0].topicID, 'topic-k');
+    assert.equal((devices[0] as DeviceEntry & { topicID?: string }).topicID, undefined);
   });
 
   // Regression: setup flow used discoveredName as default, clobbering stored labels

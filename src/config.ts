@@ -209,7 +209,7 @@ export function getFeedConfig(): {
  * @returns {Array<Object>} returns.devices - Array of configured FF1 devices
  * @returns {string} returns.devices[].host - Device host URL
  * @returns {string} [returns.devices[].apiKey] - Optional device API key
- * @returns {string} [returns.devices[].topicID] - Optional device topic ID
+ * @returns {string} [returns.devices[].id] - Optional stable physical device ID
  * @returns {string} [returns.devices[].name] - Optional device name
  */
 export function getFF1DeviceConfig(): FF1DeviceConfig {
@@ -218,6 +218,59 @@ export function getFF1DeviceConfig(): FF1DeviceConfig {
 
   return {
     devices: configuredFF1Devices(ff1Devices.devices || []),
+  };
+}
+
+const DEFAULT_FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.workers.dev';
+
+/**
+ * Get the FF1 relayer endpoint using repository config priority.
+ *
+ * `config.json` wins over environment variables, which win over the production
+ * default. The API key remains optional because the signed topic is the
+ * per-device credential; it exists only for deployments that retain a separate
+ * cloud-edge compatibility gate.
+ */
+export function getFF1RelayerConfig(): { baseUrl: string; apiKey?: string } {
+  return resolveFF1RelayerConfig(getConfig());
+}
+
+/** Resolve and validate the effective FF1 relayer configuration. */
+function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: string } {
+  const configured = config.ff1Relayer as unknown;
+  if (
+    configured !== undefined &&
+    (configured === null || typeof configured !== 'object' || Array.isArray(configured))
+  ) {
+    throw new Error('ff1Relayer must be an object');
+  }
+  const fields = (configured || {}) as Record<string, unknown>;
+  if (fields.baseUrl !== undefined && typeof fields.baseUrl !== 'string') {
+    throw new Error('ff1Relayer.baseUrl must be a string');
+  }
+  if (fields.apiKey !== undefined && typeof fields.apiKey !== 'string') {
+    throw new Error('ff1Relayer.apiKey must be a string');
+  }
+  const baseUrl = (
+    (fields.baseUrl as string | undefined) ||
+    process.env.FF1_RELAYER_URL ||
+    DEFAULT_FF1_RELAYER_URL
+  )
+    .trim()
+    .replace(/\/$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error('ff1Relayer.baseUrl must be a valid HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('ff1Relayer.baseUrl must be a valid HTTP(S) URL');
+  }
+  const apiKey = ((fields.apiKey as string | undefined) || process.env.FF1_RELAYER_API_KEY)?.trim();
+  return {
+    baseUrl,
+    apiKey: apiKey || undefined,
   };
 }
 
@@ -280,6 +333,12 @@ export function validateConfig(): ValidationResult {
           errors.push((error as Error).message);
         }
       }
+    }
+
+    try {
+      resolveFF1RelayerConfig(config);
+    } catch (error) {
+      errors.push((error as Error).message);
     }
 
     return {
