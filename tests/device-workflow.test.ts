@@ -10,6 +10,7 @@ import { describe, test } from 'node:test';
 import { parseAvahiBrowseOutput } from '../src/utilities/ff1-discovery';
 import { findExistingDeviceEntry } from '../src/utilities/device-lookup';
 import { upsertDevice } from '../src/utilities/device-upsert';
+import { resolveManualDeviceInput } from '../src/commands/helpers/device-discovery';
 
 /** Simulate the selection step: map a discovered device to the host URL used by the CLI. */
 function toHostValue(device: { host: string; port: number }): string {
@@ -17,6 +18,47 @@ function toHostValue(device: { host: string; port: number }): string {
 }
 
 describe('device add / setup workflow (avahi → lookup → upsert)', () => {
+  test('no-mDNS manual ID is retained for relayer pairing', () => {
+    const selection = resolveManualDeviceInput('ff1-skyz2e3a');
+    const { devices } = upsertDevice([], {
+      name: 'office',
+      host: selection.hostValue,
+      id: selection.discoveredId,
+    });
+
+    assert.equal(selection.hostValue, 'http://ff1-skyz2e3a.local:1111');
+    assert.equal(devices[0].id, 'FF1-SKYZ2E3A');
+    assert.ok(devices[0].id, 'device pair can proceed with the retained stable ID');
+  });
+
+  test('uppercase manual ID matches lowercase mDNS rediscovery', () => {
+    const stored = [
+      {
+        name: 'office',
+        host: 'http://192.168.1.20:1111',
+        id: 'FF1-SKYZ2E3A',
+      },
+    ];
+    const discoveredId = 'ff1-skyz2e3a';
+    const matched = findExistingDeviceEntry(
+      stored,
+      'http://ff1-skyz2e3a.local:1111',
+      'office',
+      discoveredId,
+      ['192.168.1.20']
+    );
+    assert.equal(matched, stored[0]);
+
+    const { devices } = upsertDevice(stored, {
+      name: 'office',
+      host: 'http://ff1-skyz2e3a.local:1111',
+      id: discoveredId,
+      addresses: ['192.168.1.20'],
+    });
+    assert.equal(devices.length, 1);
+    assert.equal(devices[0].id, 'FF1-SKYZ2E3A');
+  });
+
   // Regression: re-running setup after a device is already configured must update
   // in-place and must not append a duplicate entry.
   test('avahi re-discovery does not duplicate a fully configured entry', () => {
@@ -96,7 +138,7 @@ describe('device add / setup workflow (avahi → lookup → upsert)', () => {
 
     assert.equal(devices.length, 1, 'no duplicate must be created');
     assert.equal(devices[0].host, newHost, 'host must be migrated to .local');
-    assert.equal(devices[0].id, 'ff1-hh9jsnoc', 'id must be persisted for future lookups');
+    assert.equal(devices[0].id, 'FF1-HH9JSNOC', 'id must be persisted for future lookups');
   });
 
   // Regression: dual-stack device emits IPv4 + IPv6 resolved records; the merged
@@ -196,7 +238,7 @@ describe('same-friendly-name collision: lookup + add flow', () => {
     );
     assert.equal(
       devices[0].id,
-      newId,
+      newId.toUpperCase(),
       'the original kitchen entry would be overwritten without the guard'
     );
   });

@@ -244,7 +244,7 @@ describe('upsertDevice', () => {
     assert.equal(updated, false, 'host changed so not "updated" in same-host sense');
     assert.equal(devices.length, 2, 'must not create a duplicate');
     assert.equal(devices[0].host, 'http://ff1-hh9jsnoc.local:1111', 'host must be updated');
-    assert.equal(devices[0].id, 'ff1-hh9jsnoc', 'id must be preserved');
+    assert.equal(devices[0].id, 'FF1-HH9JSNOC', 'id must be stored canonically');
   });
 
   // Regression: rename + host-change with no id — without matchedIndex, none of the

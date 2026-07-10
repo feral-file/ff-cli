@@ -13,6 +13,25 @@ export interface DeviceDiscoverySelection {
   skipped: boolean;
 }
 
+/** Resolve manual input while retaining a stable ID for later relayer pairing. */
+export function resolveManualDeviceInput(rawInput: string): DeviceDiscoverySelection {
+  const trimmed = rawInput.trim();
+  if (!trimmed) {
+    return { hostValue: '', discoveredName: '', skipped: false };
+  }
+  const lower = trimmed.toLowerCase();
+  const looksLikeHost = lower.includes('.') || lower.includes(':') || lower.startsWith('http');
+  const discoveredId = looksLikeHost
+    ? undefined
+    : (lower.startsWith('ff1-') ? lower : `ff1-${lower}`).toUpperCase();
+  return {
+    hostValue: normalizeDeviceIdToHost(trimmed),
+    discoveredName: '',
+    discoveredId,
+    skipped: false,
+  };
+}
+
 /**
  * Run mDNS discovery and prompt the user to pick a device, fall back to
  * manual entry, or skip when an existing device is already configured.
@@ -38,7 +57,7 @@ export async function discoverAndSelectDevice(
     console.log(
       chalk.dim(
         '  Tip: you can skip discovery entirely with ' +
-          'ff-cli device add --host http://<device-ip>:1111 --name <name>'
+          'ff-cli device add --host http://<device-ip>:1111 --name <name> --id FF1-XXXXXXXX'
       )
     );
   } else if (discoveryResult.error) {
@@ -144,7 +163,8 @@ export async function discoverAndSelectDevice(
     console.log(
       chalk.dim(
         '  Tip: mDNS often does not cross subnets. If the device is reachable by IP, ' +
-          'add it directly: ff-cli device add --host http://<device-ip>:1111 --name <name>'
+          'add it directly: ff-cli device add --host http://<device-ip>:1111 ' +
+          '--name <name> --id FF1-XXXXXXXX'
       )
     );
   }
@@ -154,5 +174,5 @@ export async function discoverAndSelectDevice(
   if (!idAnswer) {
     return { hostValue: '', discoveredName: '', skipped: false };
   }
-  return { hostValue: normalizeDeviceIdToHost(idAnswer), discoveredName: '', skipped: false };
+  return resolveManualDeviceInput(idAnswer);
 }

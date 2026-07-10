@@ -28,10 +28,12 @@ export function findExistingDeviceEntry(
   discoveredId?: string,
   discoveredAddresses?: string[]
 ): { host?: string; name?: string; id?: string; addresses?: string[] } | undefined {
+  const sameDeviceId = (left?: string, right?: string) =>
+    Boolean(left && right && left.trim().toUpperCase() === right.trim().toUpperCase());
   // 1. mDNS device ID — stable hardware identity, checked before URL so stale
   //    host entries for other devices at the same IP do not shadow the result.
   if (discoveredId) {
-    const byId = existingDevices.find((d) => d.id === discoveredId);
+    const byId = existingDevices.find((d) => sameDeviceId(d.id, discoveredId));
     if (byId) {
       return byId;
     }
@@ -75,7 +77,7 @@ export function findExistingDeviceEntry(
   //     the stored entry has an id; the address is the best identity signal available.
   if (discoveredAddresses && discoveredAddresses.length > 0) {
     const byDiscoveredAddress = existingDevices.find((d) => {
-      if (d.id && discoveredId && d.id !== discoveredId) {
+      if (d.id && discoveredId && !sameDeviceId(d.id, discoveredId)) {
         return false; // different physical devices — do not conflate
       }
       try {

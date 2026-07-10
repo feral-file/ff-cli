@@ -83,7 +83,11 @@ export function upsertDevice(
   matchedIndex?: number
 ): { devices: DeviceEntry[]; updated: boolean } {
   const devices = [...existingDevices];
-  const patch = withoutUndefined(newDevice);
+  const normalizedNewDevice = {
+    ...newDevice,
+    id: newDevice.id?.trim().toUpperCase(),
+  };
+  const patch = withoutUndefined(normalizedNewDevice);
 
   // Case 0: caller already resolved the match — update directly.
   if (matchedIndex !== undefined && matchedIndex >= 0 && matchedIndex < devices.length) {
@@ -93,8 +97,10 @@ export function upsertDevice(
   }
 
   // Case 1: same mDNS device ID — update in-place even when host changed.
-  if (newDevice.id) {
-    const sameIdIndex = devices.findIndex((d) => d.id === newDevice.id);
+  if (normalizedNewDevice.id) {
+    const sameIdIndex = devices.findIndex(
+      (d) => d.id?.trim().toUpperCase() === normalizedNewDevice.id
+    );
     if (sameIdIndex !== -1) {
       const isSameHost = devices[sameIdIndex].host === newDevice.host;
       devices[sameIdIndex] = applyPatch(devices[sameIdIndex], patch);
