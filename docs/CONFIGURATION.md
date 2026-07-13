@@ -120,6 +120,9 @@ Configure devices you want to play content on.
 
 - `ff1Devices.devices` (array of objects):
   - `name` (string): Friendly device label. Free‑form; pick anything memorable.
+  - `id` (string): Stable physical ID discovered from FF1 (for example
+    `FF1-SKYZ2E3A`). Relayer pairing stores the topic under this ID in the OS
+    credential vault.
   - `host` (string): Device base URL. For LAN devices, use `http://<ip>:1111`. The device typically listens on port `1111`.
 
 During `ff-cli setup`, the CLI will attempt local discovery via mDNS (`_ff1._tcp`). If devices are found, you can pick one and the host will be filled in automatically. If discovery returns nothing, setup falls back to manual entry.
@@ -127,15 +130,20 @@ During `ff-cli setup`, the CLI will attempt local discovery via mDNS (`_ff1._tcp
 > **mDNS is best-effort.** It frequently does not cross subnets — a common case with mesh routers (e.g. eero) that put wired and Wi-Fi clients on different `/24`s. If discovery comes up empty even though the device is reachable by IP, skip it entirely and add the device directly:
 >
 > ```bash
-> ff-cli device add --host http://<device-ip>:1111 --name <name>
+> ff-cli device add --host http://<device-ip>:1111 --name <name> --id FF1-XXXXXXXX
 > ```
 
 You can also manage devices independently with:
 
-- `ff-cli device add` – Add a device interactively (with mDNS discovery), or non-interactively with `--host` and `--name`.
+- `ff-cli device add` – Add a device interactively (with mDNS discovery), or
+  non-interactively with `--host`, `--name`, and the physical `--id` shown in
+  Feral File mobile. Manual devices need the ID before relayer pairing.
 - `ff-cli device list` – Show all configured devices.
 - `ff-cli device remove <name>` – Remove a device by name.
 - `ff-cli device default <name>` – Promote a device to the top of the list so it is used when `-d` is omitted.
+- `ff-cli device pair [name]` – Display a one-time handoff code and key-bound
+  security check, then securely receive that device's relayer topic from Feral
+  File mobile. Confirm both values match before approving in mobile.
 
 Setup and `device add` both preserve existing devices. Adding a device with the same host as an existing one updates it in place.
 
@@ -163,6 +171,26 @@ Content-Type: application/json
 ```
 
 The `intent` field is **required** — without it the device returns `{"message":{"ok":false}}` with no further explanation. `dp1_call` may be the playlist inline (as above) or a hosted playlist URL string; ff-cli sends the resolved playlist object.
+
+When LAN delivery is unreachable, `play` prints an explicit notice and retries
+the same command through `ff1Relayer.baseUrl`. The per-device topic is read from
+the operating system credential vault, never `config.json`. Pair it from the
+mobile app first:
+
+```bash
+ff-cli device pair office
+```
+
+The CLI and mobile confirmation both show the same 12-hex-digit security check.
+Comparing it authenticates the CLI public key out of band, so an active broker
+cannot silently substitute its own encryption key.
+
+The default relayer is
+`https://tv-cast-coordination.autonomy-system.workers.dev`. Override it with
+`ff1Relayer.baseUrl` or `FF1_RELAYER_URL`. Signed topic-only relayer deployments
+need no additional key. Deployments that retain the cloud-edge compatibility
+gate may receive `ff1Relayer.apiKey` or `FF1_RELAYER_API_KEY`; ff-cli never
+bundles that shared key.
 
 On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
@@ -207,6 +235,7 @@ Minimal `config.json` example (selected fields):
     "devices": [
       {
         "name": "Living Room Display",
+        "id": "FF1-ABCD1234",
         "host": "http://192.168.1.100:1111"
       }
     ]

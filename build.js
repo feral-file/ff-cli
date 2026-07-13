@@ -24,7 +24,10 @@ async function build() {
       },
       minify: !isDev,
       sourcemap: isDev ? 'inline' : false,
-      external: [],
+      // Native keyring bindings cannot be inlined. npm installs resolve this
+      // normally; release archives copy the current platform's @napi-rs tree
+      // beside the bundle so Node can load the OS credential backend.
+      external: ['@napi-rs/keyring'],
       logLevel: 'info',
       // Remove shebangs from source files during bundling
       loader: {

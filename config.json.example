@@ -19,13 +19,16 @@
     "privateKey": "YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended__or_32byte_raw_seed_as_hex_or_base64__run_ff-cli_setup_to_generate",
     "role": "agent"
   },
+  "ff1Relayer": {
+    "baseUrl": "https://tv-cast-coordination.autonomy-system.workers.dev"
+  },
   "ff1Devices": {
     "devices": [
       {
         "name": "DISPLAY_NAME_FOR_YOUR_FF1_DEVICE",
+        "id": "FF1-DEVICE_ID",
         "host": "http://YOUR_FF1_IP_ADDRESS:1111",
-        "apiKey": "YOUR_FF1_DEVICE_API_KEY_FROM_DEVICE_SETTINGS",
-        "topicID": "YOUR_FF1_DEVICE_TOPIC_ID_FROM_DEVICE_SETTINGS"
+        "apiKey": "YOUR_FF1_DEVICE_API_KEY_FROM_DEVICE_SETTINGS"
       }
     ]
   }

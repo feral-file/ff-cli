@@ -93,6 +93,8 @@ try {
     Copy-Item (Join-Path $ROOT_DIR "dist\ff-cli.js") (Join-Path $PACKAGE_DIR "lib\ff-cli.js")
     Copy-Item (Join-Path $ROOT_DIR "package.json") (Join-Path $PACKAGE_DIR "package.json")
     Copy-Item (Join-Path $ROOT_DIR "LICENSE") (Join-Path $PACKAGE_DIR "LICENSE")
+    New-Item -ItemType Directory -Path (Join-Path $PACKAGE_DIR "lib\node_modules") -Force | Out-Null
+    Copy-Item -Recurse (Join-Path $ROOT_DIR "node_modules\@napi-rs") (Join-Path $PACKAGE_DIR "lib\node_modules\@napi-rs")
 
     $ffCliCmd = @"
 @echo off

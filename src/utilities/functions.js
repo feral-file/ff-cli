@@ -253,7 +253,7 @@ async function verifyAddresses(params) {
  * @returns {Array<Object>} returns.devices - Array of device configurations
  * @returns {string} returns.devices[].name - Device name
  * @returns {string} returns.devices[].host - Device host URL
- * @returns {string} [returns.devices[].topicID] - Optional topic ID
+ * @returns {string} [returns.devices[].id] - Optional physical device ID
  * @returns {string} [returns.error] - Error message if no devices configured
  * @example
  * const result = await getConfiguredDevices();
@@ -290,7 +290,7 @@ async function getConfiguredDevices() {
   const devices = deviceConfig.devices.map((d) => ({
     name: d.name || d.host,
     host: d.host,
-    topicID: d.topicID,
+    id: d.id,
   }));
 
   return {
