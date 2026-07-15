@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
+import { sendPlaylistViaRelayer } from '../src/utilities/ff1-relayer';
 
 const originalCwd = process.cwd();
 let fixtureDir: string;
@@ -172,5 +173,20 @@ describe('relayer fallback', () => {
     assert.equal(relayerHttpFailure.success, false);
     assert.equal(relayerHttpFailure.transport, 'relayer');
     assert.match(relayerHttpFailure.error ?? '', /HTTP 503/);
+  });
+});
+
+describe('relayer authentication failures', () => {
+  test('explains a non-JSON 401 when no compatibility API key is configured', async () => {
+    const result = await sendPlaylistViaRelayer({
+      baseUrl: 'https://relayer.example',
+      topicId: 'topic-secret',
+      playlist,
+      fetchFn: async () => new Response('Unauthorized', { status: 401 }),
+    });
+
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'FF1 relayer returned HTTP 401');
+    assert.match(result.details ?? '', /FF1_RELAYER_API_KEY compatibility gate/);
   });
 });

@@ -18,7 +18,20 @@ function nestedOk(value: unknown): boolean | undefined {
   return nestedOk(record.message);
 }
 
-/** Send a display command through the mobile-compatible FF1 relayer contract. */
+/**
+ * sendPlaylistViaRelayer sends a display command through the mobile-compatible
+ * FF1 relayer contract.
+ *
+ * The result preserves the relayer's HTTP failure status before interpreting
+ * any response body. Successful responses must contain JSON when non-empty;
+ * non-2xx responses may use plain text or HTML without obscuring the original
+ * gateway failure.
+ *
+ * @param input - Relayer endpoint, optional compatibility key, paired topic,
+ * playlist, and optional fetch implementation.
+ * @returns A structured result for handled request failures, HTTP statuses,
+ * and JSON parsing errors.
+ */
 export async function sendPlaylistViaRelayer(input: {
   baseUrl: string;
   apiKey?: string;
@@ -68,6 +81,20 @@ export async function sendPlaylistViaRelayer(input: {
   }
 
   const bodyText = (await response.text()).trim();
+  // HTTP status is authoritative for gateway failures. Parse only successful
+  // responses so an HTML/plain-text 401 cannot hide the actionable missing-key
+  // diagnosis behind a secondary JSON parsing error.
+  if (!response.ok) {
+    const needsCompatibilityKey = response.status === 401 && !input.apiKey;
+    return {
+      success: false,
+      error: `FF1 relayer returned HTTP ${response.status}`,
+      details: needsCompatibilityKey
+        ? 'This relayer deployment still requires its optional FF1_RELAYER_API_KEY compatibility gate.'
+        : bodyText || response.statusText,
+    };
+  }
+
   let data: Record<string, unknown> = {};
   if (bodyText) {
     try {
@@ -79,16 +106,6 @@ export async function sendPlaylistViaRelayer(input: {
         details: bodyText.slice(0, 200),
       };
     }
-  }
-  if (!response.ok) {
-    const needsCompatibilityKey = response.status === 401 && !input.apiKey;
-    return {
-      success: false,
-      error: `FF1 relayer returned HTTP ${response.status}`,
-      details: needsCompatibilityKey
-        ? 'This relayer deployment still requires its optional FF1_RELAYER_API_KEY compatibility gate.'
-        : bodyText || response.statusText,
-    };
   }
   if (nestedOk(data) === false) {
     return {
