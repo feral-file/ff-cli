@@ -120,6 +120,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
 - `device pair [name]` – Securely receive relayer access from Feral File mobile
+- `device rename <name> <new-name>` – Rename a configured FF1 device (host, API key, and default status are untouched)
 - `device remove <name>` – Remove a configured FF1 device
 - `device default <name>` – Set the default FF1 device (used when `-d` is omitted)
 - `config <init|show|validate>` – Manage configuration
@@ -273,6 +274,9 @@ ff-cli device add
 
 # Add a device non-interactively
 ff-cli device add --host 192.168.1.100 --name kitchen --id FF1-XXXXXXXX
+
+# Rename a device (host, API key, and default status are untouched)
+ff-cli device rename kitchen gallery
 
 # Remove a device by name
 ff-cli device remove kitchen
