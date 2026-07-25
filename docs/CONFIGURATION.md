@@ -151,7 +151,7 @@ Setup and `device add` both preserve existing devices. Adding a device with the 
 Selection rules when sending:
 
 - If you omit `-d`, the first configured device is used.
-- If you pass `-d <name>`, the CLI matches the device by `name` (exact match). If not found, you’ll see an error listing available devices.
+- If you pass `-d <name>`, the CLI matches the device by `name` (case-insensitive) or by host URL — the same rules as `device remove`/`default`/`rename`, so unnamed entries can be targeted by host. If not found, you’ll see an error listing available devices.
 
 Device cast contract:
 
