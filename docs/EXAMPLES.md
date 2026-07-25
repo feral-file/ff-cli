@@ -385,6 +385,9 @@ npm run dev -- device add
 # Add a device non-interactively
 npm run dev -- device add --host 192.168.1.100 --name kitchen
 
+# Rename a device (host, API key, and default status are untouched)
+npm run dev -- device rename kitchen gallery
+
 # Remove a device by name
 npm run dev -- device remove kitchen
 

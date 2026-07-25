@@ -5,6 +5,7 @@ import { findExistingDeviceEntry } from '../utilities/device-lookup';
 import { normalizeDeviceHost } from '../utilities/device-normalize';
 import { upsertDevice } from '../utilities/device-upsert';
 import { promoteDeviceToDefault } from '../utilities/device-default';
+import { renameDevice } from '../utilities/device-rename';
 import { readConfigFile, resolveExistingConfigPath } from './helpers/config-files';
 import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
@@ -330,6 +331,55 @@ deviceCommand
       });
       console.log(chalk.green(`\nRemoved device: ${removed.name || removed.host}`));
       console.log(chalk.dim(`Remaining devices: ${updatedDevices.length}\n`));
+    } catch (error) {
+      console.error(chalk.red('\nError:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+deviceCommand
+  .command('rename')
+  .description('Rename a configured FF1 device (host, API key, and default status are untouched)')
+  .argument('<name>', 'Current device name or host')
+  .argument('<new-name>', 'New device name')
+  .action(async (name: string, newName: string) => {
+    try {
+      const configPath = await resolveExistingConfigPath();
+      if (!configPath) {
+        console.log(chalk.red('config.json not found'));
+        console.log(chalk.dim('Run: ff-cli setup'));
+        process.exit(1);
+      }
+
+      const config = await readConfigFile(configPath);
+      const existingDevices = config.ff1Devices?.devices || [];
+
+      if (existingDevices.length === 0) {
+        console.log(chalk.yellow('\nNo devices configured'));
+        console.log(chalk.dim('Run: ff-cli device add\n'));
+        process.exit(1);
+      }
+
+      let result;
+      try {
+        result = renameDevice(existingDevices, name, newName);
+      } catch (error) {
+        console.error(chalk.red(`\n${(error as Error).message}`));
+        const names = existingDevices.map((d) => d.name || d.host).join(', ');
+        console.log(chalk.dim(`Available devices: ${names}\n`));
+        process.exit(1);
+      }
+
+      if (result.unchanged) {
+        console.log(chalk.dim(`\n"${result.renamed.name}" is already named that.\n`));
+        return;
+      }
+
+      config.ff1Devices = { devices: result.devices };
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+
+      const from = result.previousName || result.renamed.host;
+      console.log(chalk.green(`\nRenamed device: ${from} → ${result.renamed.name}\n`));
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
       process.exit(1);
