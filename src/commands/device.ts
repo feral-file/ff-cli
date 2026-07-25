@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { findExistingDeviceEntry } from '../utilities/device-lookup';
+import { findConfiguredDeviceIndex, findExistingDeviceEntry } from '../utilities/device-lookup';
 import { normalizeDeviceHost } from '../utilities/device-normalize';
 import { upsertDevice } from '../utilities/device-upsert';
 import { promoteDeviceToDefault } from '../utilities/device-default';
@@ -229,9 +229,13 @@ deviceCommand
       // existingIndex === -1 (no confirmed match, e.g. manual IP → .local migration),
       // a same-name entry is the upsertDevice case-3 migration path — blocking it would
       // prevent the user from retaining their existing device name during host migration.
+      // Case-insensitive: lookups everywhere else ignore case, so "Kitchen"
+      // alongside "kitchen" would make one of them unreachable by name.
       const nameConflict =
         existingIndex !== -1
-          ? existingDevices.find((d, i) => d.name === deviceName && i !== existingIndex)
+          ? existingDevices.find(
+              (d, i) => d.name?.toLowerCase() === deviceName.toLowerCase() && i !== existingIndex
+            )
           : undefined;
       if (nameConflict) {
         if (options.name) {
@@ -253,7 +257,9 @@ deviceCommand
         deviceName = retryAnswer || 'ff1';
         const retryConflict =
           existingIndex !== -1
-            ? existingDevices.find((d, i) => d.name === deviceName && i !== existingIndex)
+            ? existingDevices.find(
+                (d, i) => d.name?.toLowerCase() === deviceName.toLowerCase() && i !== existingIndex
+              )
             : undefined;
         if (retryConflict) {
           console.error(chalk.red(`\nName "${deviceName}" is also taken. No changes made.`));
@@ -296,23 +302,7 @@ deviceCommand
       const config = await readConfigFile(configPath);
       const existingDevices = config.ff1Devices?.devices || [];
 
-      // Match by name (case-insensitive) or by host URL so unnamed legacy/manual
-      // entries (stored without a name field) can still be targeted and removed.
-      const normalizedArg = name.toLowerCase();
-      let normalizedArgHost = '';
-      try {
-        normalizedArgHost = normalizeDeviceHost(name).toLowerCase();
-      } catch {
-        // not a valid URL — host matching will not apply
-      }
-      const deviceIndex = existingDevices.findIndex(
-        (d) =>
-          (d.name && d.name.toLowerCase() === normalizedArg) ||
-          (d.host && d.host.toLowerCase() === normalizedArg) ||
-          (normalizedArgHost &&
-            d.host &&
-            normalizeDeviceHost(d.host).toLowerCase() === normalizedArgHost)
-      );
+      const deviceIndex = findConfiguredDeviceIndex(existingDevices, name);
 
       if (deviceIndex === -1) {
         console.error(chalk.red(`\nDevice "${name}" not found`));

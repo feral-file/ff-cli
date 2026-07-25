@@ -63,6 +63,28 @@ describe('multi-device resolution', () => {
     assert.equal(result.device?.host, 'http://192.168.1.12:1111');
   });
 
+  test('matches device name case-insensitively', () => {
+    writeDeviceConfig([
+      { name: 'kitchen', host: 'http://192.168.1.10:1111' },
+      { name: 'office', host: 'http://192.168.1.11:1111' },
+    ]);
+
+    const result = resolveConfiguredDevice('OFFICE');
+    assert.equal(result.success, true);
+    assert.equal(result.device?.name, 'office');
+  });
+
+  test('matches by host URL so unnamed entries can be targeted with -d', () => {
+    writeDeviceConfig([
+      { name: 'kitchen', host: 'http://192.168.1.10:1111' },
+      { host: 'http://192.168.1.99:1111' },
+    ]);
+
+    const result = resolveConfiguredDevice('http://192.168.1.99:1111');
+    assert.equal(result.success, true);
+    assert.equal(result.device?.host, 'http://192.168.1.99:1111');
+  });
+
   test('returns error with available device names when requested device not found', () => {
     writeDeviceConfig([
       { name: 'kitchen', host: 'http://192.168.1.10:1111' },
@@ -89,7 +111,10 @@ describe('multi-device resolution', () => {
     assert.equal(result.device?.host, 'http://10.0.0.3:1111');
   });
 
-  test('device name matching is exact (case-sensitive)', () => {
+  test('first match wins for legacy configs with case-duplicate names', () => {
+    // device add/rename reject names that differ only by case, but configs
+    // written before that guard may still contain both. Lookups are
+    // case-insensitive, so the earlier row wins deterministically.
     writeDeviceConfig([
       { name: 'Kitchen', host: 'http://192.168.1.10:1111' },
       { name: 'kitchen', host: 'http://192.168.1.11:1111' },
@@ -97,7 +122,7 @@ describe('multi-device resolution', () => {
 
     const result = resolveConfiguredDevice('kitchen');
     assert.equal(result.success, true);
-    assert.equal(result.device?.host, 'http://192.168.1.11:1111');
+    assert.equal(result.device?.host, 'http://192.168.1.10:1111');
   });
 
   test('preserves device-specific apiKey and stable ID', () => {

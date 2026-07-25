@@ -2,8 +2,8 @@
  * Regression tests for parseAvahiBrowseOutput.
  *
  * The Linux mDNS path must preserve original case and handle multi-word service
- * names. resolveConfiguredDevice() does exact-match lookups, so any case
- * mutation or truncation makes a discovered device impossible to target later.
+ * names. Lookups are case-insensitive, but stored names are display labels and
+ * round-trip into config.json — truncation or case mangling corrupts them.
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
