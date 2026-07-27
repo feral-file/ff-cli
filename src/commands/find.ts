@@ -227,10 +227,12 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
       tokenId: t.tokenId,
     })),
     undefined,
+    // Unconditional: suppressing the done===total call meant a one-batch
+    // index (including the recommended --limit 5 warm-up) printed nothing
+    // and multi-batch runs never showed completion. The final N/N line IS
+    // the "indexing finished" signal.
     (done: number, total: number) => {
-      if (total > done) {
-        console.log(chalk.dim(`  ${done}/${total} tokens indexed...`));
-      }
+      console.log(chalk.dim(`  ${done}/${total} tokens indexed...`));
     }
   );
 

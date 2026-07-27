@@ -900,3 +900,61 @@ describe('device request deadlines (#101 review)', () => {
     assert.equal(sawSignal, true);
   });
 });
+
+describe('getNFTTokenInfoBatch progress reporting (#101 review)', () => {
+  // A rejecting fetch makes every token fail fast (no indexer polling), so
+  // these tests exercise exactly the batching + progress mechanics.
+  const rejectingFetch = (async () => {
+    throw new TypeError('fetch failed');
+  }) as FetchFn;
+
+  test('single batch reports the final done===total call', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const calls: Array<[number, number]> = [];
+    await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(
+        [{ chain: 'ethereum', contractAddress: '0xabc', tokenId: '1' }],
+        undefined,
+        (done: number, total: number) => calls.push([done, total])
+      )
+    );
+    assert.deepEqual(calls, [[1, 1]]);
+  });
+
+  test('multi-batch reports each batch including completion', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const tokens = Array.from({ length: 12 }, (_unused, i) => ({
+      chain: 'ethereum',
+      contractAddress: '0xabc',
+      tokenId: String(i),
+    }));
+    const calls: Array<[number, number]> = [];
+    await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(tokens, undefined, (done: number, total: number) =>
+        calls.push([done, total])
+      )
+    );
+    // Concurrency is 10 per batch: 12 tokens → [10/12, 12/12].
+    assert.deepEqual(calls, [
+      [10, 12],
+      [12, 12],
+    ]);
+  });
+
+  test('a throwing progress callback never breaks the batch', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const items = await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(
+        [{ chain: 'ethereum', contractAddress: '0xabc', tokenId: '1' }],
+        undefined,
+        () => {
+          throw new Error('renderer exploded');
+        }
+      )
+    );
+    assert.deepEqual(items, []);
+  });
+});
