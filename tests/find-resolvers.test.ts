@@ -696,3 +696,49 @@ describe('resolveFeralFileToken', () => {
     );
   });
 });
+
+describe('rasterQuery network resilience (#97)', () => {
+  test('connect failure → RasterUnreachableError naming the endpoint and cause', async () => {
+    const mock = (async () => {
+      // Undici's opaque envelope: message says nothing, cause has the truth.
+      throw Object.assign(new TypeError('fetch failed'), {
+        cause: new Error('connect ETIMEDOUT 65.109.41.181:443'),
+      });
+    }) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+      (error: Error) => {
+        assert.equal(error.name, 'RasterUnreachableError');
+        assert.match(error.message, /api\.raster\.art/);
+        assert.match(error.message, /ETIMEDOUT/);
+        return true;
+      }
+    );
+  });
+
+  test('abort (timeout) → RasterUnreachableError, not a hang or bare AbortError', async () => {
+    const mock = (async () => {
+      throw Object.assign(new DOMException('This operation was aborted', 'AbortError'), {});
+    }) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+      (error: Error) => {
+        assert.equal(error.name, 'RasterUnreachableError');
+        return true;
+      }
+    );
+  });
+
+  test('fetch carries an abort signal so a stalled request cannot hang forever', async () => {
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ data: { tokenByRef: null } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1'));
+    assert.equal(sawSignal, true);
+  });
+});
