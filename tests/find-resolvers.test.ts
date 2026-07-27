@@ -818,3 +818,43 @@ describe('fetchWithTimeout (shared HTTP deadline)', () => {
     assert.equal(received?.aborted, true);
   });
 });
+
+describe('device request deadlines (#101 review)', () => {
+  test('ssh access request carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { sendSshAccessCommand } = require('../src/utilities/ssh-access');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      sendSshAccessCommand({
+        device: { name: 'test', host: 'http://127.0.0.1:1111' },
+        action: 'enable',
+        publicKey: 'ssh-ed25519 AAAA test',
+      })
+    );
+    assert.equal(sawSignal, true);
+  });
+
+  test('ff1 compatibility probe default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { assertFF1CommandCompatibility } = require('../src/utilities/ff1-compatibility');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ message: { installedVersion: '1.0.21' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      assertFF1CommandCompatibility({ name: 'test', host: 'http://127.0.0.1:1111' }, 'sshAccess')
+    );
+    assert.equal(sawSignal, true);
+  });
+});
