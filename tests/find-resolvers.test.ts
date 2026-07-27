@@ -823,22 +823,64 @@ describe('device request deadlines (#101 review)', () => {
   test('ssh access request carries a deadline signal', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { sendSshAccessCommand } = require('../src/utilities/ssh-access');
-    let sawSignal = false;
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('node:fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path');
+
+    // sendSshAccessCommand resolves its device from the user config, so the
+    // test must carry its own — a machine with a real ~/.config/ff-cli made
+    // the original version of this test pass while CI (no config) failed.
+    // XDG_CONFIG_HOME is read per-call, so a temp config keeps it hermetic
+    // on every platform AND independent of the developer's real devices.
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ff-cli-ssh-test-'));
+    fs.mkdirSync(path.join(configHome, 'ff-cli'), { recursive: true });
+    fs.writeFileSync(
+      path.join(configHome, 'ff-cli', 'config.json'),
+      JSON.stringify({
+        ff1Devices: { devices: [{ name: 'test', host: 'http://127.0.0.1:1111' }] },
+      })
+    );
+    const originalXdg = process.env.XDG_CONFIG_HOME;
+
+    const signals: boolean[] = [];
     const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
-      sawSignal = init?.signal instanceof AbortSignal;
-      return new Response(JSON.stringify({ ok: true }), {
+      signals.push(init?.signal instanceof AbortSignal);
+      // First call is the compatibility probe (getDeviceStatus), second is
+      // the sshAccess request itself; this reply shape satisfies both.
+      return new Response(JSON.stringify({ ok: true, message: { installedVersion: '1.0.21' } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     }) as FetchFn;
-    await withMockedFetch(mock, () =>
-      sendSshAccessCommand({
-        device: { name: 'test', host: 'http://127.0.0.1:1111' },
-        action: 'enable',
-        publicKey: 'ssh-ed25519 AAAA test',
-      })
-    );
-    assert.equal(sawSignal, true);
+
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      const result = await withMockedFetch(mock, () =>
+        sendSshAccessCommand({
+          enabled: true,
+          publicKey: 'ssh-ed25519 AAAA test',
+        })
+      );
+      // The command must have actually reached the device request — a
+      // config-resolution early-out would pass a naive signal assertion
+      // by never fetching at all.
+      assert.equal(result.success, true);
+      assert.ok(signals.length >= 2, `expected probe + request fetches, saw ${signals.length}`);
+      assert.ok(
+        signals.every(Boolean),
+        'every device fetch (probe and ssh request) must carry a deadline signal'
+      );
+    } finally {
+      if (originalXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdg;
+      }
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
   });
 
   test('ff1 compatibility probe default fetch carries a deadline signal', async () => {
