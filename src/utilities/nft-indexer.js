@@ -5,6 +5,7 @@
  */
 
 const GRAPHQL_ENDPOINT = 'https://indexer.feralfile.com/graphql';
+const { fetchWithTimeout } = require('./http');
 const logger = require('../logger');
 const { applyItemTiming } = require('./playlist-builder');
 
@@ -196,7 +197,7 @@ async function queryTokens(params = {}) {
     logger.debug('[NFT Indexer] Querying tokens:', { token_cids, owners, limit, offset });
     logger.debug('[NFT Indexer] GraphQL query:', query);
 
-    const response = await fetch(GRAPHQL_ENDPOINT, {
+    const response = await fetchWithTimeout(GRAPHQL_ENDPOINT, {
       method: 'POST',
       headers,
       body: JSON.stringify({ query }),
@@ -675,7 +676,7 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
  * @param {number} duration - Display duration in seconds
  * @returns {Promise<Array>} Array of DP1 items
  */
-async function getNFTTokenInfoBatch(tokens, duration) {
+async function getNFTTokenInfoBatch(tokens, duration, onProgress) {
   logger.info(`[NFT Indexer] 📦 Starting batch processing for ${tokens.length} token(s)...`);
   logger.debug('[NFT Indexer] Batch tokens:', tokens);
 
@@ -708,6 +709,19 @@ async function getNFTTokenInfoBatch(tokens, duration) {
     logger.info(`[NFT Indexer] Batch complete: ${successful} success, ${failed} failed`);
 
     results.push(...batchResults);
+
+    // Indexing previously-unseen tokens can take minutes (the indexer warms
+    // renditions by polling); without user-visible progress the CLI reads as
+    // hung. logger.info above is verbose-gated, so callers that face a human
+    // pass onProgress to render it. Errors in the callback must never break
+    // the batch — reporting is strictly best-effort.
+    if (typeof onProgress === 'function') {
+      try {
+        onProgress(results.length, tokens.length);
+      } catch {
+        /* progress display is best-effort */
+      }
+    }
   }
 
   logger.info(`[NFT Indexer] ✓ Batch processing complete: ${results.length} total results`);
@@ -788,7 +802,7 @@ async function triggerIndexingAsync(chain, contractAddress, tokenId) {
 
     const headers = { 'Content-Type': 'application/json' };
 
-    const response = await fetch(GRAPHQL_ENDPOINT, {
+    const response = await fetchWithTimeout(GRAPHQL_ENDPOINT, {
       method: 'POST',
       headers,
       body: JSON.stringify({ query: mutation, variables }),
@@ -852,7 +866,7 @@ async function queryJobStatus(jobId) {
     const variables = { job_id: id };
     const headers = { 'Content-Type': 'application/json' };
 
-    const response = await fetch(GRAPHQL_ENDPOINT, {
+    const response = await fetchWithTimeout(GRAPHQL_ENDPOINT, {
       method: 'POST',
       headers,
       body: JSON.stringify({ query, variables }),

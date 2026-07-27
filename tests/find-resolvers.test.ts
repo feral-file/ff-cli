@@ -786,3 +786,35 @@ describe('rasterQuery body-read failures (#98 review)', () => {
     );
   });
 });
+
+describe('fetchWithTimeout (shared HTTP deadline)', () => {
+  test('every resolver-facing fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () => fetchWithTimeout('https://example.com'));
+    assert.equal(sawSignal, true);
+  });
+
+  test('caller-supplied signal is composed with the deadline, not replaced', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    const caller = new AbortController();
+    let received: AbortSignal | undefined;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      received = init?.signal ?? undefined;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      fetchWithTimeout('https://example.com', { signal: caller.signal })
+    );
+    assert.ok(received instanceof AbortSignal);
+    // Aborting the caller's controller must abort the composed signal.
+    caller.abort();
+    assert.equal(received?.aborted, true);
+  });
+});
