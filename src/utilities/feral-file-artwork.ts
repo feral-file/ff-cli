@@ -7,6 +7,7 @@
  * endpoint instead of reconstructing contract identity from exhibition internals.
  */
 
+import { defaultDeadlineFetch } from './http';
 import { USER_AGENT } from './user-agent';
 
 export interface FeralFileArtworkTokenCoords {
@@ -37,7 +38,7 @@ interface FeralFileArtworkResponse {
  */
 export async function resolveFeralFileArtwork(
   artworkId: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = defaultDeadlineFetch
 ): Promise<FeralFileArtworkTokenCoords> {
   const normalizedArtworkId = artworkId.trim();
   if (!normalizedArtworkId) {

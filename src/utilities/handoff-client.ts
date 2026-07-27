@@ -1,3 +1,4 @@
+import { defaultDeadlineFetch } from './http';
 import { webcrypto } from 'node:crypto';
 import {
   HANDOFF_ALGORITHM,
@@ -109,7 +110,8 @@ export class TopicHandoffReceiver {
       fetchFn?: typeof fetch;
     } = {}
   ): Promise<TopicHandoffReceiver> {
-    const fetchFn = options.fetchFn ?? globalThis.fetch.bind(globalThis);
+    // Production default rides the shared deadline (#101 review).
+    const fetchFn = options.fetchFn ?? defaultDeadlineFetch;
     const baseUrl = brokerBaseUrl(options.baseUrl);
     const keyPair = await generateHandoffKeyPair();
     const publicKey = await exportHandoffPublicJwk(keyPair.publicKey);

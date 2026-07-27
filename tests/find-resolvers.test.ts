@@ -958,3 +958,80 @@ describe('getNFTTokenInfoBatch progress reporting (#101 review)', () => {
     assert.deepEqual(items, []);
   });
 });
+
+describe('production fetch defaults ride the deadline (#101 review round 2)', () => {
+  test('defaultDeadlineFetch attaches a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { defaultDeadlineFetch } = require('../src/utilities/http');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () => defaultDeadlineFetch('https://example.com'));
+    assert.equal(sawSignal, true);
+  });
+
+  test('feral-file artwork resolver default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { resolveFeralFileArtwork } = require('../src/utilities/feral-file-artwork');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(
+        JSON.stringify({
+          result: {
+            id: 'abc',
+            blockchainStatus: 'settled',
+            contractAddress: '0xabc',
+            tokenID: '1',
+            chain: 'ethereum',
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as FetchFn;
+    await withMockedFetch(mock, () => resolveFeralFileArtwork('abc').catch(() => undefined));
+    assert.equal(sawSignal, true);
+  });
+
+  test('relayer cast default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { sendPlaylistViaRelayer } = require('../src/utilities/ff1-relayer');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      sendPlaylistViaRelayer({
+        baseUrl: 'https://relayer.example.com',
+        topicId: 'topic',
+        playlist: { dpVersion: '1.1.0', id: 'x', slug: 'x', title: 'x', created: 'x', items: [] },
+      }).catch(() => undefined)
+    );
+    assert.equal(sawSignal, true);
+  });
+
+  test('Request input keeps its own abort signal composed with the deadline', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    const caller = new AbortController();
+    let received: AbortSignal | undefined;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      received = init?.signal ?? undefined;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      fetchWithTimeout(new Request('https://example.com', { signal: caller.signal }))
+    );
+    assert.ok(received instanceof AbortSignal);
+    caller.abort();
+    // The Request's own signal must propagate through the composed signal
+    // rather than being replaced by the deadline.
+    assert.equal(received?.aborted, true);
+  });
+});
