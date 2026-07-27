@@ -285,14 +285,26 @@ async function resolveTarget(
     return resolveCoords(parsed.coords);
   }
   if (parsed.kind === 'ff-url') {
-    if (parsed.urlKind === 'show') {
+    // Shows and series both resolve through the source-resolver's Feral File
+    // site module, which enumerates exactly the tokens the page describes
+    // (series slug → /api/series → /api/artworks?seriesID). The old series
+    // path resolved ONE token via ff-marketplace and then asked Raster, which
+    // expands to the token's parent artwork — so a single-edition series page
+    // (e.g. a Display Edition) surprisingly built the sibling collection's
+    // full token list. A series URL means the user pointed at a specific
+    // series; build exactly that. Artwork URLs keep the coords→Raster path:
+    // a single-token page carries no series intent to preserve.
+    if (parsed.urlKind === 'show' || parsed.urlKind === 'series') {
+      const label = parsed.urlKind === 'show' ? 'show' : 'series';
       const target = await resolveTokenListInput(
         input,
         resolverLimitFromOption(limitOption),
-        `Feral File show ${parsed.identifier}`
+        `Feral File ${label} ${parsed.identifier}`
       );
       if (target === null) {
-        throw new Error(`Feral File: no supported tokens found for show "${parsed.identifier}".`);
+        throw new Error(
+          `Feral File: no supported tokens found for ${label} "${parsed.identifier}".`
+        );
       }
       return target;
     }
