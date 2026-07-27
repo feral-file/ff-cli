@@ -47,6 +47,13 @@ before(async () => {
         variables: Record<string, unknown>;
       };
       res.setHeader('Content-Type', 'application/json');
+      if (destroyResponseBody) {
+        // Headers out, body terminated mid-stream: fetch() resolves, the
+        // body read rejects — the #98-review failure mode.
+        res.write('{"data": {');
+        res.destroy();
+        return;
+      }
       res.end(JSON.stringify(handler(query, variables ?? {})));
     });
   });
@@ -64,8 +71,11 @@ after(() => {
   server.close();
 });
 
+let destroyResponseBody = false;
+
 beforeEach(() => {
   handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
+  destroyResponseBody = false;
 });
 
 interface RunResult {
@@ -275,6 +285,19 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.equal(result.code, 0);
     assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
     assert.match(result.stdout, /Raster doesn't index this series/);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+    assert.match(result.stdout, /Cancelled\./);
+  });
+
+  test('Raster body terminating mid-stream → warns and degrades to one-item playlist (#98 review)', async () => {
+    // fetch() succeeds (headers arrive), the body read rejects. The typed
+    // RasterUnreachableError must survive to resolveCoords so the find flow
+    // degrades instead of dying — the whole point of the boundary fix.
+    destroyResponseBody = true;
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Raster API unreachable/);
+    assert.match(result.stdout, /Continuing without Raster — building a one-item playlist/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
     assert.match(result.stdout, /Cancelled\./);
   });

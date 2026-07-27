@@ -157,10 +157,29 @@ async function rasterQuery<T>(query: string, variables: Record<string, unknown>)
     throw new RasterUnreachableError(`Raster API unreachable (${endpoint}): ${detail}`);
   }
   if (!response.ok) {
-    const body = await response.text();
+    // Body text is best-effort context; the HTTP status alone is the error.
+    // A body read that rejects here must not mask the status — and an HTTP
+    // error is an API-level failure, deliberately NOT RasterUnreachableError.
+    const body = await response.text().catch(() => '');
     throw new Error(`Raster API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`);
   }
-  const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  // The network-error boundary extends through body consumption: a response
+  // whose stream stalls past the headers or terminates mid-body rejects
+  // HERE, not in fetch() above. Those must still surface as
+  // RasterUnreachableError or resolveCoords cannot perform its promised
+  // single-token fallback. (A 200 whose body cannot be read or parsed is
+  // unusable either way — falling back is right even for server-side
+  // garbage.)
+  let payload: { data?: T; errors?: Array<{ message: string }> };
+  try {
+    payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  } catch (error) {
+    const cause = (error as { cause?: { message?: string } }).cause;
+    const detail = cause?.message ?? (error as Error).message;
+    throw new RasterUnreachableError(
+      `Raster API unreachable (${endpoint}): response body failed: ${detail}`
+    );
+  }
   if (payload.errors && payload.errors.length > 0) {
     throw new Error(`Raster API error: ${payload.errors.map((e) => e.message).join('; ')}`);
   }

@@ -742,3 +742,47 @@ describe('rasterQuery network resilience (#97)', () => {
     assert.equal(sawSignal, true);
   });
 });
+
+describe('rasterQuery body-read failures (#98 review)', () => {
+  test('body that terminates mid-stream → RasterUnreachableError (fallback stays reachable)', async () => {
+    const mock = (async () => {
+      // Headers arrive fine; the body stream errors — response.json() rejects
+      // outside fetch()'s own rejection path.
+      const body = new ReadableStream({
+        start(controller) {
+          controller.error(new Error('terminated'));
+        },
+      });
+      return new Response(body, { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+      (error: Error) => {
+        assert.equal(error.name, 'RasterUnreachableError');
+        assert.match(error.message, /response body failed/);
+        return true;
+      }
+    );
+  });
+
+  test('HTTP error with unreadable body keeps the status error, not unreachable', async () => {
+    const mock = (async () => {
+      const body = new ReadableStream({
+        start(controller) {
+          controller.error(new Error('terminated'));
+        },
+      });
+      return new Response(body, { status: 502, statusText: 'Bad Gateway' });
+    }) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+      (error: Error) => {
+        // API-level failure: NOT the network-unreachable type, and the
+        // status survives even though the body could not be read.
+        assert.notEqual(error.name, 'RasterUnreachableError');
+        assert.match(error.message, /Raster API 502/);
+        return true;
+      }
+    );
+  });
+});
