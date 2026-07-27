@@ -119,9 +119,6 @@ npm run dev -- setup
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
 npm run dev -- play "https://example.com/video.mp4" --skip-verify
 ```
-
-> **npm 12+:** `npm ci`/`npm install` fail with `Fetching packages of type "git" have been disabled` because `@feralfile/source-resolver` is a git-URL dependency and npm 12 blocks those by default. Install with `npm ci --allow-git=all` until the resolver is published to the npm registry.
-
 ## Documentation
 
 - Getting started and usage: `./docs/README.md`
