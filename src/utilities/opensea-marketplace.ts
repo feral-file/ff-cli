@@ -24,6 +24,7 @@
  * a layout change degrades to a one-step workaround, not a dead end.
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import type { TokenCoords } from '@feralfile/source-resolver';
 import { USER_AGENT } from './user-agent';
@@ -51,9 +52,12 @@ const FALLBACK_HINT =
  */
 export async function resolveOpenSeaCollection(slug: string): Promise<TokenCoords> {
   logger.debug(`[OpenSea] Resolving collection slug "${slug}"`);
-  const response = await fetch(`https://opensea.io/collection/${encodeURIComponent(slug)}`, {
-    headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
-  });
+  const response = await fetchWithTimeout(
+    `https://opensea.io/collection/${encodeURIComponent(slug)}`,
+    {
+      headers: { 'User-Agent': USER_AGENT, Accept: 'text/html' },
+    }
+  );
   if (!response.ok) {
     throw new Error(
       `OpenSea collection page returned ${response.status} ${response.statusText}. ` + FALLBACK_HINT

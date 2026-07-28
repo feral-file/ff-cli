@@ -15,6 +15,7 @@
  * GraphQL endpoint and surface as "slug not found".
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import type { TokenCoords } from '@feralfile/source-resolver';
 import { USER_AGENT } from './user-agent';
@@ -40,7 +41,7 @@ interface FxhashObjktResponse {
 export async function resolveFxhashIteration(slug: string): Promise<TokenCoords> {
   logger.debug(`[fxhash] Resolving iteration slug "${slug}"`);
   const query = 'query ($slug: String!) { objkt(slug: $slug) { gentkContractAddress onChainId } }';
-  const response = await fetch(FXHASH_GRAPHQL, {
+  const response = await fetchWithTimeout(FXHASH_GRAPHQL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { slug } }),
@@ -110,7 +111,7 @@ export async function resolveFxhashProject(slug: string): Promise<TokenCoords> {
     '    }' +
     '  }' +
     '}';
-  const response = await fetch(FXHASH_GRAPHQL, {
+  const response = await fetchWithTimeout(FXHASH_GRAPHQL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { slug } }),

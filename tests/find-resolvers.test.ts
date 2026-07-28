@@ -786,3 +786,252 @@ describe('rasterQuery body-read failures (#98 review)', () => {
     );
   });
 });
+
+describe('fetchWithTimeout (shared HTTP deadline)', () => {
+  test('every resolver-facing fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () => fetchWithTimeout('https://example.com'));
+    assert.equal(sawSignal, true);
+  });
+
+  test('caller-supplied signal is composed with the deadline, not replaced', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    const caller = new AbortController();
+    let received: AbortSignal | undefined;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      received = init?.signal ?? undefined;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      fetchWithTimeout('https://example.com', { signal: caller.signal })
+    );
+    assert.ok(received instanceof AbortSignal);
+    // Aborting the caller's controller must abort the composed signal.
+    caller.abort();
+    assert.equal(received?.aborted, true);
+  });
+});
+
+describe('device request deadlines (#101 review)', () => {
+  test('ssh access request carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { sendSshAccessCommand } = require('../src/utilities/ssh-access');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const fs = require('node:fs');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const os = require('node:os');
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const path = require('node:path');
+
+    // sendSshAccessCommand resolves its device from the user config, so the
+    // test must carry its own — a machine with a real ~/.config/ff-cli made
+    // the original version of this test pass while CI (no config) failed.
+    // XDG_CONFIG_HOME is read per-call, so a temp config keeps it hermetic
+    // on every platform AND independent of the developer's real devices.
+    const configHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ff-cli-ssh-test-'));
+    fs.mkdirSync(path.join(configHome, 'ff-cli'), { recursive: true });
+    fs.writeFileSync(
+      path.join(configHome, 'ff-cli', 'config.json'),
+      JSON.stringify({
+        ff1Devices: { devices: [{ name: 'test', host: 'http://127.0.0.1:1111' }] },
+      })
+    );
+    const originalXdg = process.env.XDG_CONFIG_HOME;
+
+    const signals: boolean[] = [];
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal instanceof AbortSignal);
+      // First call is the compatibility probe (getDeviceStatus), second is
+      // the sshAccess request itself; this reply shape satisfies both.
+      return new Response(JSON.stringify({ ok: true, message: { installedVersion: '1.0.21' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+
+    try {
+      process.env.XDG_CONFIG_HOME = configHome;
+      const result = await withMockedFetch(mock, () =>
+        sendSshAccessCommand({
+          enabled: true,
+          publicKey: 'ssh-ed25519 AAAA test',
+        })
+      );
+      // The command must have actually reached the device request — a
+      // config-resolution early-out would pass a naive signal assertion
+      // by never fetching at all.
+      assert.equal(result.success, true);
+      assert.ok(signals.length >= 2, `expected probe + request fetches, saw ${signals.length}`);
+      assert.ok(
+        signals.every(Boolean),
+        'every device fetch (probe and ssh request) must carry a deadline signal'
+      );
+    } finally {
+      if (originalXdg === undefined) {
+        delete process.env.XDG_CONFIG_HOME;
+      } else {
+        process.env.XDG_CONFIG_HOME = originalXdg;
+      }
+      fs.rmSync(configHome, { recursive: true, force: true });
+    }
+  });
+
+  test('ff1 compatibility probe default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { assertFF1CommandCompatibility } = require('../src/utilities/ff1-compatibility');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ message: { installedVersion: '1.0.21' } }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      assertFF1CommandCompatibility({ name: 'test', host: 'http://127.0.0.1:1111' }, 'sshAccess')
+    );
+    assert.equal(sawSignal, true);
+  });
+});
+
+describe('getNFTTokenInfoBatch progress reporting (#101 review)', () => {
+  // A rejecting fetch makes every token fail fast (no indexer polling), so
+  // these tests exercise exactly the batching + progress mechanics.
+  const rejectingFetch = (async () => {
+    throw new TypeError('fetch failed');
+  }) as FetchFn;
+
+  test('single batch reports the final done===total call', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const calls: Array<[number, number]> = [];
+    await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(
+        [{ chain: 'ethereum', contractAddress: '0xabc', tokenId: '1' }],
+        undefined,
+        (done: number, total: number) => calls.push([done, total])
+      )
+    );
+    assert.deepEqual(calls, [[1, 1]]);
+  });
+
+  test('multi-batch reports each batch including completion', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const tokens = Array.from({ length: 12 }, (_unused, i) => ({
+      chain: 'ethereum',
+      contractAddress: '0xabc',
+      tokenId: String(i),
+    }));
+    const calls: Array<[number, number]> = [];
+    await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(tokens, undefined, (done: number, total: number) =>
+        calls.push([done, total])
+      )
+    );
+    // Concurrency is 10 per batch: 12 tokens → [10/12, 12/12].
+    assert.deepEqual(calls, [
+      [10, 12],
+      [12, 12],
+    ]);
+  });
+
+  test('a throwing progress callback never breaks the batch', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { getNFTTokenInfoBatch } = require('../src/utilities/nft-indexer');
+    const items = await withMockedFetch(rejectingFetch, () =>
+      getNFTTokenInfoBatch(
+        [{ chain: 'ethereum', contractAddress: '0xabc', tokenId: '1' }],
+        undefined,
+        () => {
+          throw new Error('renderer exploded');
+        }
+      )
+    );
+    assert.deepEqual(items, []);
+  });
+});
+
+describe('production fetch defaults ride the deadline (#101 review round 2)', () => {
+  test('defaultDeadlineFetch attaches a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { defaultDeadlineFetch } = require('../src/utilities/http');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () => defaultDeadlineFetch('https://example.com'));
+    assert.equal(sawSignal, true);
+  });
+
+  test('feral-file artwork resolver default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { resolveFeralFileArtwork } = require('../src/utilities/feral-file-artwork');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(
+        JSON.stringify({
+          result: {
+            id: 'abc',
+            blockchainStatus: 'settled',
+            contractAddress: '0xabc',
+            tokenID: '1',
+            chain: 'ethereum',
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
+    }) as FetchFn;
+    await withMockedFetch(mock, () => resolveFeralFileArtwork('abc').catch(() => undefined));
+    assert.equal(sawSignal, true);
+  });
+
+  test('relayer cast default fetch carries a deadline signal', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { sendPlaylistViaRelayer } = require('../src/utilities/ff1-relayer');
+    let sawSignal = false;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      sawSignal = init?.signal instanceof AbortSignal;
+      return new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      sendPlaylistViaRelayer({
+        baseUrl: 'https://relayer.example.com',
+        topicId: 'topic',
+        playlist: { dpVersion: '1.1.0', id: 'x', slug: 'x', title: 'x', created: 'x', items: [] },
+      }).catch(() => undefined)
+    );
+    assert.equal(sawSignal, true);
+  });
+
+  test('Request input keeps its own abort signal composed with the deadline', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { fetchWithTimeout } = require('../src/utilities/http');
+    const caller = new AbortController();
+    let received: AbortSignal | undefined;
+    const mock = (async (_input: string | URL | Request, init?: RequestInit) => {
+      received = init?.signal ?? undefined;
+      return new Response('{}', { status: 200 });
+    }) as FetchFn;
+    await withMockedFetch(mock, () =>
+      fetchWithTimeout(new Request('https://example.com', { signal: caller.signal }))
+    );
+    assert.ok(received instanceof AbortSignal);
+    caller.abort();
+    // The Request's own signal must propagate through the composed signal
+    // rather than being replaced by the deadline.
+    assert.equal(received?.aborted, true);
+  });
+});

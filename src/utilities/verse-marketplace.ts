@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from './http';
 import type { TokenCoords } from '@feralfile/source-resolver';
 
 /**
@@ -14,7 +15,7 @@ import type { TokenCoords } from '@feralfile/source-resolver';
  */
 export async function resolveVerseSeries(slug: string): Promise<TokenCoords> {
   const url = `https://verse.works/series/${encodeURIComponent(slug)}`;
-  const response = await fetch(url);
+  const response = await fetchWithTimeout(url);
   if (!response.ok) {
     throw new Error(`Verse series lookup failed for ${slug}: ${response.status}`);
   }

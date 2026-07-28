@@ -205,6 +205,17 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
     chalk.dim(`Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`)
   );
 
+  // Previously-unseen tokens make the indexer warm renditions by polling —
+  // minutes of wall time on a large series. Say so upfront (the --limit
+  // warming hint used to appear only after a failure) and render per-batch
+  // progress so a long index never reads as a hang.
+  if (tokens.length > 10) {
+    console.log(
+      chalk.dim(
+        '  First-time tokens can take the indexer a while to warm; use `--limit 5` for a faster first pass.'
+      )
+    );
+  }
   // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
   // display seconds), not concurrency — concurrency is hardcoded inside.
   // Omit it for auto timing: video/audio items carry no duration and play
@@ -214,7 +225,15 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
       chain: t.chain,
       contractAddress: t.contract,
       tokenId: t.tokenId,
-    }))
+    })),
+    undefined,
+    // Unconditional: suppressing the done===total call meant a one-batch
+    // index (including the recommended --limit 5 warm-up) printed nothing
+    // and multi-batch runs never showed completion. The final N/N line IS
+    // the "indexing finished" signal.
+    (done: number, total: number) => {
+      console.log(chalk.dim(`  ${done}/${total} tokens indexed...`));
+    }
   );
 
   // FF-indexer bypass for Raster-minted tokens. The indexer doesn't carry

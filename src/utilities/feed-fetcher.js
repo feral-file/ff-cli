@@ -4,6 +4,7 @@
  * API: https://github.com/display-protocol/dp1-feed
  */
 
+const { fetchWithTimeout } = require('./http');
 const chalk = require('chalk');
 const fuzzysort = require('fuzzysort');
 const { getFeedConfig } = require('../config');
@@ -48,7 +49,9 @@ async function fetchPlaylistsFromFeed(feedUrl, limit = 100) {
   try {
     // API has a maximum limit of 100
     const validLimit = Math.min(limit, 100);
-    const response = await fetch(`${feedUrl}/playlists?limit=${validLimit}&sort=-created`);
+    const response = await fetchWithTimeout(
+      `${feedUrl}/playlists?limit=${validLimit}&sort=-created`
+    );
 
     if (!response.ok) {
       console.log(chalk.yellow(`  Feed ${feedUrl} returned ${response.status}`));
@@ -114,7 +117,7 @@ async function fetchPlaylistsWithPagination(
     const currentLimit = Math.min(pageSize, remainingItems, 100);
 
     try {
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${feedUrl}/playlists?limit=${currentLimit}&offset=${offset}&sort=-created`
       );
       reachable = true;
@@ -344,7 +347,7 @@ async function getPlaylistById(idOrSlug, feedUrl = null) {
     // Try each feed URL until we find the playlist
     for (const url of feedUrls) {
       try {
-        const response = await fetch(`${url}/playlists/${idOrSlug}`);
+        const response = await fetchWithTimeout(`${url}/playlists/${idOrSlug}`);
 
         if (response.ok) {
           const playlist = await response.json();

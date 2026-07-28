@@ -1,3 +1,4 @@
+import { defaultDeadlineFetch } from './http';
 import type { Playlist } from '../types';
 
 export interface RelayerCastResult {
@@ -39,7 +40,8 @@ export async function sendPlaylistViaRelayer(input: {
   playlist: Playlist;
   fetchFn?: typeof fetch;
 }): Promise<RelayerCastResult> {
-  const fetchFn = input.fetchFn ?? globalThis.fetch.bind(globalThis);
+  // Production default rides the shared deadline (#101 review).
+  const fetchFn = input.fetchFn ?? defaultDeadlineFetch;
   let url: URL;
   try {
     url = new URL('/api/cast', input.baseUrl);
