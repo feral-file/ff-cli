@@ -309,11 +309,12 @@ describe('find command — resolver-backed token-list flow', () => {
     const superRareCollectionUrl =
       'https://superrare.com/collection/0x1234567890123456789012345678901234567890';
     const feralFileShowUrl = 'https://feralfile.com/exhibitions/shows/mock-show';
+    const feralFileSeriesUrl = 'https://feralfile.com/exhibitions/series/mock-series';
     const dir = mkdtempSync(join(tmpdir(), 'ff-find-token-list-'));
     const originalCwd = process.cwd();
     const resolverCalls: Array<{ input: string; options: { limit: number } }> = [];
     const promptQuestions: string[] = [];
-    const promptAnswers = ['yes', 's', 'yes', 's', 'yes', 's'];
+    const promptAnswers = ['yes', 's', 'yes', 's', 'yes', 's', 'yes', 's'];
     const indexedBatches: unknown[][] = [];
     const stdoutWrites: string[] = [];
     const stderrWrites: string[] = [];
@@ -342,6 +343,23 @@ describe('find command — resolver-backed token-list flow', () => {
           return {
             kind: 'not-found',
             reason: 'mock resolver miss',
+          };
+        }
+        // Series pages resolve to exactly the tokens the page describes —
+        // one here, mirroring a single-edition series (the case the old
+        // ff-marketplace→Raster path expanded to a sibling collection).
+        if (input === feralFileSeriesUrl) {
+          return {
+            kind: 'tokens',
+            title: 'Mock Feral File Series',
+            coords: [
+              {
+                chain: 'ethereum',
+                contract: '0x1234567890123456789012345678901234567890',
+                tokenId: '21',
+              },
+            ],
+            hasMore: false,
           };
         }
         const isSuperRareCollection = input === superRareCollectionUrl;
@@ -559,6 +577,56 @@ describe('find command — resolver-backed token-list flow', () => {
       assert.match(
         stderrWrites.join(''),
         /Feral File: no supported tokens found for show "mock-show"/
+      );
+
+      // Series URLs route through the same resolver token-list path as shows
+      // (never ff-marketplace→Raster, which expanded a single-edition series
+      // to its parent artwork's full token list). The mock Raster server
+      // seeing zero traffic is asserted implicitly: a Raster call would hit
+      // this test's GraphQL handler and fail the deepEqual on indexedBatches.
+      resolverCalls.length = 0;
+      promptQuestions.length = 0;
+      indexedBatches.length = 0;
+      stdoutWrites.length = 0;
+      stderrWrites.length = 0;
+      resolverMissInputs.delete(feralFileShowUrl);
+
+      await findCommand.parseAsync(['node', 'find', feralFileSeriesUrl, '--limit', '1'], {
+        from: 'node',
+      });
+
+      assert.deepEqual(resolverCalls, [
+        {
+          input: feralFileSeriesUrl,
+          options: { limit: 1 },
+        },
+      ]);
+      assert.deepEqual(indexedBatches, [
+        [
+          {
+            chain: 'ethereum',
+            contractAddress: '0x1234567890123456789012345678901234567890',
+            tokenId: '21',
+          },
+        ],
+      ]);
+      assert.match(stdoutWrites.join(''), /Mock Feral File Series/);
+
+      resolverCalls.length = 0;
+      stderrWrites.length = 0;
+      resolverMissInputs.add(feralFileSeriesUrl);
+
+      await assert.rejects(
+        () =>
+          findCommand.parseAsync(['node', 'find', feralFileSeriesUrl, '--limit', '1'], {
+            from: 'node',
+          }),
+        /process\.exit\(1\)/
+      );
+
+      assert.match(
+        stderrWrites.join(''),
+        /Feral File: no supported tokens found for series "mock-series"/
       );
     } finally {
       process.stdout.write = originalStdoutWrite;
