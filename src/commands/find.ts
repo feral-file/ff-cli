@@ -20,6 +20,7 @@ import {
   listArtistArtworks,
   resolveAddressToArtist,
   formatSummaryLine,
+  RasterUnreachableError,
 } from '../utilities/raster-client';
 import type { RasterArtworkSummary, RasterArtworkRow } from '../utilities/raster-client';
 import { castPlaylist } from '../utilities/playlist-cast';
@@ -410,9 +411,24 @@ async function resolveTokenListInput(
 /**
  * Resolve on-chain coords to a target. If Raster doesn't index this token,
  * fall back to single-token mode so we still build something playable.
+ *
+ * Raster being unreachable gets the same fallback: it only enriches the find
+ * (series enumeration, artist labels) — the coords in hand are enough to
+ * build a playable single-token playlist, and a network blip on one optional
+ * dependency must not kill the whole command (#97).
  */
 async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
-  const summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  let summary: RasterArtworkSummary | null;
+  try {
+    summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  } catch (error) {
+    if (!(error instanceof RasterUnreachableError)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${error.message}`));
+    console.log(chalk.dim('  Continuing without Raster — building a one-item playlist.'));
+    return { kind: 'single', coords };
+  }
   if (summary === null) {
     return { kind: 'single', coords };
   }

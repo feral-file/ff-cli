@@ -9,7 +9,16 @@ process.on('warning', (warning) => {
 });
 
 import 'dotenv/config';
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'net';
 import { Command } from 'commander';
+
+// Node's happy-eyeballs gives each address-family connect attempt 250 ms by
+// default. That is shorter than a single round trip to a far-away API host
+// (e.g. api.raster.art from Asia is ~250 ms RTT), so on networks with broken
+// IPv6 the IPv4 attempt gets cut off mid-handshake, the IPv6 fallback has no
+// route, and fetch fails or stalls intermittently (#97). 2.5 s per attempt is
+// still fast-failing but no longer races the speed of light.
+setDefaultAutoSelectFamilyAttemptTimeout(2500);
 import { readFileSync } from 'fs';
 import { resolve, dirname } from 'path';
 import { setupCommand } from './src/commands/setup';
