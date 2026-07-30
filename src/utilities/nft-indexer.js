@@ -4,9 +4,10 @@
  * to retrieve comprehensive token information.
  */
 
+const { PlaylistItemBuilder, ProvenanceBuilder, ContractBuilder } = require('dp1-js');
 const GRAPHQL_ENDPOINT = 'https://indexer.feralfile.com/graphql';
 const logger = require('../logger');
-const { applyItemTiming } = require('./playlist-builder');
+const { applyTimingToItemBuilder, buildDefaultDisplay } = require('./playlist-builder');
 
 // Polling configuration (in milliseconds)
 const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds
@@ -480,29 +481,42 @@ function convertToDP1Item(tokenData, duration) {
     bitmark: 'bitmark', // DP1 spec uses 'bitmark', not 'bmk'
   };
 
-  // Build DP1 item structure (strict DP1 v1.0.0 compliance)
-  const dp1Item = {
-    id: itemId,
-    source: sourceUrl,
-    license: 'open',
-    created: new Date().toISOString(),
-    provenance: {
-      type: 'onChain',
-      contract: {
-        chain: chainMap[token.chain.toLowerCase()] || 'other',
-        standard: token.standard || detectTokenStandard(token.chain, token.contractAddress),
-        address: token.contractAddress,
-        tokenId: String(token.tokenId),
-      },
-    },
-  };
+  // Build via dp1-js PlaylistItemBuilder so leaf blocks match DP-1 AJV schema.
+  const itemBuilder = new PlaylistItemBuilder()
+    .id(itemId)
+    .source(sourceUrl)
+    .license('open')
+    .provenance(
+      new ProvenanceBuilder().type('onChain').contract(
+        new ContractBuilder()
+          .chain(chainMap[token.chain.toLowerCase()] || 'other')
+          .standard(token.standard || detectTokenStandard(token.chain, token.contractAddress))
+          .address(token.contractAddress)
+          .tokenId(String(token.tokenId))
+      )
+    );
 
   // Add title if available (valid DP1 field)
   if (token.name) {
-    dp1Item.title = token.name;
+    itemBuilder.title(token.name);
   }
 
-  applyItemTiming(dp1Item, { mimeType: token.image?.mimeType, sourceUrl }, duration);
+  applyTimingToItemBuilder(
+    itemBuilder,
+    { mimeType: token.image?.mimeType, sourceUrl },
+    duration,
+    buildDefaultDisplay()
+  );
+
+  let dp1Item;
+  try {
+    dp1Item = itemBuilder.build();
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
 
   logger.debug('[NFT Indexer] ✓ Converted to DP1:', {
     title: token.name,

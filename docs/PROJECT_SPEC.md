@@ -105,7 +105,7 @@ Based on the code today, the CLI is responsible for:
 - resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
 - running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
 - supporting a deterministic build path from structured JSON (`build`)
-- building DP-1 playlist envelopes from NFT metadata or direct media URLs
+- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant)
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
 - publishing validated playlists to configured feed servers

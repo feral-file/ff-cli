@@ -34,7 +34,6 @@ const minimalItem = {
   source: 'https://example.com/art.mp4',
   duration: 10,
   license: 'token',
-  created: '2026-06-01T12:00:00.000Z',
 };
 
 describe('buildDP1Playlist signing (v1.1.0)', () => {
