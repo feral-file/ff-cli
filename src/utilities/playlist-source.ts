@@ -1,3 +1,4 @@
+import { fetchWithTimeout } from './http';
 import { promises as fs } from 'fs';
 import type { Playlist } from '../types';
 
@@ -48,7 +49,7 @@ export async function loadPlaylistSource(source: string): Promise<LoadedPlaylist
   }
 
   if (isPlaylistSourceUrl(trimmedSource)) {
-    const response = await fetch(trimmedSource);
+    const response = await fetchWithTimeout(trimmedSource);
     if (!response.ok) {
       throw new Error(`Failed to fetch playlist URL: ${response.status} ${response.statusText}`);
     }

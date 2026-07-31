@@ -20,6 +20,7 @@ import {
   listArtistArtworks,
   resolveAddressToArtist,
   formatSummaryLine,
+  RasterUnreachableError,
 } from '../utilities/raster-client';
 import type { RasterArtworkSummary, RasterArtworkRow } from '../utilities/raster-client';
 import { castPlaylist } from '../utilities/playlist-cast';
@@ -204,6 +205,17 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
     chalk.dim(`Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`)
   );
 
+  // Previously-unseen tokens make the indexer warm renditions by polling —
+  // minutes of wall time on a large series. Say so upfront (the --limit
+  // warming hint used to appear only after a failure) and render per-batch
+  // progress so a long index never reads as a hang.
+  if (tokens.length > 10) {
+    console.log(
+      chalk.dim(
+        '  First-time tokens can take the indexer a while to warm; use `--limit 5` for a faster first pass.'
+      )
+    );
+  }
   // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
   // display seconds), not concurrency — concurrency is hardcoded inside.
   // Omit it for auto timing: video/audio items carry no duration and play
@@ -213,7 +225,15 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
       chain: t.chain,
       contractAddress: t.contract,
       tokenId: t.tokenId,
-    }))
+    })),
+    undefined,
+    // Unconditional: suppressing the done===total call meant a one-batch
+    // index (including the recommended --limit 5 warm-up) printed nothing
+    // and multi-batch runs never showed completion. The final N/N line IS
+    // the "indexing finished" signal.
+    (done: number, total: number) => {
+      console.log(chalk.dim(`  ${done}/${total} tokens indexed...`));
+    }
   );
 
   // FF-indexer bypass for Raster-minted tokens. The indexer doesn't carry
@@ -284,14 +304,26 @@ async function resolveTarget(
     return resolveCoords(parsed.coords);
   }
   if (parsed.kind === 'ff-url') {
-    if (parsed.urlKind === 'show') {
+    // Shows and series both resolve through the source-resolver's Feral File
+    // site module, which enumerates exactly the tokens the page describes
+    // (series slug → /api/series → /api/artworks?seriesID). The old series
+    // path resolved ONE token via ff-marketplace and then asked Raster, which
+    // expands to the token's parent artwork — so a single-edition series page
+    // (e.g. a Display Edition) surprisingly built the sibling collection's
+    // full token list. A series URL means the user pointed at a specific
+    // series; build exactly that. Artwork URLs keep the coords→Raster path:
+    // a single-token page carries no series intent to preserve.
+    if (parsed.urlKind === 'show' || parsed.urlKind === 'series') {
+      const label = parsed.urlKind === 'show' ? 'show' : 'series';
       const target = await resolveTokenListInput(
         input,
         resolverLimitFromOption(limitOption),
-        `Feral File show ${parsed.identifier}`
+        `Feral File ${label} ${parsed.identifier}`
       );
       if (target === null) {
-        throw new Error(`Feral File: no supported tokens found for show "${parsed.identifier}".`);
+        throw new Error(
+          `Feral File: no supported tokens found for ${label} "${parsed.identifier}".`
+        );
       }
       return target;
     }
@@ -410,9 +442,24 @@ async function resolveTokenListInput(
 /**
  * Resolve on-chain coords to a target. If Raster doesn't index this token,
  * fall back to single-token mode so we still build something playable.
+ *
+ * Raster being unreachable gets the same fallback: it only enriches the find
+ * (series enumeration, artist labels) — the coords in hand are enough to
+ * build a playable single-token playlist, and a network blip on one optional
+ * dependency must not kill the whole command (#97).
  */
 async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
-  const summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  let summary: RasterArtworkSummary | null;
+  try {
+    summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
+  } catch (error) {
+    if (!(error instanceof RasterUnreachableError)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${error.message}`));
+    console.log(chalk.dim('  Continuing without Raster — building a one-item playlist.'));
+    return { kind: 'single', coords };
+  }
   if (summary === null) {
     return { kind: 'single', coords };
   }

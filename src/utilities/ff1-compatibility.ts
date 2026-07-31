@@ -2,7 +2,9 @@
  * FF1 device compatibility helpers for command preflight checks.
  */
 
+import { fetchWithTimeout } from './http';
 import { getFF1DeviceConfig } from '../config';
+import { findConfiguredDeviceIndex } from './device-lookup';
 import type { FF1Device, FF1DeviceConfig } from '../types';
 import * as logger from '../logger';
 
@@ -50,7 +52,8 @@ const FF1_COMMAND_POLICIES: Record<FF1Command, FF1CommandPolicy> = {
 /**
  * Load and validate the configured FF1 device selected by name.
  *
- * @param {string} [deviceName] - Optional device name, exact match required
+ * @param {string} [deviceName] - Optional device name (case-insensitive) or host URL,
+ *   resolved with the same matching rules as `device remove`/`default`/`rename`
  * @param {Object} [options] - Optional dependency overrides
  * @param {Function} [options.getFF1DeviceConfigFn] - Optional config loader override
  * @returns {FF1DeviceSelectionResult} Selected device or reason for failure
@@ -75,7 +78,8 @@ export function resolveConfiguredDevice(
   let device = deviceConfig.devices[0];
 
   if (deviceName) {
-    device = deviceConfig.devices.find((item) => item.name === deviceName) as FF1Device | undefined;
+    const index = findConfiguredDeviceIndex(deviceConfig.devices, deviceName);
+    device = index === -1 ? undefined : (deviceConfig.devices[index] as FF1Device);
     if (!device) {
       const availableNames = deviceConfig.devices
         .map((item) => item.name)
@@ -121,7 +125,10 @@ export async function assertFF1CommandCompatibility(
   command: FF1Command,
   options: CompatibilityCheckOptions = {}
 ): Promise<FF1CompatibilityResult> {
-  const fetchFn = options.fetchFn || globalThis.fetch.bind(globalThis);
+  // Default probe fetch rides the shared deadline: a device that accepts
+  // the TCP connection but never answers must not hang `ff-cli ssh`.
+  const fetchFn =
+    options.fetchFn || ((input: string, init?: RequestInit) => fetchWithTimeout(input, init ?? {}));
   const policy = getCommandPolicy(command);
 
   const versionResult = await detectFF1VersionSafely(

@@ -28,6 +28,15 @@ import { USER_AGENT } from './user-agent';
 
 const DEFAULT_RASTER_GRAPHQL_URL = 'https://api.raster.art/graphql';
 
+/**
+ * Hard ceiling on a single Raster round trip. Without it, a stalled TCP
+ * connect or unanswered request leaves `find` hanging with no output (#97) —
+ * the failure mode agents can least diagnose. 20 s is generous for a
+ * transcontinental GraphQL query and still turns "silent hang" into a fast,
+ * actionable error.
+ */
+const RASTER_REQUEST_TIMEOUT_MS = 20_000;
+
 // CAIP-2 chain IDs for the chains the FF indexer supports.
 // Tezos mainnet's CAIP form uses the genesis block hash (NetXdQprcVkpaWU),
 // not the human-readable "tezos:mainnet" — Raster returns the hash form on
@@ -43,6 +52,19 @@ const INDEXER_CHAIN_TO_CAIP: Record<IndexerChain, string> = {
 };
 
 export type IndexerChain = 'ethereum' | 'tezos';
+
+/**
+ * Raster could not be reached at the network level (connect failure, broken
+ * IPv6 path, timeout). Distinct from API-level errors so callers that hold
+ * usable token coordinates can degrade gracefully instead of dying — Raster
+ * only enriches a find, it is not required to build a playable playlist.
+ */
+export class RasterUnreachableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RasterUnreachableError';
+  }
+}
 
 export interface RasterArtist {
   id: string;
@@ -118,16 +140,46 @@ async function rasterQuery<T>(query: string, variables: Record<string, unknown>)
   if (apiKey) {
     headers['x-api-key'] = apiKey;
   }
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify({ query, variables }),
-  });
+  let response: Response;
+  try {
+    response = await fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(RASTER_REQUEST_TIMEOUT_MS),
+    });
+  } catch (error) {
+    // Undici's "fetch failed" carries no endpoint and no cause in its
+    // message — name the host and the real failure so the error is
+    // actionable, and let callers detect network failure by type.
+    const cause = (error as { cause?: { message?: string } }).cause;
+    const detail = cause?.message ?? (error as Error).message;
+    throw new RasterUnreachableError(`Raster API unreachable (${endpoint}): ${detail}`);
+  }
   if (!response.ok) {
-    const body = await response.text();
+    // Body text is best-effort context; the HTTP status alone is the error.
+    // A body read that rejects here must not mask the status — and an HTTP
+    // error is an API-level failure, deliberately NOT RasterUnreachableError.
+    const body = await response.text().catch(() => '');
     throw new Error(`Raster API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`);
   }
-  const payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  // The network-error boundary extends through body consumption: a response
+  // whose stream stalls past the headers or terminates mid-body rejects
+  // HERE, not in fetch() above. Those must still surface as
+  // RasterUnreachableError or resolveCoords cannot perform its promised
+  // single-token fallback. (A 200 whose body cannot be read or parsed is
+  // unusable either way — falling back is right even for server-side
+  // garbage.)
+  let payload: { data?: T; errors?: Array<{ message: string }> };
+  try {
+    payload = (await response.json()) as { data?: T; errors?: Array<{ message: string }> };
+  } catch (error) {
+    const cause = (error as { cause?: { message?: string } }).cause;
+    const detail = cause?.message ?? (error as Error).message;
+    throw new RasterUnreachableError(
+      `Raster API unreachable (${endpoint}): response body failed: ${detail}`
+    );
+  }
   if (payload.errors && payload.errors.length > 0) {
     throw new Error(`Raster API error: ${payload.errors.map((e) => e.message).join('; ')}`);
   }

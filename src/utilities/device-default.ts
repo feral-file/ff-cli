@@ -1,4 +1,4 @@
-import { normalizeDeviceHost } from './device-normalize';
+import { findConfiguredDeviceIndex } from './device-lookup';
 import type { DeviceEntry } from './device-upsert';
 
 export interface PromoteDefaultResult {
@@ -20,22 +20,7 @@ export function promoteDeviceToDefault(
   devices: DeviceEntry[],
   identifier: string
 ): PromoteDefaultResult {
-  const normalizedArg = identifier.toLowerCase();
-  let normalizedArgHost = '';
-  try {
-    normalizedArgHost = normalizeDeviceHost(identifier).toLowerCase();
-  } catch {
-    // not a valid URL — host matching will not apply
-  }
-
-  const index = devices.findIndex(
-    (d) =>
-      (d.name && d.name.toLowerCase() === normalizedArg) ||
-      (d.host && d.host.toLowerCase() === normalizedArg) ||
-      (normalizedArgHost &&
-        d.host &&
-        normalizeDeviceHost(d.host).toLowerCase() === normalizedArgHost)
-  );
+  const index = findConfiguredDeviceIndex(devices, identifier);
 
   if (index === -1) {
     throw new Error(`Device "${identifier}" not found`);

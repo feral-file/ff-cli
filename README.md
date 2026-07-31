@@ -119,7 +119,6 @@ npm run dev -- setup
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
 npm run dev -- play "https://example.com/video.mp4" --skip-verify
 ```
-
 ## Documentation
 
 - Getting started and usage: `./docs/README.md`

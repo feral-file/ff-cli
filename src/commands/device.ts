@@ -1,10 +1,11 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { findExistingDeviceEntry } from '../utilities/device-lookup';
+import { findConfiguredDeviceIndex, findExistingDeviceEntry } from '../utilities/device-lookup';
 import { normalizeDeviceHost } from '../utilities/device-normalize';
 import { upsertDevice } from '../utilities/device-upsert';
 import { promoteDeviceToDefault } from '../utilities/device-default';
+import { renameDevice } from '../utilities/device-rename';
 import { readConfigFile, resolveExistingConfigPath } from './helpers/config-files';
 import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
@@ -228,9 +229,13 @@ deviceCommand
       // existingIndex === -1 (no confirmed match, e.g. manual IP → .local migration),
       // a same-name entry is the upsertDevice case-3 migration path — blocking it would
       // prevent the user from retaining their existing device name during host migration.
+      // Case-insensitive: lookups everywhere else ignore case, so "Kitchen"
+      // alongside "kitchen" would make one of them unreachable by name.
       const nameConflict =
         existingIndex !== -1
-          ? existingDevices.find((d, i) => d.name === deviceName && i !== existingIndex)
+          ? existingDevices.find(
+              (d, i) => d.name?.toLowerCase() === deviceName.toLowerCase() && i !== existingIndex
+            )
           : undefined;
       if (nameConflict) {
         if (options.name) {
@@ -252,7 +257,9 @@ deviceCommand
         deviceName = retryAnswer || 'ff1';
         const retryConflict =
           existingIndex !== -1
-            ? existingDevices.find((d, i) => d.name === deviceName && i !== existingIndex)
+            ? existingDevices.find(
+                (d, i) => d.name?.toLowerCase() === deviceName.toLowerCase() && i !== existingIndex
+              )
             : undefined;
         if (retryConflict) {
           console.error(chalk.red(`\nName "${deviceName}" is also taken. No changes made.`));
@@ -295,23 +302,7 @@ deviceCommand
       const config = await readConfigFile(configPath);
       const existingDevices = config.ff1Devices?.devices || [];
 
-      // Match by name (case-insensitive) or by host URL so unnamed legacy/manual
-      // entries (stored without a name field) can still be targeted and removed.
-      const normalizedArg = name.toLowerCase();
-      let normalizedArgHost = '';
-      try {
-        normalizedArgHost = normalizeDeviceHost(name).toLowerCase();
-      } catch {
-        // not a valid URL — host matching will not apply
-      }
-      const deviceIndex = existingDevices.findIndex(
-        (d) =>
-          (d.name && d.name.toLowerCase() === normalizedArg) ||
-          (d.host && d.host.toLowerCase() === normalizedArg) ||
-          (normalizedArgHost &&
-            d.host &&
-            normalizeDeviceHost(d.host).toLowerCase() === normalizedArgHost)
-      );
+      const deviceIndex = findConfiguredDeviceIndex(existingDevices, name);
 
       if (deviceIndex === -1) {
         console.error(chalk.red(`\nDevice "${name}" not found`));
@@ -330,6 +321,55 @@ deviceCommand
       });
       console.log(chalk.green(`\nRemoved device: ${removed.name || removed.host}`));
       console.log(chalk.dim(`Remaining devices: ${updatedDevices.length}\n`));
+    } catch (error) {
+      console.error(chalk.red('\nError:'), (error as Error).message);
+      process.exit(1);
+    }
+  });
+
+deviceCommand
+  .command('rename')
+  .description('Rename a configured FF1 device (host, API key, and default status are untouched)')
+  .argument('<name>', 'Current device name or host')
+  .argument('<new-name>', 'New device name')
+  .action(async (name: string, newName: string) => {
+    try {
+      const configPath = await resolveExistingConfigPath();
+      if (!configPath) {
+        console.log(chalk.red('config.json not found'));
+        console.log(chalk.dim('Run: ff-cli setup'));
+        process.exit(1);
+      }
+
+      const config = await readConfigFile(configPath);
+      const existingDevices = config.ff1Devices?.devices || [];
+
+      if (existingDevices.length === 0) {
+        console.log(chalk.yellow('\nNo devices configured'));
+        console.log(chalk.dim('Run: ff-cli device add\n'));
+        process.exit(1);
+      }
+
+      let result;
+      try {
+        result = renameDevice(existingDevices, name, newName);
+      } catch (error) {
+        console.error(chalk.red(`\n${(error as Error).message}`));
+        const names = existingDevices.map((d) => d.name || d.host).join(', ');
+        console.log(chalk.dim(`Available devices: ${names}\n`));
+        process.exit(1);
+      }
+
+      if (result.unchanged) {
+        console.log(chalk.dim(`\n"${result.renamed.name}" is already named that.\n`));
+        return;
+      }
+
+      config.ff1Devices = { devices: result.devices };
+      await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, 'utf-8');
+
+      const from = result.previousName || result.renamed.host;
+      console.log(chalk.green(`\nRenamed device: ${from} → ${result.renamed.name}\n`));
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
       process.exit(1);

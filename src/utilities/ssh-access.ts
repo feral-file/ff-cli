@@ -2,6 +2,7 @@
  * SSH access control for FF1 devices.
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-compatibility';
 
@@ -100,7 +101,7 @@ export async function sendSshAccessCommand({
       headers['API-KEY'] = device.apiKey;
     }
 
-    const response = await fetch(apiUrl, {
+    const response = await fetchWithTimeout(apiUrl, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),

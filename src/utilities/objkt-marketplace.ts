@@ -10,6 +10,7 @@
  * when an alias segment is detected.
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import { USER_AGENT } from './user-agent';
 
@@ -30,7 +31,7 @@ interface FaPathResponse {
 export async function resolveObjktAlias(alias: string): Promise<string> {
   logger.debug(`[Objkt] Resolving alias "${alias}"`);
   const query = 'query ($path: String!) { fa(where: { path: { _eq: $path } }) { contract } }';
-  const response = await fetch(OBJKT_GRAPHQL, {
+  const response = await fetchWithTimeout(OBJKT_GRAPHQL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { path: alias } }),

@@ -139,6 +139,7 @@ You can also manage devices independently with:
   non-interactively with `--host`, `--name`, and the physical `--id` shown in
   Feral File mobile. Manual devices need the ID before relayer pairing.
 - `ff-cli device list` – Show all configured devices.
+- `ff-cli device rename <name> <new-name>` – Rename a device without touching its host, API key, or default status. Works offline; also accepts the host URL as the identifier, so unnamed legacy entries can be given a name.
 - `ff-cli device remove <name>` – Remove a device by name.
 - `ff-cli device default <name>` – Promote a device to the top of the list so it is used when `-d` is omitted.
 - `ff-cli device pair [name]` – Display a one-time handoff code and key-bound
@@ -150,7 +151,7 @@ Setup and `device add` both preserve existing devices. Adding a device with the 
 Selection rules when sending:
 
 - If you omit `-d`, the first configured device is used.
-- If you pass `-d <name>`, the CLI matches the device by `name` (exact match). If not found, you’ll see an error listing available devices.
+- If you pass `-d <name>`, the CLI matches the device by `name` (case-insensitive) or by host URL — the same rules as `device remove`/`default`/`rename`, so unnamed entries can be targeted by host. If not found, you’ll see an error listing available devices.
 
 Device cast contract:
 

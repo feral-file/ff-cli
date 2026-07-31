@@ -23,6 +23,7 @@
  *     reject when `id` is empty.
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import { USER_AGENT } from './user-agent';
 
@@ -58,7 +59,7 @@ export interface NeortArt {
  */
 export async function resolveNeortArt(id: string): Promise<NeortArt> {
   logger.debug(`[neort] Resolving art id "${id}"`);
-  const response = await fetch(`${NEORT_API_BASE}/art/${encodeURIComponent(id)}`, {
+  const response = await fetchWithTimeout(`${NEORT_API_BASE}/art/${encodeURIComponent(id)}`, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
   if (!response.ok) {

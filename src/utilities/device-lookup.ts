@@ -1,3 +1,5 @@
+import { normalizeDeviceHost } from './device-normalize';
+
 /**
  * Find an existing configured device that corresponds to a newly discovered host.
  *
@@ -114,4 +116,37 @@ export function findExistingDeviceEntry(
   }
 
   return undefined;
+}
+
+/**
+ * Find the index of a configured device by a user-supplied identifier.
+ *
+ * Matches by friendly name (case-insensitive) or by host URL — raw or
+ * normalized — so unnamed legacy/manual entries (stored without a name field)
+ * can still be targeted. Shared by `device remove`, `device default`,
+ * `device rename`, and runtime `-d` resolution so every surface answers to
+ * the same identifier the same way.
+ *
+ * Returns -1 when nothing matches.
+ */
+export function findConfiguredDeviceIndex(
+  devices: Array<{ host?: string; name?: string }>,
+  identifier: string
+): number {
+  const normalizedArg = identifier.toLowerCase();
+  let normalizedArgHost = '';
+  try {
+    normalizedArgHost = normalizeDeviceHost(identifier).toLowerCase();
+  } catch {
+    // not a valid URL — host matching will not apply
+  }
+
+  return devices.findIndex(
+    (d) =>
+      (d.name && d.name.toLowerCase() === normalizedArg) ||
+      (d.host && d.host.toLowerCase() === normalizedArg) ||
+      (normalizedArgHost &&
+        d.host &&
+        normalizeDeviceHost(d.host).toLowerCase() === normalizedArgHost)
+  );
 }

@@ -14,6 +14,7 @@
  * Show URLs are rejected: a single exhibition spans multiple series, which
  * is wider than v1 supports.
  */
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import type { FeralFileUrlKind, TokenCoords } from '@feralfile/source-resolver';
 import { resolveFeralFileArtwork } from './feral-file-artwork';
@@ -39,7 +40,7 @@ interface ArtworksByQueryResponse {
 async function ffFetch<T>(path: string): Promise<T> {
   const url = `${FF_API_BASE}${path}`;
   logger.debug(`[FF API] GET ${url}`);
-  const response = await fetch(url, {
+  const response = await fetchWithTimeout(url, {
     headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' },
   });
   if (!response.ok) {

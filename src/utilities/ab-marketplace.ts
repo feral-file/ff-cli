@@ -11,6 +11,7 @@
  * direct GraphQL path is the right shape.
  */
 
+import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import type { TokenCoords } from '@feralfile/source-resolver';
 import { USER_AGENT } from './user-agent';
@@ -43,7 +44,7 @@ export async function resolveArtBlocksCollection(slug: string): Promise<TokenCoo
     '    tokens(limit: 1, order_by: { invocation: asc }) { token_id }' +
     '  }' +
     '}';
-  const response = await fetch(AB_GRAPHQL, {
+  const response = await fetchWithTimeout(AB_GRAPHQL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'User-Agent': USER_AGENT },
     body: JSON.stringify({ query, variables: { slug } }),

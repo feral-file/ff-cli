@@ -3,6 +3,7 @@
  * Handles sending DP1 playlists to FF1 devices via the Relayer API
  */
 
+import { defaultDeadlineFetch } from './http';
 import * as logger from '../logger';
 import { getFF1RelayerConfig } from '../config';
 import type { FF1Device, Playlist } from '../types';
@@ -193,7 +194,9 @@ export async function sendPlaylistToDevice(
   overrides: FF1DeviceDependencies = {}
 ): Promise<SendPlaylistResult> {
   const dependencies: DeliveryDependencies = {
-    fetchFn: overrides.fetchFn ?? globalThis.fetch.bind(globalThis),
+    // Production default rides the shared deadline; injected test fetches
+    // are preserved untouched (#101 review).
+    fetchFn: overrides.fetchFn ?? defaultDeadlineFetch,
     getTopicIdFn: overrides.getTopicIdFn ?? getTopicId,
     getRelayerConfigFn: overrides.getRelayerConfigFn ?? getFF1RelayerConfig,
     waitFn: overrides.waitFn ?? waitForRetry,
