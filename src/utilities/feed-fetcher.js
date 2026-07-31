@@ -407,11 +407,13 @@ function extractPlaylistItems(playlist, quantity, duration, shuffle = true) {
   // Apply an explicit duration override when one was requested; otherwise
   // keep each item's own timing (including intentionally absent duration,
   // which DP-1 §4.1 uses for natural-length playback of video/audio).
+  //
+  // Strip any item-level `created`: the DP-1 PlaylistItem schema has no
+  // `created` field (it lives only at the playlist level), so drop it here —
+  // including from legacy feed entries that may still carry it — before the
+  // items reach PlaylistBuilder for construction.
   items = items.map((item) => {
-    const next = {
-      ...item,
-      created: item.created || new Date().toISOString(), // Ensure created field exists
-    };
+    const { created: _created, ...next } = item;
     if (typeof duration === 'number') {
       next.duration = duration;
     }
