@@ -64,3 +64,63 @@ describe('extractPlaylistItems drops item-level created', () => {
     assert.equal(result.valid, true, `expected valid playlist, got: ${result.errors.join('; ')}`);
   });
 });
+
+/**
+ * A legacy feed playlist whose off-chain URL items carry BOTH an item-level
+ * `created` and the old `provenance: { type: 'offChainURI', uri }` shape that a
+ * prior `buildUrlItem` produced. The DP-1 ProvenanceBlock has no top-level
+ * `uri` (a `uri` only lives under `provenance.contract`), so extraction must
+ * drop it before the items reach PlaylistBuilder.
+ */
+function feedPlaylistWithLegacyOffChainURI() {
+  return {
+    id: 'feed-playlist-2',
+    title: 'Legacy Feed Playlist',
+    created: '2024-01-01T00:00:00.000Z',
+    items: [
+      {
+        source: 'https://example.com/legacy-1.html',
+        title: 'Legacy 1',
+        duration: 300,
+        created: '2024-02-02T00:00:00.000Z',
+        provenance: { type: 'offChainURI', uri: 'https://example.com/legacy-1.html' },
+      },
+    ],
+  };
+}
+
+describe('extractPlaylistItems normalizes legacy offChainURI provenance', () => {
+  test('strips both `created` and the stray `provenance.uri`', () => {
+    const items = extractPlaylistItems(feedPlaylistWithLegacyOffChainURI(), 10, undefined, false);
+
+    assert.equal(items.length, 1);
+    const [item] = items;
+    assert.equal('created' in item, false, 'extracted item must not carry `created`');
+    assert.ok(item.provenance, 'provenance is preserved');
+    assert.equal(item.provenance.type, 'offChainURI', 'provenance.type is preserved');
+    assert.equal(
+      'uri' in item.provenance,
+      false,
+      'stray top-level `provenance.uri` must be removed'
+    );
+  });
+
+  test('rebuilds a legacy feed playlist that validates and has no stray uri', async () => {
+    const items = extractPlaylistItems(feedPlaylistWithLegacyOffChainURI(), 10, undefined, false);
+    const playlist = await buildDP1Playlist({ items, title: 'From Legacy Feed' });
+
+    for (const item of playlist.items) {
+      assert.equal('created' in item, false, 'built item must not carry `created`');
+      if (item.provenance) {
+        assert.equal(
+          'uri' in item.provenance,
+          false,
+          'built item provenance must not carry a top-level `uri`'
+        );
+      }
+    }
+
+    const result = validateDP1Playlist(playlist);
+    assert.equal(result.valid, true, `expected valid playlist, got: ${result.errors.join('; ')}`);
+  });
+});
