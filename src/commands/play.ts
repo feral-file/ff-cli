@@ -2,7 +2,12 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { parseFindInput } from '@feralfile/source-resolver';
 import { getConfig } from '../config';
-import { isPlaylistSourceUrl, resolvePlaySource } from '../utilities/playlist-source';
+import {
+  isPlaylistSourceUrl,
+  loadPlaylistSource,
+  resolvePlaySource,
+  type PlaySource,
+} from '../utilities/playlist-source';
 import { castPlaylist } from '../utilities/playlist-cast';
 import {
   printPlaylistSourceLoadFailure,
@@ -60,6 +65,46 @@ export function describeDiscoveryInput(source: string): string | null {
   }
 }
 
+/**
+ * probeDiscoveryUrlAsPlaylist loads a discovery-classified http(s) URL as a
+ * DP-1 playlist document, or returns null when it is not one.
+ *
+ * The discovery parser claims whole hosts — any *.feralfile.com URL parses
+ * as a Feral File URL, and non-exhibition paths come back `unsupported` —
+ * which wrongly redirected DP-1 feed playlist URLs
+ * (https://feed.feralfile.com/api/v1/playlists/{slug}, exactly the URLs the
+ * feed hands out) to `find`, which has no feed route either; the documented
+ * "hosted playlist URL plays directly" contract was unreachable for them
+ * (found 2026-08-02 casting a published playlist to an FF1).
+ *
+ * Probing the document keeps both behaviors without a host allowlist: a URL
+ * that serves DP-1 JSON (`dpVersion` marker) plays directly; a marketplace
+ * *page* fails the probe (non-JSON, or JSON with no marker) and still
+ * redirects to `find` instead of being wrapped as a web item. The probe
+ * costs one fetch before a redirect, only for discovery inputs that are
+ * http(s) URLs; coordinates and wallet addresses never hit the network.
+ */
+export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlaySource | null> {
+  if (!isPlaylistSourceUrl(source)) {
+    return null;
+  }
+  try {
+    const loaded = await loadPlaylistSource(source);
+    const document = loaded.playlist as { dpVersion?: unknown };
+    if (typeof document?.dpVersion !== 'string') {
+      return null;
+    }
+    return {
+      kind: 'playlist',
+      playlist: loaded.playlist,
+      sourceType: loaded.sourceType,
+      source: loaded.source,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export const playCommand = new Command('play')
   .description('Play a playlist or media URL on an FF1 device')
   .argument('<source>', 'Playlist file, playlist URL, or media URL')
@@ -73,8 +118,15 @@ export const playCommand = new Command('play')
       // `play` casts an exact playable source. A marketplace URL / on-chain
       // coords / wallet must be resolved through the indexer first — redirect
       // to `find` rather than silently wrapping the *page* as a web item.
+      // Exception: a discovery-classified URL that actually serves a DP-1
+      // playlist document (the discovery parser claims whole hosts, catching
+      // feed playlist URLs) plays directly — see probeDiscoveryUrlAsPlaylist.
       const discovery = describeDiscoveryInput(source);
+      let probed: PlaySource | null = null;
       if (discovery) {
+        probed = await probeDiscoveryUrlAsPlaylist(source);
+      }
+      if (discovery && !probed) {
         console.error(
           chalk.red(
             '\n`play` casts an exact playlist or media URL — it does not search marketplaces.'
@@ -91,7 +143,7 @@ export const playCommand = new Command('play')
       const config = getConfig();
       // No explicit duration: a direct video/audio URL plays its natural
       // length (DP-1 §4.1); static media uses config.defaultDuration.
-      const resolved = await resolvePlaySource(source);
+      const resolved = probed ?? (await resolvePlaySource(source));
       const isPlaylistSource = resolved.kind === 'playlist';
       const sourceLabel = isPlaylistSource
         ? `${resolved.sourceType}: ${resolved.source}`
