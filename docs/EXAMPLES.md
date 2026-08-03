@@ -254,6 +254,10 @@ npm run dev -- play signed.json -d "Living Room Display"
 # Play a hosted DP-1 playlist
 npm run dev -- play "https://cdn.example.com/playlist.json"
 
+# Play a playlist straight from a DP-1 feed server (the URL the feed hands out)
+# Wallet-signed (eip191) documents need --skip-verify until #103 lands
+npm run dev -- play "https://feed.feralfile.com/api/v1/playlists/<slug>" --skip-verify
+
 # Play a media URL directly
 npm run dev -- play "https://example.com/video.mp4"
 
