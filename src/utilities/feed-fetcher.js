@@ -381,6 +381,26 @@ function shuffleArray(array) {
 }
 
 /**
+ * Normalize a legacy item `provenance` block to the DP-1 schema shape.
+ *
+ * A prior `buildUrlItem` stamped off-chain URL items with
+ * `provenance: { type: 'offChainURI', uri }`, but the DP-1 ProvenanceBlock has
+ * no top-level `uri` — a `uri` only exists under `provenance.contract`. Drop the
+ * stray top-level `uri` so rebuilding a legacy feed playlist produces the same
+ * clean shape as freshly-built items; every other provenance field is preserved.
+ *
+ * @param {Object} provenance - Item provenance block (already known to be an object)
+ * @returns {Object} Provenance without a stray top-level `uri`
+ */
+function normalizeProvenance(provenance) {
+  if (!('uri' in provenance)) {
+    return provenance;
+  }
+  const { uri: _uri, ...rest } = provenance;
+  return rest;
+}
+
+/**
  * Get playlist items from a playlist
  *
  * @param {Object} playlist - DP1 playlist object
@@ -407,11 +427,22 @@ function extractPlaylistItems(playlist, quantity, duration, shuffle = true) {
   // Apply an explicit duration override when one was requested; otherwise
   // keep each item's own timing (including intentionally absent duration,
   // which DP-1 §4.1 uses for natural-length playback of video/audio).
+  //
+  // Strip any item-level `created`: the DP-1 PlaylistItem schema has no
+  // `created` field (it lives only at the playlist level), so drop it here —
+  // including from legacy feed entries that may still carry it — before the
+  // items reach PlaylistBuilder for construction.
+  //
+  // Also normalize legacy `offChainURI` provenance: an earlier `buildUrlItem`
+  // emitted `provenance: { type: 'offChainURI', uri }`, but the DP-1 schema has
+  // no top-level `provenance.uri` (a `uri` only lives under `provenance.contract`).
+  // Rebuilding a legacy feed playlist would otherwise carry that stray field
+  // through PlaylistBuilder into the output, so drop it during extraction.
   items = items.map((item) => {
-    const next = {
-      ...item,
-      created: item.created || new Date().toISOString(), // Ensure created field exists
-    };
+    const { created: _created, ...next } = item;
+    if (next.provenance && typeof next.provenance === 'object') {
+      next.provenance = normalizeProvenance(next.provenance);
+    }
     if (typeof duration === 'number') {
       next.duration = duration;
     }

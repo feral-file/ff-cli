@@ -1,10 +1,27 @@
 /**
  * Playlist Builder Utilities
- * Core functions for building and validating DP1 playlists
+ *
+ * Constructs DP-1 playlists and items via dp1-js document/leaf builders so
+ * every generated object is schema-validated against the DP-1 AJV defs before
+ * optional signing. Domain timing heuristics (DP-1 §4.1) stay in this module;
+ * leaf shapes (display, provenance, contract) come from dp1-js.
  */
 
+const {
+  PlaylistBuilder,
+  PlaylistItemBuilder,
+  DisplayPrefsBuilder,
+  ProvenanceBuilder,
+  ContractBuilder,
+  ValidatePlaylist,
+  slugify: dp1Slugify,
+  generateId,
+} = require('dp1-js');
 const { getPlaylistConfig, getConfig } = require('../config');
 const { signPlaylist } = require('./playlist-signer');
+
+/** Default display background that passes DP-1 hex color validation. */
+const DEFAULT_BACKGROUND = '#111111';
 
 /**
  * isTimeBasedMedia reports whether an item's media has an intrinsic runtime
@@ -45,25 +62,44 @@ function isInteractiveWeb(mimeType, sourceUrl) {
 }
 
 /**
+ * resolveItemTiming computes duration/loop decisions per DP-1 §4.1 without
+ * mutating a playlist item. Callers stamp the result through PlaylistItemBuilder.
+ *
+ * @param {Object} mediaHints - Media signals for the time-based check
+ * @param {string} [mediaHints.mimeType] - Indexer-reported MIME type
+ * @param {string} [mediaHints.sourceUrl] - Item source URL
+ * @param {number} [duration] - Explicit display seconds; omit for auto
+ * @returns {{ duration?: number, loopFalse?: boolean }}
+ */
+function resolveItemTiming(mediaHints = {}, duration) {
+  if (typeof duration === 'number') {
+    return { duration };
+  }
+
+  if (isTimeBasedMedia(mediaHints.mimeType, mediaHints.sourceUrl)) {
+    return { loopFalse: true };
+  }
+
+  if (isInteractiveWeb(mediaHints.mimeType, mediaHints.sourceUrl)) {
+    // Generative/interactive works have no intrinsic runtime, so stamp the
+    // configured generative duration to drive playlist rotation. A configured
+    // value of 0 means "omit" — a conformant player then parks open-ended.
+    const generativeDuration = getGenerativeDuration();
+    if (generativeDuration > 0) {
+      return { duration: generativeDuration };
+    }
+    return {};
+  }
+
+  return { duration: getDefaultStaticDuration() };
+}
+
+/**
  * applyItemTiming sets a DP1 item's playback timing per DP-1 §4.1.
  *
- * Invariant this function owns: an explicit numeric `duration` always wins
- * and is stamped as-is. When `duration` is undefined/null ("auto"):
- *   - a time-based source (video/audio) gets NO duration and
- *     `display.loop: false`, so a conformant player MUST advance at
- *     end-of-stream — the media plays its natural length;
- *   - an interactive web page (HTML) — generative art with no intrinsic
- *     runtime and no end-of-stream event — gets the configured
- *     `generativeDuration` (default 60s) so the playlist rotates. Set
- *     `generativeDuration` to 0 to omit it and have a conformant player park
- *     on the work open-ended instead;
- *   - static and code-based sources fall back to the configured
- *     `defaultDuration` because they have no intrinsic runtime to play out.
- *
- * Do not stamp a duration on video/audio: it silently truncates or pads them.
- * (Earlier this also omitted duration for HTML works, which left them with no
- * duration field. Players that require the field — notably FF1 — then rejected
- * the entire playlist, so generative works now carry an explicit duration.)
+ * Kept for unit tests and callers that mutate plain objects. New construction
+ * paths prefer resolveItemTiming + PlaylistItemBuilder so the final item is
+ * schema-validated by dp1-js.
  *
  * @param {Object} item - DP1 playlist item (mutated in place)
  * @param {Object} mediaHints - Media signals for the time-based check
@@ -73,29 +109,50 @@ function isInteractiveWeb(mimeType, sourceUrl) {
  * @returns {Object} The same item, for chaining
  */
 function applyItemTiming(item, mediaHints = {}, duration) {
-  if (typeof duration === 'number') {
-    item.duration = duration;
-    return item;
+  const timing = resolveItemTiming(mediaHints, duration);
+  if (typeof timing.duration === 'number') {
+    item.duration = timing.duration;
   }
-
-  if (isTimeBasedMedia(mediaHints.mimeType, mediaHints.sourceUrl)) {
+  if (timing.loopFalse) {
     item.display = { ...(item.display || {}), loop: false };
-    return item;
   }
-
-  if (isInteractiveWeb(mediaHints.mimeType, mediaHints.sourceUrl)) {
-    // Generative/interactive works have no intrinsic runtime, so stamp the
-    // configured generative duration to drive playlist rotation. A configured
-    // value of 0 means "omit" — a conformant player then parks open-ended.
-    const generativeDuration = getGenerativeDuration();
-    if (generativeDuration > 0) {
-      item.duration = generativeDuration;
-    }
-    return item;
-  }
-
-  item.duration = getDefaultStaticDuration();
   return item;
+}
+
+/**
+ * buildDefaultDisplay builds schema-valid DisplayPrefs via dp1-js.
+ *
+ * @param {{ loopFalse?: boolean }} [opts]
+ * @returns {object} Validated DisplayPrefs
+ */
+function buildDefaultDisplay(opts = {}) {
+  const builder = new DisplayPrefsBuilder().scaling('fit').background(DEFAULT_BACKGROUND).margin(0);
+  if (opts.loopFalse) {
+    builder.loop(false);
+  }
+  return builder.build();
+}
+
+/**
+ * applyTimingToItemBuilder stamps resolveItemTiming results onto a builder.
+ *
+ * @param {InstanceType<typeof PlaylistItemBuilder>} itemBuilder
+ * @param {Object} mediaHints
+ * @param {number} [duration]
+ * @param {object} [baseDisplay] - Already-built DisplayPrefs without loop
+ * @returns {InstanceType<typeof PlaylistItemBuilder>}
+ */
+function applyTimingToItemBuilder(itemBuilder, mediaHints, duration, baseDisplay) {
+  const timing = resolveItemTiming(mediaHints, duration);
+  if (typeof timing.duration === 'number') {
+    itemBuilder.durationSeconds(timing.duration);
+  }
+  if (timing.loopFalse) {
+    itemBuilder.display(buildDefaultDisplay({ loopFalse: true }));
+  } else if (baseDisplay) {
+    itemBuilder.display(baseDisplay);
+  }
+  return itemBuilder;
 }
 
 /**
@@ -131,27 +188,22 @@ function getGenerativeDuration() {
 }
 
 /**
- * Convert a string to a URL-friendly slug
- *
- * Lowercases, trims, replaces whitespace with dashes, and strips invalid chars.
- * Falls back to a short id when input is empty.
+ * slugify converts free text to a kebab-case slug via dp1-js.
+ * Falls back to a short id when input is empty (dp1-js slugify throws then).
  *
  * @param {string} value - Source string to slugify
  * @returns {string} Slugified string
  */
 function slugify(value) {
-  const base = (value || '').toString().trim().toLowerCase();
+  const base = (value || '').toString().trim();
   if (!base) {
-    const crypto = require('crypto');
-    return `playlist-${crypto.randomUUID().split('-')[0]}`;
+    return `playlist-${generateId().split('-')[0]}`;
   }
-  return base
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '') // strip diacritics
-    .replace(/[^a-z0-9\s-]/g, '') // remove invalid chars
-    .replace(/\s+/g, '-') // spaces -> dashes
-    .replace(/-+/g, '-') // collapse dashes
-    .replace(/^-|-$/g, ''); // trim dashes
+  try {
+    return dp1Slugify(base);
+  } catch (_error) {
+    return `playlist-${generateId().split('-')[0]}`;
+  }
 }
 
 /**
@@ -203,46 +255,38 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration) {
   };
   const standard = standardMap[token.standard?.toLowerCase()] || 'other';
 
-  // Generate unique ID for the item (UUID v4 format)
-  const crypto = require('crypto');
-  const itemId = crypto.randomUUID();
+  const contractBuilder = new ContractBuilder()
+    .chain(chain)
+    .standard(standard)
+    .address(token.contractAddress)
+    .tokenId(String(token.tokenId));
 
-  // Build DP1 item structure according to OpenAPI spec
-  const dp1Item = {
-    id: itemId,
-    title: token.name || `Token #${token.tokenId}`,
-    source: sourceUrl,
-    license: 'token', // NFTs are token-gated by default
-    created: new Date().toISOString(),
-    provenance: {
-      type: 'onChain',
-      contract: {
-        chain: chain,
-        standard: standard,
-        address: token.contractAddress,
-        tokenId: String(token.tokenId),
-      },
-    },
-  };
-
-  // Add display preferences if available
-  dp1Item.display = {
-    scaling: 'fit',
-    background: '#111',
-    margin: 0,
-  };
-
-  // Add metadata URI if available
-  if (token.metadata?.uri || token.tokenURI) {
-    dp1Item.provenance.contract.uri = token.metadata?.uri || token.tokenURI;
+  // Add metadata URI if available (contract.uri is the DP-1 field)
+  const metadataUri = token.metadata?.uri || token.tokenURI;
+  if (metadataUri) {
+    contractBuilder.uri(metadataUri);
   }
+
+  const itemBuilder = new PlaylistItemBuilder()
+    .id(generateId())
+    .title(token.name || `Token #${token.tokenId}`)
+    .source(sourceUrl)
+    .license('token')
+    .provenance(new ProvenanceBuilder().type('onChain').contract(contractBuilder));
 
   // Add reference to image if animation_url was used as source
   if ((token.animation_url || token.animationUrl) && (token.image?.url || token.image)) {
-    dp1Item.ref = token.image?.url || token.image;
+    itemBuilder.ref(token.image?.url || token.image);
   }
 
-  return applyItemTiming(dp1Item, { mimeType: token.image?.mimeType, sourceUrl }, duration);
+  applyTimingToItemBuilder(
+    itemBuilder,
+    { mimeType: token.image?.mimeType, sourceUrl },
+    duration,
+    buildDefaultDisplay()
+  );
+
+  return itemBuilder.build();
 }
 
 /**
@@ -365,10 +409,11 @@ function generatePlaylistTitle(items) {
 }
 
 /**
- * Build complete DP1 v1.0.0 compliant playlist
+ * Build a complete DP-1 v1.1.0 playlist via PlaylistBuilder.
  *
- * Creates a complete playlist structure with metadata, defaults, and optional signature.
- * Supports both object parameter and legacy separate parameters for backward compatibility.
+ * Creates a schema-validated unsigned playlist, then optionally signs when a
+ * private key is configured. Supports both object parameter and legacy
+ * separate parameters.
  *
  * @param {Object|Array} paramsOrItems - Playlist parameters object or items array (legacy)
  * @param {Array} [paramsOrItems.items] - Array of DP1 items
@@ -397,7 +442,7 @@ function generatePlaylistTitle(items) {
  *   title: 'Test',
  *   deterministicMode: true,
  *   fixedTimestamp: '2024-01-01T00:00:00.000Z',
- *   fixedId: 'playlist_test_123'
+ *   fixedId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
  * });
  */
 async function buildDP1Playlist(paramsOrItems, options = {}) {
@@ -418,7 +463,7 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
     ({ title, slug, deterministicMode, fixedTimestamp, fixedId } = options);
   }
 
-  // Validate items
+  // Validate items early (PlaylistBuilder also rejects empty items without dynamicQuery)
   if (!Array.isArray(items) || items.length === 0) {
     throw new Error('Playlist must contain at least one item');
   }
@@ -445,34 +490,28 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
     slug = slugify(title);
   }
 
-  // Build DP1 playlist structure using the v1.1.0 envelope.
-  // Support deterministic mode for testing (freeze timestamp and ID)
-  const timestamp = deterministicMode && fixedTimestamp ? fixedTimestamp : new Date().toISOString();
-  const crypto = require('crypto');
-  const playlistId = deterministicMode && fixedId ? fixedId : crypto.randomUUID();
+  // Build DP1 playlist structure using the v1.1.0 envelope via dp1-js.
+  // Support deterministic mode for testing (freeze timestamp and ID).
+  // No defaults.duration: items that should be timed carry an explicit
+  // duration already, and a playlist-level default would make conformant
+  // players time-cut items that intentionally omit duration to play
+  // their natural length (DP-1 §4.1 end-of-stream advance).
+  const playlistBuilder = new PlaylistBuilder()
+    .dpVersion('1.1.0')
+    .title(title)
+    .slug(slug)
+    .defaultDisplay(buildDefaultDisplay())
+    .defaultLicense('token')
+    .items(items);
 
-  const playlist = {
-    dpVersion: '1.1.0',
-    id: playlistId,
-    title,
-    created: timestamp,
-    items,
-    defaults: {
-      display: {
-        scaling: 'fit',
-        background: '#111',
-        margin: 0,
-      },
-      license: 'token',
-      // No defaults.duration: items that should be timed carry an explicit
-      // duration already, and a playlist-level default would make conformant
-      // players time-cut items that intentionally omit duration to play
-      // their natural length (DP-1 §4.1 end-of-stream advance).
-    },
-  };
+  if (deterministicMode && fixedId) {
+    playlistBuilder.id(fixedId);
+  }
+  if (deterministicMode && fixedTimestamp) {
+    playlistBuilder.created(fixedTimestamp);
+  }
 
-  // Always include slug (auto-generated when missing)
-  playlist.slug = slug;
+  const playlist = playlistBuilder.build();
 
   // Sign the playlist if private key is configured.
   try {
@@ -490,10 +529,10 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
 }
 
 /**
- * Validate DP1 playlist structure according to OpenAPI spec
+ * validateDP1Playlist schema-validates a playlist via dp1-js ValidatePlaylist.
  *
- * Performs comprehensive validation of playlist structure, fields, and item requirements.
- * Returns detailed errors for each validation failure.
+ * Unsigned drafts are accepted (`requireSignatures: false`). Returns the
+ * historical `{ valid, errors }` shape for CLI/tests.
  *
  * @param {Object} playlist - DP1 playlist to validate
  * @returns {Object} Validation result
@@ -506,88 +545,21 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
  * }
  */
 function validateDP1Playlist(playlist) {
-  const errors = [];
-
-  // Check required playlist fields
-  if (!playlist.dpVersion) {
-    errors.push('Missing required field: dpVersion');
-  } else if (typeof playlist.dpVersion !== 'string') {
-    errors.push('Field "dpVersion" must be a string');
+  try {
+    ValidatePlaylist(playlist, { requireSignatures: false });
+    return { valid: true, errors: [] };
+  } catch (error) {
+    const details = Array.isArray(error?.details) ? error.details : [];
+    const errors =
+      details.length > 0
+        ? details.map((detail) => {
+            const path = detail?.path ? String(detail.path) : '/';
+            const message = detail?.message ? String(detail.message) : 'validation failed';
+            return `${path}: ${message}`;
+          })
+        : [error instanceof Error ? error.message : String(error)];
+    return { valid: false, errors };
   }
-
-  if (!playlist.title) {
-    errors.push('Missing required field: title');
-  } else if (playlist.title.length > 256) {
-    errors.push('Field "title" must not exceed 256 characters');
-  }
-
-  if (!playlist.items) {
-    errors.push('Missing required field: items');
-  } else if (!Array.isArray(playlist.items)) {
-    errors.push('Field "items" must be an array');
-  } else if (playlist.items.length === 0) {
-    errors.push('Playlist must contain at least one item');
-  } else if (playlist.items.length > 1024) {
-    errors.push('Playlist cannot contain more than 1024 items');
-  } else {
-    // Validate each item according to PlaylistItem schema
-    playlist.items.forEach((item, index) => {
-      if (!item.source) {
-        errors.push(`Item ${index}: Missing required field "source"`);
-      } else if (typeof item.source !== 'string') {
-        errors.push(`Item ${index}: Field "source" must be a string (URI)`);
-      }
-
-      // Duration is OPTIONAL per the DP-1 v1.1.0 schema (PlaylistItem requires
-      // only `source`; duration has `minimum: 0`). Absent duration is meaningful:
-      // time-based sources advance at end-of-stream (§4.1). Do not tighten this
-      // back to required — it would reject spec-valid playlists.
-      if (item.duration !== undefined && item.duration !== null) {
-        if (typeof item.duration !== 'number' || item.duration < 0) {
-          errors.push(`Item ${index}: Field "duration" must be a number >= 0`);
-        }
-      }
-
-      if (!item.license) {
-        errors.push(`Item ${index}: Missing required field "license"`);
-      } else if (!['open', 'token', 'subscription'].includes(item.license)) {
-        errors.push(`Item ${index}: Field "license" must be one of: open, token, subscription`);
-      }
-
-      // Validate optional title length
-      if (item.title && item.title.length > 256) {
-        errors.push(`Item ${index}: Field "title" must not exceed 256 characters`);
-      }
-
-      // Validate optional provenance structure
-      if (item.provenance) {
-        if (!item.provenance.type) {
-          errors.push(`Item ${index}: provenance.type is required when provenance is present`);
-        } else if (!['onChain', 'seriesRegistry', 'offChainURI'].includes(item.provenance.type)) {
-          errors.push(
-            `Item ${index}: provenance.type must be one of: onChain, seriesRegistry, offChainURI`
-          );
-        }
-
-        if (item.provenance.contract) {
-          if (!item.provenance.contract.chain) {
-            errors.push(`Item ${index}: provenance.contract.chain is required`);
-          } else if (
-            !['evm', 'tezos', 'bitmark', 'other'].includes(item.provenance.contract.chain)
-          ) {
-            errors.push(
-              `Item ${index}: provenance.contract.chain must be one of: evm, tezos, bitmark, other`
-            );
-          }
-        }
-      }
-    });
-  }
-
-  return {
-    valid: errors.length === 0,
-    errors,
-  };
 }
 
 /**
@@ -653,7 +625,7 @@ function detectMimeType(url) {
 }
 
 /**
- * Build a single DP1 playlist item from a URL
+ * Build a single DP1 playlist item from a URL via PlaylistItemBuilder.
  *
  * @param {string} url - Media URL
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
@@ -691,25 +663,13 @@ function buildUrlItem(url, duration, options = {}) {
     }
   }
 
-  const crypto = require('crypto');
-  const itemId = crypto.randomUUID();
-
-  const item = {
-    id: itemId,
-    title,
-    source: sourceUrl,
-    license: 'open',
-    created: new Date().toISOString(),
-    provenance: {
-      type: 'offChainURI',
-      uri: sourceUrl,
-    },
-    display: {
-      scaling: 'fit',
-      background: '#111',
-      margin: 0,
-    },
-  };
+  const itemBuilder = new PlaylistItemBuilder()
+    .id(generateId())
+    .title(title)
+    .source(sourceUrl)
+    .license('open')
+    // offChainURI has no provenance.uri in the DP-1 schema — only type.
+    .provenance(new ProvenanceBuilder().type('offChainURI'));
 
   // A URL handed to `play` that isn't a recognized media file is treated as an
   // interactive web page: the FF1 renders unknown URLs in a sandboxed iframe,
@@ -718,7 +678,14 @@ function buildUrlItem(url, duration, options = {}) {
   // instead of the static-image default.
   const mimeHint = options.mimeType || (detectMimeType(sourceUrl) === '' ? 'text/html' : undefined);
 
-  return applyItemTiming(item, { sourceUrl, mimeType: mimeHint }, duration);
+  applyTimingToItemBuilder(
+    itemBuilder,
+    { sourceUrl, mimeType: mimeHint },
+    duration,
+    buildDefaultDisplay()
+  );
+
+  return itemBuilder.build();
 }
 
 module.exports = {
@@ -732,5 +699,8 @@ module.exports = {
   isTimeBasedMedia,
   isInteractiveWeb,
   applyItemTiming,
+  resolveItemTiming,
+  applyTimingToItemBuilder,
   buildUrlItem,
+  buildDefaultDisplay,
 };

@@ -784,13 +784,14 @@ describe('buildRasterMediaItems', () => {
     const items = buildRasterMediaItems(tokens, series) as Array<{
       title: string;
       source: string;
-      provenance: { type: string; uri: string };
+      provenance: { type: string; uri?: string };
     }>;
     assert.equal(items.length, 2);
     assert.equal(items[0].title, 'Split Logic #1');
     assert.equal(items[0].source, 'https://media/1.mp4');
     assert.equal(items[0].provenance.type, 'offChainURI');
-    assert.equal(items[0].provenance.uri, 'https://media/1.mp4');
+    // DP-1 ProvenanceBlock has no `uri` field for offChainURI — only type/contract/dependencies.
+    assert.equal(items[0].provenance.uri, undefined);
     assert.equal(items[1].title, 'Split Logic #94');
   });
 

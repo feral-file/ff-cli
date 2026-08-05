@@ -282,4 +282,50 @@ describe('playlist-level conformance', () => {
     });
     assert.equal('duration' in playlist.defaults, false);
   });
+
+  test('buildUrlItem and buildDP1Playlist emit schema-valid DP-1 shapes', async () => {
+    const { ValidatePlaylist } = require('dp1-js');
+    const item = buildUrlItem('https://example.com/art.png');
+    assert.equal(item.display.background, '#111111');
+    assert.equal(item.created, undefined);
+    assert.equal(item.provenance.type, 'offChainURI');
+    assert.equal(item.provenance.uri, undefined);
+
+    const playlist = await buildDP1Playlist({
+      items: [item],
+      title: 'Schema check',
+      slug: 'schema-check',
+      deterministicMode: true,
+      fixedTimestamp: '2026-06-01T12:00:00.000Z',
+      fixedId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    });
+    assert.equal(playlist.defaults.display.background, '#111111');
+    assert.doesNotThrow(() => ValidatePlaylist(playlist, { requireSignatures: false }));
+  });
+
+  test('NFT converters emit schema-valid on-chain items without deprecated fields', () => {
+    const { ValidatePlaylistItem } = require('dp1-js');
+    const fromBuilder = convertTokenToDP1ItemSingle(tokenInfo());
+    assert.equal(fromBuilder.created, undefined);
+    assert.equal(fromBuilder.display.background, '#111111');
+    assert.equal(fromBuilder.provenance.type, 'onChain');
+    assert.doesNotThrow(() => ValidatePlaylistItem(fromBuilder));
+
+    const fromIndexer = nftIndexer.convertToDP1Item(tokenInfo());
+    assert.equal(fromIndexer.success, true);
+    assert.equal(fromIndexer.item.created, undefined);
+    assert.equal(fromIndexer.item.display.background, '#111111');
+    assert.doesNotThrow(() => ValidatePlaylistItem(fromIndexer.item));
+  });
+
+  test('validateDP1Playlist maps AJV failures to path: message strings', () => {
+    const result = validateDP1Playlist({
+      dpVersion: '1.1.0',
+      title: 'Bad duration',
+      items: [{ source: 'https://example.com/a.png', license: 'open', duration: -1 }],
+    });
+    assert.equal(result.valid, false);
+    assert.ok(result.errors.length >= 1);
+    assert.match(result.errors[0], /: /);
+  });
 });
