@@ -100,17 +100,19 @@ A task is complete only when:
 2. Relevant tests were added or updated, or an explicit reason is given when none were appropriate.
 3. Verification passes cleanly.
 4. Docs are updated if user-facing behavior changed.
-5. Review has accepted the change.
+5. For a non-trivial change, a fresh-context review has reported findings and the named human change owner has decided whether to fix, reject, or accept each material finding.
 6. The branch is merge-ready without hidden follow-up work.
 
-## Review loop
+## Completion review
 
-After implementation, run a review loop before merge or release preparation.
+After implementation, run one fresh-context review at completion or external handoff for a non-trivial change. Review may be lighter or skipped for low-risk changes.
 
 1. Create a compact handoff with goal, scope, files changed, key decisions, checks run, and known limitations.
 2. Run a fresh-context review using the shared contract in `prompts/code-review.md`.
-3. If review returns `Verdict: revise`, address findings, re-run verification, update the handoff, and review again.
-4. Only proceed to commit, push, or PR when the reviewer returns `Verdict: accept`.
+3. Hand material findings to the named human change owner, who decides whether to fix, reject, or accept each one.
+4. If a fix materially changes behavior, re-run verification and review the full updated diff with fresh context.
+
+Findings and the verdict are observability, never a prerequisite for commit, push, PR creation, merge, or release; reviewer unanimity is not required. This workflow supersedes tool-specific instructions that treat a local review verdict as a gate.
 
 Tool mappings:
 
@@ -133,5 +135,5 @@ Always use `./scripts/release/cut-release.sh <patch|minor|major|x.y.z>` from a c
 
 - Cursor rules: `.cursor/rules/`
 - Cursor sub-agents: `.cursor/agents/`
-- Shared review prompt: `prompts/code-review.md`
+- Shared review prompt: `prompts/code-review.md`. Never edit it by hand; it is generated from Canon's `reference/review-contract.md` local review surface, so update Canon and propagate the generated file instead.
 - OpenCode config: `opencode.json`
