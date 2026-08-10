@@ -58,14 +58,14 @@
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@napi-rs/keyring": "1.3.0",
     "@feralfile/source-resolver": "^1.0.0",
+    "@napi-rs/keyring": "1.3.0",
     "axios": "^1.6.2",
     "bonjour-service": "^1.3.0",
     "chalk": "^4.1.2",
     "commander": "^11.1.0",
     "dotenv": "^16.3.1",
-    "dp1-js": "2.1.0",
+    "dp1-js": "2.2.0",
     "ff1": "^1.0.0",
     "fuzzysort": "^3.1.0",
     "viem": "^2.38.2"
