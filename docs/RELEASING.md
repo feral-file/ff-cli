@@ -7,7 +7,7 @@ How releases happen, how to cut one, and what to do when things go sideways.
 1. **Bump `package.json` version** on `main` (or via a `chore: bump version to X.Y.Z` PR — the project has used both patterns).
 2. **Push to `main`** so the tag created in step 3 points at the bump commit.
 3. **Create a GitHub Release** with the tag equal to the version (e.g. tag `1.2.0` → `"version": "1.2.0"`). Use `gh release create 1.2.0 --title "v1.2.0" --notes "..."` or the web UI.
-4. **The `release.yml` workflow fires automatically**, verifies tag == `package.json` version, runs CI, publishes to npm via OIDC, builds binary assets, uploads them to the release, and verifies the package landed on npm.
+4. **The `release.yml` workflow fires automatically**, verifies tag == `package.json` version, runs CI, publishes to npm via OIDC, and verifies the package landed on npm.
 
 That's it. No tokens, no manual `npm publish`. The whole thing takes ~4 minutes end-to-end.
 
@@ -45,35 +45,12 @@ You will probably never do this again for `@feralfile/cli`, but if you ever publ
 ## GitHub Actions workflows
 
 - **`ci.yml`** — formatting, lint, tests, build on Node 22 across ubuntu/macos/windows. Called by `release.yml` and runs on PRs / pushes to `main`.
-- **`build.yml`** — builds prebuilt binaries (macOS/Linux/Windows) and uploads them as workflow artifacts. Triggered manually or from `release.yml`.
-- **`release.yml`** — orchestrates a release. Verifies version, runs CI, publishes to npm (Node 24 + OIDC + provenance), builds binaries, uploads release assets, verifies the package and assets are live. Triggers on published GitHub Releases or manual dispatch (beta only).
+- **`release.yml`** — orchestrates a release. Verifies version, runs CI, publishes to npm (Node 24 + OIDC + provenance), and verifies the package is live. Triggers on published GitHub Releases or manual dispatch (beta only).
 - **`codeql.yml`**, **`dependency-review.yml`** — security scanning.
-
-## Binary release assets
-
-The curl installer (`https://feralfile.com/ff-cli-install`) downloads prebuilt binaries from GitHub Releases. The release workflow builds and uploads them automatically. To build one locally:
-
-**macOS / Linux:**
-
-```bash
-./scripts/release/build-asset.sh
-```
-
-**Windows (PowerShell):**
-
-```powershell
-.\scripts\release\build-asset-windows.ps1
-```
-
-Produces (names vary by OS/arch):
-
-- `release/ff-cli-darwin-arm64.tar.gz` (and `.sha256`) on macOS
-- `release/ff-cli-linux-x64.tar.gz` (and `.sha256`) on Linux
-- `release/ff-cli-windows-x64.zip` (and `.sha256`) on Windows
 
 ## Release notes and breaking changes
 
-GitHub Release text (and any user-facing summary you publish with the version) should state compatibility changes in plain language. **Do not rely on `package.json` `engines` alone**; npm and installers surface it inconsistently, and operators skim release notes first.
+GitHub Release text (and any user-facing summary you publish with the version) should state compatibility changes in plain language. **Do not rely on `package.json` `engines` alone**; npm surfaces it inconsistently, and operators skim release notes first.
 
 ### Node.js engine floor (breaking)
 
@@ -88,22 +65,6 @@ GitHub Release text (and any user-facing summary you publish with the version) s
 > **Breaking — Node.js:** ff-cli now requires **Node.js 22 or newer** (`package.json` `engines`). Node 18 and Node 20 are no longer supported. Upgrade Node on your machines and in CI, or stay on an older ff-cli version until you can migrate.
 
 Later releases only need to repeat this block if the engine floor changes again.
-
-## Installer redirect
-
-`https://feralfile.com/ff-cli-install` should redirect to:
-
-```
-https://raw.githubusercontent.com/feral-file/ff-cli/main/scripts/install.sh
-```
-
-The installer script then fetches the release assets from GitHub Releases.
-
-## Environment overrides
-
-- `FF_CLI_VERSION`: overrides the version label in logs
-- `FF_CLI_NODE_VERSION`: Reserved in script headers for future use; current CI, npm `engines`, and release wrappers assume **Node.js 22+** (required by `dp1-js`).
-- `FF_CLI_OUTPUT_DIR`: output directory (default: `./release`)
 
 ## Troubleshooting
 

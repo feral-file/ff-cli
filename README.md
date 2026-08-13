@@ -12,15 +12,7 @@ ff-cli is a set of deterministic commands for building DP-1–conformant playlis
 npm i -g @feralfile/cli
 ```
 
-This is the recommended path and the most reliable for the agent workflow — it installs a complete package (including `config.json.example` and the bundled `dp1-js`). Requires Node.js 22+.
-
-## Install (curl)
-
-```bash
-curl -fsSL https://feralfile.com/ff-cli-install | bash
-```
-
-Installs a prebuilt binary for macOS/Linux. Node.js 22+ must still be on your PATH (the bundle runs under `node`). If a command fails right after install, prefer the npm install above.
+This installs a complete package (including `config.json.example` and the bundled `dp1-js`). Requires Node.js 22+.
 
 ## One-off Usage (npx)
 
@@ -138,8 +130,7 @@ Run the same command locally before opening a PR. It checks formatting, lint, te
 
 Other GitHub Actions workflows:
 
-- `.github/workflows/build.yml` builds release assets when called by release automation or manually dispatched.
-- `.github/workflows/release.yml` reuses CI, verifies the release version, publishes npm, uploads assets, and checks the published release.
+- `.github/workflows/release.yml` reuses CI, verifies the release version, publishes to npm, and checks the published package.
 - `.github/workflows/dependency-review.yml` reviews dependency changes on pull requests.
 - `.github/workflows/codeql.yml` runs CodeQL analysis on pull requests and pushes to `main`/`master`.
 

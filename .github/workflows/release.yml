@@ -81,16 +81,6 @@ jobs:
             echo "Version check passed: package.json and workflow input are both $PACKAGE_VERSION."
           fi
 
-  build:
-    needs:
-      - ci
-      - verify-version
-    if: github.event_name == 'release'
-    uses: ./.github/workflows/build.yml
-    with:
-      version: ${{ github.event.release.tag_name }}
-    secrets: inherit
-
   publish-npm:
     needs:
       - ci
@@ -166,71 +156,11 @@ jobs:
           echo "npm beta dist-tag check failed: expected $EXPECTED_VERSION"
           exit 1
 
-  upload-release-assets:
-    needs: build
-    if: github.event_name == 'release'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v5
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: Flatten release files
-        run: |
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} . \;
-          ls -la
-
-      - name: Upload assets to release
-        run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
-            *.tar.gz *.tar.gz.sha256 *.zip *.zip.sha256 \
-            --clobber \
-            --repo "${{ github.repository }}"
-        working-directory: ${{ github.workspace }}
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GIT_DIR: ${{ github.workspace }}/.git
-          GIT_WORK_TREE: ${{ github.workspace }}
-
   verify-release:
-    needs: [publish-npm, upload-release-assets]
+    needs: publish-npm
     if: github.event_name == 'release'
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
     steps:
-      - name: Verify release assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          TAG="${{ github.event.release.tag_name }}"
-          REQUIRED_ASSETS=(
-            "ff-cli-darwin-arm64.tar.gz"
-            "ff-cli-darwin-arm64.tar.gz.sha256"
-            "ff-cli-linux-x64.tar.gz"
-            "ff-cli-linux-x64.tar.gz.sha256"
-            "ff-cli-windows-x64.zip"
-            "ff-cli-windows-x64.zip.sha256"
-          )
-
-          RELEASE_ASSETS=$(gh release view "$TAG" --repo "${{ github.repository }}" --json assets --jq '.assets[].name')
-          for asset in "${REQUIRED_ASSETS[@]}"; do
-            if ! grep -qx "$asset" <<< "$RELEASE_ASSETS"; then
-              echo "Missing release asset: $asset"
-              echo "Release assets found:"
-              echo "$RELEASE_ASSETS"
-              exit 1
-            fi
-          done
-
       - name: Verify npm package version
         run: |
           set -euo pipefail
