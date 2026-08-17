@@ -246,13 +246,12 @@ describe('item builders honor auto timing', () => {
     assert.equal(item.inlineManifest, undefined);
   });
 
-  test('convertTokenToDP1ItemSingle: a dynamic item carries the still in both ref and the manifest', () => {
-    // DP-1 Playlist Extension §3.6 makes `ref` and `inlineManifest`
-    // complementary — resolution runs defaults → inlineManifest → ref →
-    // item.local, so `ref` is authoritative and the inline copy is the
-    // fallback. Emitting both preserves the poster frame FF1 builds read from
-    // `ref` without withholding structured metadata from manifest-aware
-    // players. Dropping either side is the regression this pins.
+  test('convertTokenToDP1ItemSingle: a dynamic item carries the still in the manifest, not ref', () => {
+    // `ref` is a URI to an external Ref Manifest. The old branch pointed it at
+    // `token.image.url`, which on the indexer path is getBestMediaUrl's pick —
+    // animation-first — so it resolved to the animation URL and merely
+    // duplicated `source`. The still image is `image.thumbnail`, and it belongs
+    // in the manifest. If this fails, that branch came back.
     const item = convertTokenToDP1ItemSingle(
       tokenInfo({
         mimeType: 'video/mp4',
@@ -260,7 +259,40 @@ describe('item builders honor auto timing', () => {
         imageUrl: 'https://example.com/still.png',
       })
     );
-    assert.equal(item.ref, 'https://example.com/still.png');
+    assert.equal(item.ref, undefined);
+    assert.deepEqual(item.inlineManifest.metadata.thumbnails, {
+      default: { uri: 'https://example.com/still.png' },
+    });
+  });
+
+  test('convertTokenToDP1ItemSingle: indexer-shaped dynamic token never duplicates source into ref', () => {
+    // Regression pin for the value trace: mapIndexerDataToStandardFormat puts
+    // the animation URL in image.url and the still in image.thumbnail, so the
+    // old `ref` branch produced ref === source.
+    const std = nftIndexer.mapIndexerDataToStandardFormat(
+      {
+        contract_address: '0xabc0000000000000000000000000000000000001',
+        token_number: '1',
+        current_owner: null,
+        burned: false,
+        display: {
+          name: 'Dynamic work',
+          description: 'An essay in motion.',
+          mime_type: 'video/mp4',
+          image_url: 'https://example.com/still.png',
+          animation_url: 'https://example.com/animation.mp4',
+          artists: [{ name: 'Ada' }],
+        },
+        media_assets: [],
+      },
+      'ethereum'
+    );
+    assert.equal(std.token.image.url, 'https://example.com/animation.mp4');
+    assert.equal(std.token.image.thumbnail, 'https://example.com/still.png');
+
+    const item = convertTokenToDP1ItemSingle(std);
+    assert.equal(item.source, 'https://example.com/animation.mp4');
+    assert.equal(item.ref, undefined);
     assert.deepEqual(item.inlineManifest.metadata.thumbnails, {
       default: { uri: 'https://example.com/still.png' },
     });

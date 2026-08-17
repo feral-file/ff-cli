@@ -279,18 +279,19 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration) {
     .license('token')
     .provenance(new ProvenanceBuilder().type('onChain').contract(contractBuilder));
 
-  // Add reference to image if animation_url was used as source
-  if ((token.animation_url || token.animationUrl) && (token.image?.url || token.image)) {
-    itemBuilder.ref(token.image?.url || token.image);
-  }
-
-  // `ref` and `inlineManifest` are complementary, not exclusive: DP-1 Playlist
-  // Extension §3.6 resolves `defaults → inlineManifest → ref → item.local`, so
-  // a present `ref` is authoritative and the inline copy is the fallback for an
-  // offline or degraded fetch. Emitting both keeps the poster frame that FF1
-  // builds read from `ref` while giving manifest-aware players the structured
-  // metadata — §3.6 names ff-cli as the case it was added for, since a locally
-  // built playlist has nowhere to host a remote manifest.
+  // No `ref`. This used to set `ref` to `token.image.url` under a comment
+  // claiming it referenced the still image, but on the indexer path
+  // `image.url` is getBestMediaUrl's pick, which prefers `animation_url` —
+  // so for a dynamic work `ref` resolved to the animation URL, byte-identical
+  // to `source`. It never carried a poster frame. The still image lives in
+  // `image.thumbnail`, which that branch never read, and which the inline
+  // manifest below now carries as `metadata.thumbnails.default`.
+  //
+  // Emitting nothing is also the honest reading of DP-1: `ref` is a URI to an
+  // external Ref Manifest (and needs `refHash` over HTTPS), which a locally
+  // built playlist has nowhere to host — Playlist Extension §3.6 names this
+  // CLI as exactly that case. Add `ref` back only when there is a real
+  // manifest to point it at.
   const inlineManifest = buildInlineManifestForToken(token, { sourceUrl });
   if (inlineManifest) {
     itemBuilder.inlineManifest(inlineManifest);
