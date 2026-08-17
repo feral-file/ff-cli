@@ -279,12 +279,18 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration) {
     .license('token')
     .provenance(new ProvenanceBuilder().type('onChain').contract(contractBuilder));
 
-  // The still image goes in the inline manifest's `metadata.thumbnails`, NOT
-  // in `ref`. DP-1 defines `ref` as a URI to an external metadata/controls
-  // manifest, and dp1-js resolves `ref` ahead of `inlineManifest` when both
-  // are present — so pointing `ref` at a JPEG would send a conformant consumer
-  // to fetch an image, fail to parse it as a manifest, and never read the good
-  // inline data beside it. Do not reintroduce it.
+  // Add reference to image if animation_url was used as source
+  if ((token.animation_url || token.animationUrl) && (token.image?.url || token.image)) {
+    itemBuilder.ref(token.image?.url || token.image);
+  }
+
+  // `ref` and `inlineManifest` are complementary, not exclusive: DP-1 Playlist
+  // Extension §3.6 resolves `defaults → inlineManifest → ref → item.local`, so
+  // a present `ref` is authoritative and the inline copy is the fallback for an
+  // offline or degraded fetch. Emitting both keeps the poster frame that FF1
+  // builds read from `ref` while giving manifest-aware players the structured
+  // metadata — §3.6 names ff-cli as the case it was added for, since a locally
+  // built playlist has nowhere to host a remote manifest.
   const inlineManifest = buildInlineManifestForToken(token, { sourceUrl });
   if (inlineManifest) {
     itemBuilder.inlineManifest(inlineManifest);

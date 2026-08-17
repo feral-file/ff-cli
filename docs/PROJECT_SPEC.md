@@ -188,11 +188,11 @@ nowhere to host a manifest document. Behavior worth knowing downstream:
 - Manifest ids are derived from the token's chain, contract, and token id, so
   they are stable across runs and across playlists. `created` is frozen once per
   CLI invocation, so every item in one build shares a single timestamp.
-- The item-level `ref` field is **no longer emitted**. It previously carried a
-  still-image URL, which contradicts the DP-1 definition of `ref` as a URI to an
-  external manifest; a consumer resolves `ref` ahead of `inlineManifest`, so the
-  image would have shadowed the inline data. That still image now appears at
-  `inlineManifest.metadata.thumbnails.default.uri`.
+- `ref` and `inlineManifest` are complementary, per the §3.6 resolution order
+  `defaults → inlineManifest → ref → item.local`: a present `ref` is
+  authoritative and the inline copy is the fallback for an offline or degraded
+  fetch. Items keep emitting `ref` where they did before, and the same still
+  image also appears at `inlineManifest.metadata.thumbnails.default.uri`.
 - An inline manifest has no `refHash`; its integrity comes from the playlist
   signature.
 

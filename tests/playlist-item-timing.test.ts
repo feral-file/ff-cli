@@ -246,11 +246,13 @@ describe('item builders honor auto timing', () => {
     assert.equal(item.inlineManifest, undefined);
   });
 
-  test('convertTokenToDP1ItemSingle: still image goes to the manifest, never to ref', () => {
-    // Regression pin. `ref` used to be set to the still image URL, but DP-1
-    // defines `ref` as a URI to an external manifest and dp1-js resolves it
-    // ahead of `inlineManifest` — a JPEG there would shadow the good inline
-    // data. If this assertion ever fails, the ref() call was reintroduced.
+  test('convertTokenToDP1ItemSingle: a dynamic item carries the still in both ref and the manifest', () => {
+    // DP-1 Playlist Extension §3.6 makes `ref` and `inlineManifest`
+    // complementary — resolution runs defaults → inlineManifest → ref →
+    // item.local, so `ref` is authoritative and the inline copy is the
+    // fallback. Emitting both preserves the poster frame FF1 builds read from
+    // `ref` without withholding structured metadata from manifest-aware
+    // players. Dropping either side is the regression this pins.
     const item = convertTokenToDP1ItemSingle(
       tokenInfo({
         mimeType: 'video/mp4',
@@ -258,7 +260,7 @@ describe('item builders honor auto timing', () => {
         imageUrl: 'https://example.com/still.png',
       })
     );
-    assert.equal(item.ref, undefined);
+    assert.equal(item.ref, 'https://example.com/still.png');
     assert.deepEqual(item.inlineManifest.metadata.thumbnails, {
       default: { uri: 'https://example.com/still.png' },
     });
