@@ -208,22 +208,51 @@ The CLI is deterministic end to end. There is no natural-language interface; any
 ### What determinism does not mean here
 
 It does **not** mean two builds of the same input produce identical bytes or an
-identical signature. Documents carry creation timestamps — `playlist.created`
-and `inlineManifest.created` — which are read from the wall clock. Building the
-same playlist twice produces two documents created at two different times, so
-their bytes differ and therefore their signatures differ. That is the correct
-representation of what happened, not a defect to engineer away.
+identical signature. Every citation below is from
+[`display-protocol/dp1`](https://github.com/display-protocol/dp1) at core
+v1.1.0, so a reader can check each claim rather than take this section's word
+for it.
 
-Identity is carried by `id`, not by bytes. Two manifests with the same `id` are
-the same manifest; DP-1 defines that field as a caching identifier
-(`core/v1.1.0/schemas/ref-manifest.json`). Manifest ids are derived from token
-coordinates precisely so that identity stays stable while timestamps move.
+**Timestamps are wall-clock, by definition.** The schemas define both creation
+fields as the moment the document was made:
 
-DP-1 imposes no reproducible-build requirement. The word "deterministic" in the
-protocol refers to two unrelated things: deterministic *reproduction* of
-code-based artwork (core spec §5, the `repro` block) and deterministic *merging*
-of manifest values (`ref-manifest.md` §2). Neither concerns build-time byte
-stability.
+- `core/v1.1.0/schemas/playlist.json` — `created`: *"ISO 8601 timestamp when the
+  playlist was created"*
+- `core/v1.1.0/schemas/ref-manifest.json` — `created`: *"RFC3339 timestamp when
+  the manifest was created"*
+
+Building the same playlist twice creates two documents at two different times,
+so those fields legitimately differ.
+
+**Different bytes therefore mean a different signature, by construction.**
+`core/v1.1.0/spec.md` §7: *"Each signature is computed over the canonical form
+of the entire playlist (excluding the `signature` and `signatures` fields
+themselves)"*, where *"Canonical form ≡ JSON Canonicalization Scheme (JCS), RFC
+8785"*. A differing `created` changes the canonical bytes, which changes the
+payload hash, which changes the signature. That is the signature reporting what
+actually happened — not a defect to engineer away.
+
+**Identity is carried by `id`, not by bytes.**
+`core/v1.1.0/schemas/ref-manifest.json` describes `id` as *"Unique identifier
+for the manifest (for caching)"*, echoed in the envelope example at
+`core/v1.1.0/ref-manifest.md` §3: `"id": "ref-7c3d", // unique identifier (for
+caching)`. Two manifests sharing an `id` are the same manifest. This CLI derives
+manifest ids from token coordinates precisely so identity stays stable while
+timestamps move.
+
+**DP-1 states no reproducible-build requirement.** Searching `core/v1.1.0/spec.md`
+and `core/v1.1.0/ref-manifest.md` for reproducibility language turns up the word
+"deterministic" in exactly two places, neither about build-time byte stability:
+
+- `spec.md` §5, *"Deterministic Reproduction (`repro`)"* — reproducing the
+  **rendering** of code-based artwork, via `engineVersion`, `seed`,
+  `assetsSHA256`, and `frameHash`.
+- `ref-manifest.md` §2 Goals, *"Deterministic merging: predictable behavior
+  across devices and players"* — the **merge order** in §7 (player defaults →
+  playlist defaults → `ref.controls` → runtime overrides).
+
+Neither imposes byte-for-byte stability across builds, and no schema field
+requires `created` to be immutable across regenerations of a document.
 
 `buildDP1Playlist` accepts `deterministicMode` with `fixedTimestamp` and
 `fixedId`. Those exist to pin the envelope for tests and are not used by any
