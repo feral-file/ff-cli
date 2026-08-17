@@ -596,3 +596,59 @@ test('getNFTTokenInfoSingle: mock polls media_assets when first hit has empty li
     global.fetch = originalFetch;
   }
 });
+
+test('convertToDP1Item: carries indexer description, artist, and still image inline', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { ValidatePlaylistItem } = require('dp1-js');
+
+  const out = mapIndexerDataToStandardFormat(mockTokenRow(), 'ethereum');
+  const dp1 = convertToDP1Item(out, 10);
+  assert.equal(dp1.success, true);
+
+  // These four fields were mapped and then discarded before DP-1 gained an
+  // item-level manifest; this is the regression pin that they now survive.
+  const manifest = dp1.item.inlineManifest;
+  assert.equal(manifest.refVersion, '1.1.0');
+  assert.equal(manifest.locale, 'en');
+  assert.equal(manifest.metadata.title, 'Punk 7804');
+  assert.equal(manifest.metadata.description, 'Mock');
+  assert.deepEqual(manifest.metadata.artists, [{ name: 'Larva Labs' }]);
+  assert.deepEqual(manifest.metadata.thumbnails, {
+    default: { uri: 'https://example.com/punk.png' },
+  });
+  assert.doesNotThrow(() => ValidatePlaylistItem(dp1.item));
+});
+
+test('convertToDP1Item: omits the manifest when the token has nothing beyond its title', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  const bare = mockTokenRow({
+    display: {
+      name: 'Punk 7804',
+      description: '',
+      mime_type: 'image/png',
+      image_url: 'https://example.com/punk.png',
+      animation_url: '',
+      artists: [],
+    },
+    // With no assets the still collapses onto the source, so it carries no
+    // information the item does not already have.
+    media_assets: [],
+  });
+
+  const dp1 = convertToDP1Item(mapIndexerDataToStandardFormat(bare, 'ethereum'), 10);
+  assert.equal(dp1.success, true);
+  assert.equal(dp1.item.inlineManifest, undefined);
+});
+
+test('convertToDP1Item: output is byte-identical across calls (no per-item wall clock)', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  const out = mapIndexerDataToStandardFormat(mockTokenRow(), 'ethereum');
+
+  // The manifest `created` is frozen per process precisely so a build does not
+  // stamp a different clock on every item. A regression here would also make
+  // repeated builds of the same playlist produce differing signatures.
+  const a = convertToDP1Item(out, 10);
+  const b = convertToDP1Item(out, 10);
+  assert.equal(JSON.stringify(a.item), JSON.stringify(b.item));
+});

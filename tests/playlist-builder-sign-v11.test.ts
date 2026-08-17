@@ -69,6 +69,43 @@ describe('buildDP1Playlist signing (v1.1.0)', () => {
       assert.equal(vr.valid, true, vr.error);
     });
   });
+
+  test('an item carrying an inline manifest signs and verifies', async () => {
+    // An inline manifest has no refHash — its integrity comes entirely from the
+    // playlist signature, so it must sit inside the canonical signing payload.
+    // Schema validation cannot see the failure mode here: a manifest silently
+    // excluded from (or breaking) the payload hash would still validate.
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    await withPlaylistConfig('ff1-builder-manifest-', der.toString('hex'), async () => {
+      const playlist = await buildDP1Playlist({
+        items: [
+          {
+            ...minimalItem,
+            inlineManifest: {
+              refVersion: '1.1.0',
+              id: 'c0ffee00-dead-4bee-8fad-1234567890ab',
+              created: '2026-06-01T12:00:00.000Z',
+              locale: 'en',
+              metadata: {
+                title: 'Chapter #1',
+                description: 'An essay in motion.',
+                artists: [{ name: 'Larva Labs' }],
+                thumbnails: { default: { uri: 'https://example.com/still.png' } },
+              },
+            },
+          },
+        ],
+        ...deterministicParams,
+      });
+
+      const items = playlist.items as Array<Record<string, unknown>>;
+      const manifest = items[0].inlineManifest as Record<string, unknown>;
+      assert.equal(manifest.refVersion, '1.1.0');
+      const vr = await verifyPlaylist(playlist as Record<string, unknown>);
+      assert.equal(vr.valid, true, vr.error);
+    });
+  });
 });
 
 /**

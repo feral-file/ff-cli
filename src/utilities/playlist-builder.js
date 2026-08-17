@@ -4,7 +4,8 @@
  * Constructs DP-1 playlists and items via dp1-js document/leaf builders so
  * every generated object is schema-validated against the DP-1 AJV defs before
  * optional signing. Domain timing heuristics (DP-1 §4.1) stay in this module;
- * leaf shapes (display, provenance, contract) come from dp1-js.
+ * leaf shapes (display, provenance, contract) come from dp1-js, and inline Ref
+ * Manifests (Playlist Extension §3.6) come from ./ref-manifest.
  */
 
 const {
@@ -19,6 +20,7 @@ const {
 } = require('dp1-js');
 const { getPlaylistConfig, getConfig } = require('../config');
 const { signPlaylist } = require('./playlist-signer');
+const { buildInlineManifestForToken } = require('./ref-manifest');
 
 /** Default display background that passes DP-1 hex color validation. */
 const DEFAULT_BACKGROUND = '#111111';
@@ -209,6 +211,9 @@ function slugify(value) {
 /**
  * Convert single NFT token info to DP1 playlist item
  *
+ * When the token carries description, artist, or a still image distinct from
+ * the source, the item also gets an inline Ref Manifest (see ref-manifest.ts).
+ *
  * @param {Object} tokenInfo - Token information from NFT indexer
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
  *   (video/audio play natural length per DP-1 §4.1, static media uses the
@@ -274,9 +279,15 @@ function convertTokenToDP1ItemSingle(tokenInfo, duration) {
     .license('token')
     .provenance(new ProvenanceBuilder().type('onChain').contract(contractBuilder));
 
-  // Add reference to image if animation_url was used as source
-  if ((token.animation_url || token.animationUrl) && (token.image?.url || token.image)) {
-    itemBuilder.ref(token.image?.url || token.image);
+  // The still image goes in the inline manifest's `metadata.thumbnails`, NOT
+  // in `ref`. DP-1 defines `ref` as a URI to an external metadata/controls
+  // manifest, and dp1-js resolves `ref` ahead of `inlineManifest` when both
+  // are present — so pointing `ref` at a JPEG would send a conformant consumer
+  // to fetch an image, fail to parse it as a manifest, and never read the good
+  // inline data beside it. Do not reintroduce it.
+  const inlineManifest = buildInlineManifestForToken(token, { sourceUrl });
+  if (inlineManifest) {
+    itemBuilder.inlineManifest(inlineManifest);
   }
 
   applyTimingToItemBuilder(
@@ -663,6 +674,12 @@ function buildUrlItem(url, duration, options = {}) {
     }
   }
 
+  // No inline Ref Manifest here, deliberately: an off-chain URL item holds only
+  // url, title, and mimeType. `mimeType` is a timing hint with no place in
+  // DP-1 Metadata, and `title` is already written to the item below — so a
+  // manifest would carry nothing the item does not already say. If a resolver
+  // ever supplies a real description or artist, route it through
+  // buildInlineManifestForToken rather than lowering that bar.
   const itemBuilder = new PlaylistItemBuilder()
     .id(generateId())
     .title(title)

@@ -105,7 +105,7 @@ Based on the code today, the CLI is responsible for:
 - resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
 - running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
 - supporting a deterministic build path from structured JSON (`build`)
-- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant)
+- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant), including inline Ref Manifests on items that carry indexer metadata
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
 - publishing validated playlists to configured feed servers
@@ -173,6 +173,28 @@ Today the CLI groups into these workflow areas:
 ### Device operations
 
 - `ssh enable|disable`
+
+### Inline Ref Manifests
+
+Playlist items carry a full Ref Manifest inline (DP-1 Playlist Extension §3.6)
+rather than behind a `ref` URL, because the CLI emits a playlist file and has
+nowhere to host a manifest document. Behavior worth knowing downstream:
+
+- An item gets a manifest whenever the indexer supplies a description, an
+  artist, or a still image distinct from the item source. A token carrying only
+  a title gets none — the item already has a `title` field, so a title-only
+  manifest would add payload to every device transfer and signed envelope
+  without adding information.
+- Manifest ids are derived from the token's chain, contract, and token id, so
+  they are stable across runs and across playlists. `created` is frozen once per
+  CLI invocation, so every item in one build shares a single timestamp.
+- The item-level `ref` field is **no longer emitted**. It previously carried a
+  still-image URL, which contradicts the DP-1 definition of `ref` as a URI to an
+  external manifest; a consumer resolves `ref` ahead of `inlineManifest`, so the
+  image would have shadowed the inline data. That still image now appears at
+  `inlineManifest.metadata.thumbnails.default.uri`.
+- An inline manifest has no `refHash`; its integrity comes from the playlist
+  signature.
 
 ## Deterministic-first behavior
 
