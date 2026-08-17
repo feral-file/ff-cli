@@ -186,8 +186,10 @@ nowhere to host a manifest document. Behavior worth knowing downstream:
   manifest would add payload to every device transfer and signed envelope
   without adding information.
 - Manifest ids are derived from the token's chain, contract, and token id, so
-  they are stable across runs and across playlists. `created` is frozen once per
-  CLI invocation, so every item in one build shares a single timestamp.
+  they are stable across runs and across playlists — that stable `id` is what
+  identifies the manifest. `created` is frozen once per CLI invocation, so every
+  item in one build shares a single timestamp; it moves between builds, which is
+  expected (see "What determinism does not mean here").
 - Items carry no `ref`. `ref` is a URI to an externally hosted Ref Manifest,
   and requires `refHash` over HTTPS; a locally built playlist has nowhere to
   host one, which is the case §3.6 exists to serve. A still image distinct from
@@ -202,6 +204,30 @@ The CLI is deterministic end to end. There is no natural-language interface; any
 - commands map directly to source resolution, data fetching, playlist building, validation, signing, and delivery
 - utilities perform the real work and are the source of truth for output correctness
 - invalid or malformed outputs fail validation rather than being passed through
+
+### What determinism does not mean here
+
+It does **not** mean two builds of the same input produce identical bytes or an
+identical signature. Documents carry creation timestamps — `playlist.created`
+and `inlineManifest.created` — which are read from the wall clock. Building the
+same playlist twice produces two documents created at two different times, so
+their bytes differ and therefore their signatures differ. That is the correct
+representation of what happened, not a defect to engineer away.
+
+Identity is carried by `id`, not by bytes. Two manifests with the same `id` are
+the same manifest; DP-1 defines that field as a caching identifier
+(`core/v1.1.0/schemas/ref-manifest.json`). Manifest ids are derived from token
+coordinates precisely so that identity stays stable while timestamps move.
+
+DP-1 imposes no reproducible-build requirement. The word "deterministic" in the
+protocol refers to two unrelated things: deterministic *reproduction* of
+code-based artwork (core spec §5, the `repro` block) and deterministic *merging*
+of manifest values (`ref-manifest.md` §2). Neither concerns build-time byte
+stability.
+
+`buildDP1Playlist` accepts `deterministicMode` with `fixedTimestamp` and
+`fixedId`. Those exist to pin the envelope for tests and are not used by any
+command.
 
 ## Trust, protocol, and rights assumptions
 
