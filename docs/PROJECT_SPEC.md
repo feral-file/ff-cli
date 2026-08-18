@@ -105,7 +105,7 @@ Based on the code today, the CLI is responsible for:
 - resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
 - running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
 - supporting a deterministic build path from structured JSON (`build`)
-- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant)
+- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant), including inline Ref Manifests on items that carry indexer metadata
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
 - publishing validated playlists to configured feed servers
@@ -174,6 +174,29 @@ Today the CLI groups into these workflow areas:
 
 - `ssh enable|disable`
 
+### Inline Ref Manifests
+
+Playlist items carry a full Ref Manifest inline (DP-1 Playlist Extension §3.6)
+rather than behind a `ref` URL, because the CLI emits a playlist file and has
+nowhere to host a manifest document. Behavior worth knowing downstream:
+
+- An item gets a manifest whenever the indexer supplies a description, an
+  artist, or a still image distinct from the item source. A token carrying only
+  a title gets none — the item already has a `title` field, so a title-only
+  manifest would add payload to every device transfer and signed envelope
+  without adding information.
+- Manifest ids are derived from the token's chain, contract, and token id, so
+  they are stable across runs and across playlists — that stable `id` is what
+  identifies the manifest. `created` is frozen once per CLI invocation, so every
+  item in one build shares a single timestamp; it moves between builds, which is
+  expected (see "What determinism does not mean here").
+- Items carry no `ref`. `ref` is a URI to an externally hosted Ref Manifest,
+  and requires `refHash` over HTTPS; a locally built playlist has nowhere to
+  host one, which is the case §3.6 exists to serve. A still image distinct from
+  the source is carried at `inlineManifest.metadata.thumbnails.default.uri`.
+- An inline manifest has no `refHash`; its integrity comes from the playlist
+  signature.
+
 ## Deterministic-first behavior
 
 The CLI is deterministic end to end. There is no natural-language interface; any natural-language layer lives in the user's coding agent, which drives these commands:
@@ -181,6 +204,59 @@ The CLI is deterministic end to end. There is no natural-language interface; any
 - commands map directly to source resolution, data fetching, playlist building, validation, signing, and delivery
 - utilities perform the real work and are the source of truth for output correctness
 - invalid or malformed outputs fail validation rather than being passed through
+
+### What determinism does not mean here
+
+It does **not** mean two builds of the same input produce identical bytes or an
+identical signature. Every citation below is from
+[`display-protocol/dp1`](https://github.com/display-protocol/dp1) at core
+v1.1.0, so a reader can check each claim rather than take this section's word
+for it.
+
+**Timestamps are wall-clock, by definition.** The schemas define both creation
+fields as the moment the document was made:
+
+- `core/v1.1.0/schemas/playlist.json` — `created`: *"ISO 8601 timestamp when the
+  playlist was created"*
+- `core/v1.1.0/schemas/ref-manifest.json` — `created`: *"RFC3339 timestamp when
+  the manifest was created"*
+
+Building the same playlist twice creates two documents at two different times,
+so those fields legitimately differ.
+
+**Different bytes therefore mean a different signature, by construction.**
+`core/v1.1.0/spec.md` §7: *"Each signature is computed over the canonical form
+of the entire playlist (excluding the `signature` and `signatures` fields
+themselves)"*, where *"Canonical form ≡ JSON Canonicalization Scheme (JCS), RFC
+8785"*. A differing `created` changes the canonical bytes, which changes the
+payload hash, which changes the signature. That is the signature reporting what
+actually happened — not a defect to engineer away.
+
+**Identity is carried by `id`, not by bytes.**
+`core/v1.1.0/schemas/ref-manifest.json` describes `id` as *"Unique identifier
+for the manifest (for caching)"*, echoed in the envelope example at
+`core/v1.1.0/ref-manifest.md` §3: `"id": "ref-7c3d", // unique identifier (for
+caching)`. Two manifests sharing an `id` are the same manifest. This CLI derives
+manifest ids from token coordinates precisely so identity stays stable while
+timestamps move.
+
+**DP-1 states no reproducible-build requirement.** Searching `core/v1.1.0/spec.md`
+and `core/v1.1.0/ref-manifest.md` for reproducibility language turns up the word
+"deterministic" in exactly two places, neither about build-time byte stability:
+
+- `spec.md` §5, *"Deterministic Reproduction (`repro`)"* — reproducing the
+  **rendering** of code-based artwork, via `engineVersion`, `seed`,
+  `assetsSHA256`, and `frameHash`.
+- `ref-manifest.md` §2 Goals, *"Deterministic merging: predictable behavior
+  across devices and players"* — the **merge order** in §7 (player defaults →
+  playlist defaults → `ref.controls` → runtime overrides).
+
+Neither imposes byte-for-byte stability across builds, and no schema field
+requires `created` to be immutable across regenerations of a document.
+
+`buildDP1Playlist` accepts `deterministicMode` with `fixedTimestamp` and
+`fixedId`. Those exist to pin the envelope for tests and are not used by any
+command.
 
 ## Trust, protocol, and rights assumptions
 

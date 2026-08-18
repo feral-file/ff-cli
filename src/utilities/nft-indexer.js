@@ -9,6 +9,7 @@ const GRAPHQL_ENDPOINT = 'https://indexer.feralfile.com/graphql';
 const { fetchWithTimeout } = require('./http');
 const logger = require('../logger');
 const { applyTimingToItemBuilder, buildDefaultDisplay } = require('./playlist-builder');
+const { buildInlineManifestForToken } = require('./ref-manifest');
 
 // Polling configuration (in milliseconds)
 const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds
@@ -394,6 +395,9 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
  * Extracts source URL from indexer data with proper priority:
  * animation_url > image.url, ensuring the best quality media is used.
  *
+ * When the token carries description, artist, or a still image distinct from
+ * the source, the item also gets an inline Ref Manifest (see ref-manifest.ts).
+ *
  * @param {Object} tokenData - Token data in standard format
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
  *   (video/audio play natural length per DP-1 §4.1)
@@ -500,6 +504,16 @@ function convertToDP1Item(tokenData, duration) {
   // Add title if available (valid DP1 field)
   if (token.name) {
     itemBuilder.title(token.name);
+  }
+
+  // Carry description, artist, and still image inline (DP-1 Playlist Extension
+  // §3.6). These are the fields the indexer returns that have no PlaylistItem
+  // home; before inline manifests existed they were mapped and then dropped on
+  // the floor here. The helper returns undefined when the token has nothing
+  // beyond its title, so thin tokens stay thin.
+  const inlineManifest = buildInlineManifestForToken(token, { sourceUrl });
+  if (inlineManifest) {
+    itemBuilder.inlineManifest(inlineManifest);
   }
 
   applyTimingToItemBuilder(

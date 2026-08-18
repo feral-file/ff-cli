@@ -30,7 +30,15 @@ const {
 const nftIndexer = require('../src/utilities/nft-indexer');
 
 /** Minimal token info in the standard format both converters consume. */
-function tokenInfo(overrides: { mimeType?: string; animationUrl?: string } = {}) {
+function tokenInfo(
+  overrides: {
+    mimeType?: string;
+    animationUrl?: string;
+    description?: string;
+    artistName?: string;
+    imageUrl?: string;
+  } = {}
+) {
   return {
     success: true,
     token: {
@@ -39,8 +47,10 @@ function tokenInfo(overrides: { mimeType?: string; animationUrl?: string } = {})
       tokenId: '1',
       standard: 'erc721',
       name: 'Chapter #1',
+      description: overrides.description,
+      metadata: { artistName: overrides.artistName },
       image: {
-        url: 'https://example.com/thumb.png',
+        url: overrides.imageUrl ?? 'https://example.com/thumb.png',
         mimeType: overrides.mimeType ?? 'image/png',
         thumbnail: '',
       },
@@ -228,6 +238,66 @@ describe('item builders honor auto timing', () => {
     assert.equal(item.display.loop, undefined);
   });
 
+  test('convertTokenToDP1ItemSingle: a title-only token carries no inline manifest', () => {
+    // Static token: image.url IS the source, so there is no distinct still and
+    // nothing beyond the title. Thin tokens must stay thin — a manifest that
+    // only repeats `title` costs payload on every FF1 transfer.
+    const item = convertTokenToDP1ItemSingle(tokenInfo());
+    assert.equal(item.inlineManifest, undefined);
+  });
+
+  test('convertTokenToDP1ItemSingle: a dynamic item carries the still in the manifest, not ref', () => {
+    // `ref` is a URI to an external Ref Manifest. The old branch pointed it at
+    // `token.image.url`, which on the indexer path is getBestMediaUrl's pick —
+    // animation-first — so it resolved to the animation URL and merely
+    // duplicated `source`. The still image is `image.thumbnail`, and it belongs
+    // in the manifest. If this fails, that branch came back.
+    const item = convertTokenToDP1ItemSingle(
+      tokenInfo({
+        mimeType: 'video/mp4',
+        animationUrl: 'https://example.com/chapter-1.mp4',
+        imageUrl: 'https://example.com/still.png',
+      })
+    );
+    assert.equal(item.ref, undefined);
+    assert.deepEqual(item.inlineManifest.metadata.thumbnails, {
+      default: { uri: 'https://example.com/still.png' },
+    });
+  });
+
+  test('convertTokenToDP1ItemSingle: indexer-shaped dynamic token never duplicates source into ref', () => {
+    // Regression pin for the value trace: mapIndexerDataToStandardFormat puts
+    // the animation URL in image.url and the still in image.thumbnail, so the
+    // old `ref` branch produced ref === source.
+    const std = nftIndexer.mapIndexerDataToStandardFormat(
+      {
+        contract_address: '0xabc0000000000000000000000000000000000001',
+        token_number: '1',
+        current_owner: null,
+        burned: false,
+        display: {
+          name: 'Dynamic work',
+          description: 'An essay in motion.',
+          mime_type: 'video/mp4',
+          image_url: 'https://example.com/still.png',
+          animation_url: 'https://example.com/animation.mp4',
+          artists: [{ name: 'Ada' }],
+        },
+        media_assets: [],
+      },
+      'ethereum'
+    );
+    assert.equal(std.token.image.url, 'https://example.com/animation.mp4');
+    assert.equal(std.token.image.thumbnail, 'https://example.com/still.png');
+
+    const item = convertTokenToDP1ItemSingle(std);
+    assert.equal(item.source, 'https://example.com/animation.mp4');
+    assert.equal(item.ref, undefined);
+    assert.deepEqual(item.inlineManifest.metadata.thumbnails, {
+      default: { uri: 'https://example.com/still.png' },
+    });
+  });
+
   test('nft-indexer convertToDP1Item: video token → natural length, explicit wins', () => {
     const video = tokenInfo({
       mimeType: 'video/mp4',
@@ -316,6 +386,46 @@ describe('playlist-level conformance', () => {
     assert.equal(fromIndexer.item.created, undefined);
     assert.equal(fromIndexer.item.display.background, '#111111');
     assert.doesNotThrow(() => ValidatePlaylistItem(fromIndexer.item));
+  });
+
+  test('both converters emit schema-valid items when an inline manifest is present', () => {
+    // The manifest is a nested document with its own schema, so it needs its
+    // own validation pass on both converter paths — an item that validates
+    // without one proves nothing about one that carries it.
+    const { ValidatePlaylistItem } = require('dp1-js');
+    const rich = tokenInfo({
+      description: 'An essay in motion.',
+      artistName: 'Larva Labs',
+      animationUrl: 'https://example.com/chapter-1.mp4',
+      mimeType: 'video/mp4',
+      imageUrl: 'https://example.com/still.png',
+    });
+
+    const fromBuilder = convertTokenToDP1ItemSingle(rich);
+    assert.equal(fromBuilder.inlineManifest.metadata.description, 'An essay in motion.');
+    assert.doesNotThrow(() => ValidatePlaylistItem(fromBuilder));
+
+    const fromIndexer = nftIndexer.convertToDP1Item(rich);
+    assert.equal(fromIndexer.success, true);
+    assert.deepEqual(fromIndexer.item.inlineManifest.metadata.artists, [{ name: 'Larva Labs' }]);
+    assert.doesNotThrow(() => ValidatePlaylistItem(fromIndexer.item));
+  });
+
+  test('buildDP1Playlist validates a playlist whose items carry inline manifests', async () => {
+    const { ValidatePlaylist } = require('dp1-js');
+    const item = convertTokenToDP1ItemSingle(
+      tokenInfo({ description: 'An essay in motion.', artistName: 'Larva Labs' })
+    );
+    const playlist = await buildDP1Playlist({
+      items: [item],
+      title: 'Manifest check',
+      slug: 'manifest-check',
+      deterministicMode: true,
+      fixedTimestamp: '2026-06-01T12:00:00.000Z',
+      fixedId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+    });
+    assert.equal(playlist.items[0].inlineManifest.refVersion, '1.1.0');
+    assert.doesNotThrow(() => ValidatePlaylist(playlist, { requireSignatures: false }));
   });
 
   test('validateDP1Playlist maps AJV failures to path: message strings', () => {
