@@ -371,19 +371,21 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
   const metadata = manifest.metadata ?? {};
   const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
   const overrideTitle = curatorTitle.length > 0 && metadata.title !== curatorTitle;
-  if (!overrideTitle && !rekey) {
-    return manifest;
-  }
 
-  // Any change to the manifest's content has to change its id. The indexer
-  // derives that id from the token coordinate, so two items of one artwork
-  // receive the same one — and the id is the manifest's cache identity, so two
-  // documents that differ must not both claim it.
+  // The id is derived from the finished payload every time, not only when this
+  // command changed something. The indexer keys its id on the token
+  // coordinate, so every rendition of one artwork carries the same id whatever
+  // its content — and under --force the indexer may itself return a different
+  // artist or description under that unchanged id. Deriving from the payload
+  // is the only rule that holds in every case: identical content keeps one
+  // identity, differing content never shares one.
   //
-  // The key is the whole finished metadata block rather than the fields this
-  // command happens to touch. Under --force the indexer may also have changed
-  // an artist or a description, and an id derived from title and thumbnail
-  // alone would miss that and hand two different payloads one identity.
+  // The original id is folded in, so the result stays anchored to the token
+  // rather than floating free of it, and stays deterministic across runs.
+  //
+  // `rekey` is read only to record that a thumbnail was recovered; the
+  // derivation below covers it either way.
+  void rekey;
   const finalMetadata = overrideTitle ? { ...metadata, title: curatorTitle } : metadata;
   return {
     ...manifest,

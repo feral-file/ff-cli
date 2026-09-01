@@ -260,11 +260,17 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(a.id, b.id, 'ids must be deterministic, not random');
   });
 
-  test('keeps the indexer id when the titles already agree', async () => {
-    const playlist = playlistOf(item({ title: 'Pre-Process #0' }));
-    await enrichPlaylistManifests(playlist, hit());
-    const m = playlist.items?.[0].inlineManifest as Record<string, unknown>;
-    assert.equal(m.id, MANIFEST.id, 'unchanged content keeps its identity');
+  test('gives identical payloads one identity', async () => {
+    // The id follows the payload rather than the indexer's coordinate-derived
+    // value, so two runs over the same content agree and two different
+    // payloads never collide.
+    const first = playlistOf(item({ title: 'Pre-Process #0' }));
+    const second = playlistOf(item({ title: 'Pre-Process #0' }));
+    await enrichPlaylistManifests(first, hit());
+    await enrichPlaylistManifests(second, hit());
+    const a = first.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = second.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal(a.id, b.id);
   });
 
   // F4: resolved-with-nothing-to-attach is not the same as never-resolved.

@@ -276,10 +276,15 @@ and nothing else. `enrich` is the repair path for those.
   in no protocol, and no userspace sequence makes it so. Writing to a distinct
   `--output` opts out of in-place replacement entirely, which is the right
   choice when a file is being actively edited.
-- A replacement manifest's id is derived from its whole finished metadata
-  block, not from the fields this command happens to touch. Under `--force` the
-  indexer may also have changed an artist or a description, and an id keyed on
-  title and thumbnail alone would give two different payloads one identity.
+- An attached manifest's id is derived from its whole finished metadata block,
+  every time rather than only when this command changed something. The indexer
+  keys its id on the token coordinate, so every rendition of one artwork
+  carries the same id whatever its content, and under `--force` the indexer may
+  itself return a different artist or description under that unchanged id.
+  Deriving from the payload is the only rule that holds in every case:
+  identical content keeps one identity, differing content never shares one. The
+  original id is folded in so the result stays anchored to the token and stays
+  deterministic across runs.
 - In-place writes refuse to run over an input that changed while the lookup
   was in flight. The lookup can take minutes and the default destination is the
   input, so a curator's edit or re-sign in that window would otherwise be
