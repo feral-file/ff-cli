@@ -365,6 +365,36 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.enriched, 0, 'ipfs is not resolvable by the display path');
   });
 
+  // F3: a recovered thumbnail changes content, so it must change identity too.
+  test('re-keys a manifest whose thumbnail was recovered', async () => {
+    const withStill = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-shared',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { title: 'Pre-Process', artists: [{ name: 'A', id: '' }] },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(withStill, lookup);
+    const m = withStill.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.notEqual(m.id, 'ref-shared', 'recovered content must not keep the shared id');
+  });
+
+  test('reports how many coordinates were assumed to be Ethereum', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', provenance: provenance('0xaaa', '1', 'evm') }),
+      item({ id: 'b', provenance: provenance('KT1abc', '2', 'tezos') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.assumedEthereum, 1, 'only the evm coordinate is ambiguous');
+  });
+
   test('skips an item that already carries a manifest', async () => {
     const existing = manifestNamed('hand written', 'Someone');
     const playlist = playlistOf(item({ inlineManifest: existing }));

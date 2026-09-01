@@ -128,6 +128,12 @@ export interface EnrichOutcome {
   skipped: SkippedItem[];
   /** True when the document changed and any prior signature is now void. */
   signatureInvalidated: boolean;
+  /**
+   * How many distinct coordinates were looked up as Ethereum on the strength
+   * of a DP-1 `evm` chain name. Reported so the assumption is visible rather
+   * than silent; see CHAIN_ALIASES.
+   */
+  assumedEthereum: number;
 }
 
 export interface EnrichOptions {
@@ -152,6 +158,26 @@ export interface EnrichOptions {
 const CHAIN_ALIASES: Record<string, string> = {
   evm: 'ethereum',
 };
+
+/**
+ * `evm` names a family, and this maps it to one member of that family.
+ *
+ * DP-1 core §6 offers "evm" | "tezos" | "bitmark" | "other" and carries no
+ * network identity, while the indexer maps Ethereum, Polygon, Arbitrum,
+ * Optimism, Base, and Zora all back to `evm`. So a DP-1 coordinate cannot say
+ * which EVM network it means, and neither can the response.
+ *
+ * Ethereum is chosen because it is the only EVM network this client can reach:
+ * buildTokenCID maps ethereum to eip155:1 and tezos to tezos:mainnet, and
+ * throws for everything else. A --chain flag would not widen that — it would
+ * only move the throw. The residual risk is narrow and real: an L2 work whose
+ * address and token id also exist on Ethereum would be enriched with the
+ * Ethereum work's metadata, and nothing in the response could reveal it.
+ *
+ * The count is surfaced so the assumption is stated at the point of use rather
+ * than buried here. Widening it belongs upstream, in the indexer client.
+ */
+const AMBIGUOUS_CHAIN = 'evm';
 
 /**
  * One CLI invocation stamps one manifest timestamp, matching ref-manifest.ts:
@@ -231,70 +257,6 @@ function coordinateFor(item: Dp1Item): TokenCoordinate | null {
 }
 
 /**
- * manifestFor returns the manifest to write onto an item, or undefined when
- * the indexer resolved the token without building one.
- *
- * The curator's own title wins. `item.title` survives enrichment untouched,
- * but the tombstone reads the manifest first, so attaching an indexer title
- * that disagrees would change the displayed label while appearing to preserve
- * it — the indexer writes "Pre-Process #0" where a curator wrote
- * "Pre-Process". Everything else in the manifest (artist, description,
- * thumbnails) is what enrichment exists to fetch and is taken as given.
- */
-function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefined {
-  const still = stillFromIndexerSource(item, resolved);
-  let manifest = resolved.inlineManifest;
-
-  if (manifest && still && !hasThumbnail(manifest)) {
-    manifest = {
-      ...manifest,
-      metadata: {
-        ...(manifest.metadata ?? {}),
-        thumbnails: { default: { uri: still } },
-      },
-    };
-  } else if (!manifest && still) {
-    // Nothing was emitted because the still was the only content the token
-    // had, and it had been suppressed. A thumbnail-only manifest is worth its
-    // payload in a way a title-only one is not: it is the difference between
-    // a grid tile and an empty square.
-    const title = typeof item.title === 'string' ? item.title.trim() : '';
-    manifest = {
-      refVersion: '1.1.0',
-      id: derivedManifestId(still, title),
-      created: MANIFEST_CREATED,
-      locale: 'en',
-      metadata: { ...(title ? { title } : {}), thumbnails: { default: { uri: still } } },
-    };
-  }
-
-  if (!manifest) {
-    return undefined;
-  }
-  const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
-  if (curatorTitle.length === 0) {
-    return manifest;
-  }
-  const metadata = manifest.metadata ?? {};
-  if (metadata.title === curatorTitle) {
-    return manifest;
-  }
-  // The indexer derives a manifest id from the token's coordinate, so two
-  // items of the same artwork receive the same id. That id is the manifest's
-  // cache identity, so overriding the title without changing it produces two
-  // different documents claiming to be the same one — and a consumer that
-  // cached the first would show its label on the second. Deriving the id from
-  // the original plus the title keeps it deterministic across runs while
-  // making distinct content distinctly identified.
-  const id = typeof manifest.id === 'string' ? manifest.id : '';
-  return {
-    ...manifest,
-    id: derivedManifestId(id, curatorTitle),
-    metadata: { ...metadata, title: curatorTitle },
-  };
-}
-
-/**
  * stillFromIndexerSource recovers a thumbnail the manifest builder suppressed.
  *
  * `resolveStillUri` blanks a still that equals the source it was given, on the
@@ -330,6 +292,75 @@ function hasThumbnail(manifest: Dp1Manifest): boolean {
   const thumbnails = (manifest.metadata as { thumbnails?: { default?: { uri?: unknown } } })
     ?.thumbnails;
   return typeof thumbnails?.default?.uri === 'string' && thumbnails.default.uri.length > 0;
+}
+
+/**
+ * manifestFor returns the manifest to write onto an item, or undefined when
+ * the indexer resolved the token without building one.
+ *
+ * The curator's own title wins. `item.title` survives enrichment untouched,
+ * but the tombstone reads the manifest first, so attaching an indexer title
+ * that disagrees would change the displayed label while appearing to preserve
+ * it — the indexer writes "Pre-Process #0" where a curator wrote
+ * "Pre-Process". Everything else in the manifest (artist, description,
+ * thumbnails) is what enrichment exists to fetch and is taken as given.
+ */
+function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefined {
+  const still = stillFromIndexerSource(item, resolved);
+  let manifest = resolved.inlineManifest;
+  let rekey = false;
+
+  if (manifest && still && !hasThumbnail(manifest)) {
+    manifest = {
+      ...manifest,
+      metadata: {
+        ...(manifest.metadata ?? {}),
+        thumbnails: { default: { uri: still } },
+      },
+    };
+    rekey = true;
+  } else if (!manifest && still) {
+    // Nothing was emitted because the still was the only content the token
+    // had, and it had been suppressed. A thumbnail-only manifest is worth its
+    // payload in a way a title-only one is not: it is the difference between
+    // a grid tile and an empty square.
+    const synthesizedTitle = typeof item.title === 'string' ? item.title.trim() : '';
+    manifest = {
+      refVersion: '1.1.0',
+      id: derivedManifestId('', `${synthesizedTitle}\n${still}`),
+      created: MANIFEST_CREATED,
+      locale: 'en',
+      metadata: {
+        ...(synthesizedTitle ? { title: synthesizedTitle } : {}),
+        thumbnails: { default: { uri: still } },
+      },
+    };
+  }
+
+  if (!manifest) {
+    return undefined;
+  }
+
+  const metadata = manifest.metadata ?? {};
+  const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
+  const overrideTitle = curatorTitle.length > 0 && metadata.title !== curatorTitle;
+  if (!overrideTitle && !rekey) {
+    return manifest;
+  }
+
+  // Any change to the manifest's content has to change its id. The indexer
+  // derives that id from the token coordinate, so two items of one artwork
+  // receive the same one — and the id is the manifest's cache identity. Two
+  // renditions that differ in title OR in a recovered thumbnail must not both
+  // claim it, or a consumer holding the first will serve it for the second.
+  const identity = `${overrideTitle ? curatorTitle : (metadata.title ?? '')}\n${
+    (metadata.thumbnails as { default?: { uri?: string } } | undefined)?.default?.uri ?? ''
+  }`;
+  return {
+    ...manifest,
+    id: derivedManifestId(typeof manifest.id === 'string' ? manifest.id : '', identity),
+    metadata: overrideTitle ? { ...metadata, title: curatorTitle } : metadata,
+  };
 }
 
 /**
@@ -409,8 +440,12 @@ export async function enrichPlaylistManifests(
     }
   });
 
+  const assumedEthereum = [...coordinates.keys()].filter((key) =>
+    key.startsWith(`${AMBIGUOUS_CHAIN}:`)
+  ).length;
+
   if (pending.length === 0) {
-    return { playlist, enriched: 0, skipped, signatureInvalidated: false };
+    return { playlist, enriched: 0, skipped, signatureInvalidated: false, assumedEthereum: 0 };
   }
 
   const resolved = await lookup([...coordinates.values()], options.onProgress);
@@ -458,5 +493,5 @@ export async function enrichPlaylistManifests(
   }
 
   skipped.sort((a, b) => a.index - b.index);
-  return { playlist, enriched, skipped, signatureInvalidated };
+  return { playlist, enriched, skipped, signatureInvalidated, assumedEthereum };
 }

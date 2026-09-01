@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { dirname, basename, join } from 'path';
 import {
   enrichPlaylistManifests,
@@ -89,6 +89,24 @@ async function writePlaylistAtomically(destination: string, contents: string): P
 }
 
 /**
+ * isSameFile reports whether two paths name the same file on disk.
+ *
+ * Compares resolved paths rather than the strings the caller typed, so
+ * `-o ./playlist.json` against `playlist.json`, and a symlink against its
+ * target, are recognized as the in-place case they are.
+ */
+async function isSameFile(a: string, b: string): Promise<boolean> {
+  if (a === b) {
+    return true;
+  }
+  const [left, right] = await Promise.all([
+    fs.realpath(a).catch(() => null),
+    fs.realpath(b).catch(() => null),
+  ]);
+  return left !== null && left === right;
+}
+
+/**
  * syncDirectory flushes a directory entry so a rename survives power loss.
  *
  * Best-effort by design. Directory fsync is not portable — Windows rejects it
@@ -156,12 +174,12 @@ export const enrichCommand = new Command('enrich')
     try {
       console.log(chalk.blue('\nEnrich playlist\n'));
 
-      const playlist = JSON.parse(await fs.readFile(file, 'utf-8')) as Dp1Playlist;
-      // The lookup below can take minutes while the indexer warms tokens, and
-      // the default destination is this same file. Remember what was read so a
-      // curator's edit, re-sign, or replacement during that window is not
-      // silently overwritten by a result computed from the older bytes.
-      const readAt = await fs.stat(file).catch(() => null);
+      // Hash the exact bytes parsed, not a stat taken afterwards: an edit
+      // between the read and the stat would leave the snapshot describing
+      // newer content while enrichment still worked from the older bytes.
+      const original = await fs.readFile(file);
+      const originalDigest = createHash('sha256').update(original).digest('hex');
+      const playlist = JSON.parse(original.toString('utf-8')) as Dp1Playlist;
       const total = Array.isArray(playlist.items) ? playlist.items.length : 0;
       if (total === 0) {
         console.error(chalk.red('That playlist has no items.'));
@@ -205,10 +223,13 @@ export const enrichCommand = new Command('enrich')
       // no-op would be pure risk for no gain, so that case still writes
       // nothing.
       const shouldWrite = result.enriched > 0 || options.output !== undefined;
-      if (shouldWrite && destination === file) {
-        const now = await fs.stat(file).catch(() => null);
+      // Compare the physical write target, not the spelling of the argument.
+      // `-o ./playlist.json` for the input, or a symlink and its target, are
+      // the same file under different names and must not slip past this guard.
+      if (shouldWrite && (await isSameFile(file, destination))) {
+        const current = await fs.readFile(destination).catch(() => null);
         const changed =
-          !readAt || !now || now.mtimeMs !== readAt.mtimeMs || now.size !== readAt.size;
+          current === null || createHash('sha256').update(current).digest('hex') !== originalDigest;
         if (changed) {
           console.error(chalk.red('\nThat playlist changed while the lookup ran.'));
           console.error(
@@ -239,6 +260,18 @@ export const enrichCommand = new Command('enrich')
       );
       if (shouldWrite) {
         console.log(chalk.dim(`  Output: ${destination}`));
+      }
+
+      // DP-1 carries no network identity for an EVM coordinate, and the
+      // indexer client can only reach Ethereum. Say so rather than let the
+      // assumption ride silently into a document that gets signed.
+      if (result.assumedEthereum > 0) {
+        console.log(
+          chalk.dim(
+            `\n  ${result.assumedEthereum} coordinate(s) gave chain "evm", which names a family.` +
+              `\n  Looked up on Ethereum; an L2 work would need a wider indexer client.`
+          )
+        );
       }
 
       if (result.skipped.length > 0) {

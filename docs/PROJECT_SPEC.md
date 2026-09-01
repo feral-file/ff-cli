@@ -251,6 +251,20 @@ and nothing else. `enrich` is the repair path for those.
   and is http(s), it is that suppressed still and becomes the thumbnail. A
   thumbnail-only manifest is emitted where none was, unlike a title-only one:
   it is the difference between a tile and an empty square.
+- `evm` names a family, and enrichment resolves it as Ethereum. DP-1 core §6
+  carries no network identity, and the indexer maps Ethereum, Polygon,
+  Arbitrum, Optimism, Base, and Zora all back to `evm`, so neither the request
+  nor the response can say which network is meant. Ethereum is chosen because
+  it is the only EVM network this client can reach — `buildTokenCID` maps
+  ethereum to `eip155:1` and tezos to `tezos:mainnet` and throws for anything
+  else. The residual risk is narrow: an L2 work whose address and token id also
+  exist on Ethereum would take the Ethereum work's metadata. The command
+  reports how many coordinates this assumption covered, so it is stated rather
+  than silent; widening it belongs in the indexer client, not here.
+- In-place writes refuse to run over an input that changed while the lookup
+  was in flight. The comparison is a hash of the bytes actually parsed, against
+  the resolved write target, so `-o` naming the input by another spelling and a
+  symlink pointing at it are both recognized as the in-place case.
 - In-place writes refuse to run over an input that changed while the lookup
   was in flight. The lookup can take minutes and the default destination is the
   input, so a curator's edit or re-sign in that window would otherwise be
