@@ -304,7 +304,13 @@ and nothing else. `enrich` is the repair path for those.
   truncated playlist. A symlinked destination is followed to its target rather
   than replaced, and the existing file's permission mode is read before the
   temporary file is created and applied to it before any bytes are written, so
-  a curator-restricted playlist is never briefly world-readable mid-write.
+  a curator-restricted playlist is never briefly world-readable mid-write. The
+  destination's owner and group are carried across too, since a replacement is
+  a new inode and would otherwise take this process's ownership — silently
+  reassigning a shared playlist. Where that cannot be done, the in-place
+  replacement is refused and `--output` is offered instead. Extended ACLs are
+  not preserved, because Node exposes no portable way to read them; a playlist
+  carrying them should be enriched through `--output`.
 - `--output` names a file the caller expects to exist afterwards, so it is
   written even when nothing was enriched. A no-op without `--output` writes
   nothing rather than rewriting the input for no gain.

@@ -75,6 +75,20 @@ async function writePlaylistAtomically(
       if (mode !== undefined) {
         await handle.chmod(mode);
       }
+      // A replacement is a new inode, so it carries this process's ownership
+      // rather than the destination's. Silently reassigning a playlist that
+      // belongs to another user or a shared group can lock collaborators out
+      // of it, or widen who can reach it. Carry the ownership across, and when
+      // that is not permitted refuse the in-place replacement instead of
+      // completing it with different access than the file had.
+      if (current && (current.uid !== process.getuid?.() || current.gid !== process.getgid?.())) {
+        try {
+          await handle.chown(current.uid, current.gid);
+        } catch {
+          await fs.rm(temporary, { force: true }).catch(() => undefined);
+          throw new OwnershipError(target);
+        }
+      }
       await handle.writeFile(contents);
       // rename() is atomic against concurrent readers but says nothing about
       // power loss: the directory entry can reach disk before the data it
@@ -109,6 +123,18 @@ async function writePlaylistAtomically(
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * OwnershipError marks a refusal to replace a file whose ownership this
+ * process cannot reproduce, so the caller can explain it rather than print a
+ * bare errno.
+ */
+class OwnershipError extends Error {
+  constructor(readonly target: string) {
+    super(`cannot preserve ownership of ${target}`);
+    this.name = 'OwnershipError';
   }
 }
 
@@ -323,6 +349,17 @@ export const enrichCommand = new Command('enrich')
       }
       console.log();
     } catch (error) {
+      if (error instanceof OwnershipError) {
+        console.error(chalk.red('\nThat playlist belongs to another user or group.'));
+        console.error(
+          chalk.dim(
+            `  Replacing it in place would hand it to you and could lock others out,\n` +
+              `  so nothing was written. Write elsewhere instead:\n` +
+              `    ff-cli enrich ${error.target} -o enriched.json\n`
+          )
+        );
+        process.exit(1);
+      }
       console.error(chalk.red('\nError:'), (error as Error).message);
       if (options.verbose) {
         console.error(chalk.dim((error as Error).stack));
