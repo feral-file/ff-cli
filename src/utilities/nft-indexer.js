@@ -5,10 +5,20 @@
  */
 
 const { PlaylistItemBuilder, ProvenanceBuilder, ContractBuilder } = require('dp1-js');
-// Production by default. INDEXER_API_URL exists so tests can point the
-// client at a local mock, the same way RASTER_API_URL already works — it
-// is not user-facing configuration, which stays removed (initializeIndexer).
-const GRAPHQL_ENDPOINT = process.env.INDEXER_API_URL || 'https://indexer.feralfile.com/graphql';
+// The production endpoint is hardcoded, as PROJECT_SPEC states, and stays
+// that way. INDEXER_API_URL is a test hook, not configuration: the
+// find-command suite spawns the CLI as a child process, so the only way to
+// point it at a local mock is through the environment.
+//
+// It is gated on NODE_ENV=test because index.ts loads dotenv at startup. An
+// ungated read would mean a stray INDEXER_API_URL in someone's .env, or an
+// inherited shell value, silently redirecting every token lookup and indexing
+// mutation — a configuration surface nobody documented and no one would think
+// to check. The gate keeps the hook usable without creating that surface.
+const GRAPHQL_ENDPOINT =
+  process.env.NODE_ENV === 'test' && process.env.INDEXER_API_URL
+    ? process.env.INDEXER_API_URL
+    : 'https://indexer.feralfile.com/graphql';
 const { fetchWithTimeout } = require('./http');
 const logger = require('../logger');
 const { applyTimingToItemBuilder, buildDefaultDisplay } = require('./playlist-builder');

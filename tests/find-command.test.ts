@@ -41,6 +41,15 @@ let handler: GraphQLHandler;
 // and both speak of "tokens".
 let indexerServer: Server;
 let indexerUrl: string;
+/**
+ * Operations the indexer mock was asked for, per test, tagged with the token
+ * they concern. getNFTTokenInfoBatch runs both token workflows concurrently
+ * under Promise.all, so there is no meaningful global ordering between them —
+ * only each token's own lifecycle is ordered.
+ */
+let indexerOps: { op: string; token: string }[] = [];
+/** Job id handed out per token at enqueue, so a poll can be attributed back. */
+const jobIds = new Map<number, string>();
 
 const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
 
@@ -73,19 +82,70 @@ before(async () => {
   }
   serverUrl = `http://127.0.0.1:${address.port}/graphql`;
 
-  // Answers the enqueue mutation, then reports no indexed tokens, so a run
-  // that reaches indexing ends on its own instead of polling for 60s.
+  // Speaks the indexer's actual GraphQL contract, per operation, and REJECTS
+  // anything else. A permissive fallback is what let the previous version pass
+  // without proving anything: it answered every unrecognized operation with an
+  // empty token envelope, so a client regression (consuming `jobId` instead of
+  // the real `job_id`, say) still produced "2/2 tokens indexed" and the same
+  // "no tokens could be indexed" exit. Rejecting the unexpected is what makes
+  // the recorded sequence below evidence rather than decoration.
+  //
+  // The empty token list is deliberate: the run completes the whole
+  // enqueue -> poll -> query path and then exits on "no tokens could be
+  // indexed", which is a determinate outcome the test can assert.
   indexerServer = createServer((req, res) => {
-    req.resume();
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
+      const { query, variables } = JSON.parse(body || '{}') as {
+        query?: string;
+        variables?: Record<string, unknown>;
+      };
       res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          data: { triggerTokenIndexing: { jobId: 'test-job' }, tokens: [] },
-        })
-      );
+
+      // A token CID ends in :<tokenId>, which is what tells the two concurrent
+      // workflows apart. jobStatus carries only a job_id, so enqueue hands out
+      // one id per token and this maps it back.
+      const tokenOf = (cid: string): string => {
+        const parts = cid.split(':');
+        return parts[parts.length - 1] || 'unknown';
+      };
+      // The mutation passes token_cids as a GraphQL variable; the tokens query
+      // interpolates them into the query text instead (buildTokensListQuery is
+      // documented as "inline arguments, no variables"). Both carriages have to
+      // be read, or half the lifecycle goes untagged.
+      const cidFromVariables = (value: unknown): string =>
+        tokenOf(Array.isArray(value) ? String(value[0] ?? '') : String(value ?? ''));
+      const cidFromQuery = (text: string): string => {
+        const match = /token_cids:\s*\[\s*"([^"]+)"/.exec(text);
+        return match ? tokenOf(match[1]) : 'unknown';
+      };
+
+      if (query?.includes('triggerTokenIndexing')) {
+        const token = cidFromVariables(variables?.token_cids);
+        const jobId = jobIds.size + 1;
+        jobIds.set(jobId, token);
+        indexerOps.push({ op: 'enqueue', token });
+        res.end(JSON.stringify({ data: { triggerTokenIndexing: { job_id: jobId } } }));
+        return;
+      }
+      if (query?.includes('jobStatus')) {
+        const jobId = Number(variables?.job_id);
+        indexerOps.push({ op: 'jobStatus', token: jobIds.get(jobId) ?? 'unknown' });
+        res.end(JSON.stringify({ data: { jobStatus: { status: 'completed', last_error: null } } }));
+        return;
+      }
+      if (query?.includes('tokens')) {
+        indexerOps.push({ op: 'tokens', token: cidFromQuery(query) });
+        res.end(JSON.stringify({ data: { tokens: { items: [], total: 0 } } }));
+        return;
+      }
+      indexerOps.push({ op: 'UNEXPECTED', token: 'unknown' });
+      res.statusCode = 400;
+      res.end(JSON.stringify({ errors: [{ message: 'mock: unexpected indexer operation' }] }));
     });
   });
+
   await new Promise<void>((resolveListen) => {
     indexerServer.listen(0, '127.0.0.1', resolveListen);
   });
@@ -106,6 +166,8 @@ let destroyResponseBody = false;
 beforeEach(() => {
   handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
   destroyResponseBody = false;
+  indexerOps = [];
+  jobIds.clear();
 });
 
 interface RunResult {
@@ -133,8 +195,10 @@ function runFind(args: string[], options: { stdin?: string } = {}): Promise<RunR
       env: {
         ...process.env,
         RASTER_API_URL: serverUrl,
-        // Without this the run reaches the real indexer once it passes the
-        // prompt, and polls it for POLLING_TIMEOUT_MS (60s).
+        // Without these the run reaches the real indexer once it passes the
+        // prompt, and polls it for POLLING_TIMEOUT_MS (60s). The override is
+        // gated on NODE_ENV so it cannot become ambient configuration.
+        NODE_ENV: 'test',
         INDEXER_API_URL: indexerUrl,
         FORCE_COLOR: '0',
       },
@@ -275,12 +339,38 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     };
     const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
     // What this test is for: --output skips the confirm prompt and goes
-    // straight to indexing. Assert that, not the exit code — the previous
-    // version killed the child on the "Indexing" line and asserted the kill
-    // landed first (code === null), which is a race against a live network
-    // call. A fast indexer lost it, and the release gate went red.
-    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
+    // straight to indexing. The earlier version killed the child on the
+    // "Indexing" line and asserted the kill landed first (code === null),
+    // which raced a live network call; a fast indexer lost it and the release
+    // gate went red.
     assert.doesNotMatch(result.stdout, /Build playlist with/);
+    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
+    // The mock carries the run through enqueue, poll, and token query, so the
+    // flow reaches a determinate end rather than being cut short.
+    assert.match(result.stdout, /2\/2 tokens indexed/);
+    assert.match(result.stderr, /No tokens could be indexed/);
+    assert.equal(result.code, 1);
+    // The exit message alone proves nothing: a client that regressed to
+    // reading `jobId` would fail at the enqueue and still land here. What
+    // shows the protocol path completed is each token's own lifecycle.
+    //
+    // Asserted per token, never across them: the two workflows run
+    // concurrently under Promise.all, so one token's enqueue can legitimately
+    // reach the mock before the other's first lookup. A single global sequence
+    // would reject valid interleavings and fail intermittently in CI — the
+    // same class of flake this suite was repaired to remove.
+    assert.ok(
+      !indexerOps.some((entry) => entry.op === 'UNEXPECTED'),
+      'mock saw an operation it does not model'
+    );
+    for (const token of ['1', '2']) {
+      const lifecycle = indexerOps.filter((entry) => entry.token === token).map((e) => e.op);
+      assert.deepEqual(
+        lifecycle,
+        ['tokens', 'enqueue', 'jobStatus', 'tokens'],
+        `token ${token}: looked up, missed, enqueued, polled to terminal, looked up again`
+      );
+    }
   });
 
   test('series with only unsupported-chain tokens → clear error, exit 1', async () => {
