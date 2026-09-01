@@ -24,6 +24,8 @@ interface EnrichOptions {
 const SKIP_COPY: Record<SkippedItem['reason'], string> = {
   'already-labelled': 'already has a manifest (use --force to replace)',
   'no-provenance': 'no provenance.contract chain/address/tokenId to look up',
+  // The indexer drops unresolved tokens from its response rather than
+  // reporting why, so there is no per-item reason to relay here.
   'not-indexed': 'the indexer returned nothing for it',
 };
 
@@ -87,9 +89,6 @@ export const enrichCommand = new Command('enrich')
         console.log(chalk.dim(`\n  Skipped ${result.skipped.length}:`));
         for (const skip of shown) {
           console.log(chalk.dim(`    ${skip.title} — ${SKIP_COPY[skip.reason]}`));
-          if (options.verbose && skip.detail) {
-            console.log(chalk.dim(`      ${skip.detail}`));
-          }
         }
         if (shown.length < result.skipped.length) {
           console.log(
