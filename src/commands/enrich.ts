@@ -1,6 +1,8 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
+import { randomBytes } from 'crypto';
+import { dirname, basename, join } from 'path';
 import {
   enrichPlaylistManifests,
   type Dp1Playlist,
@@ -16,6 +18,36 @@ interface EnrichOptions {
   output?: string;
   force: boolean;
   verbose: boolean;
+}
+
+/**
+ * writePlaylistAtomically replaces a file only once the new bytes are safely on
+ * disk.
+ *
+ * The default destination is the input file, and a plain write truncates it
+ * first. Enrichment runs after a lookup that can take minutes while the indexer
+ * warms tokens, so the window between truncation and a complete write is a
+ * window in which an interruption, a full disk, or an I/O error leaves the
+ * curator with an empty or half-written playlist and no copy of what they had.
+ * A rename within the same directory is atomic, so the original file survives
+ * intact until the replacement is complete.
+ *
+ * The temporary file is created alongside the destination rather than in the
+ * system temp directory: rename is only atomic within a filesystem, and those
+ * are not guaranteed to be the same one.
+ */
+async function writePlaylistAtomically(destination: string, contents: string): Promise<void> {
+  const temporary = join(
+    dirname(destination),
+    `.${basename(destination)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+  );
+  try {
+    await fs.writeFile(temporary, contents);
+    await fs.rename(temporary, destination);
+  } catch (error) {
+    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    throw error;
+  }
 }
 
 /**
@@ -110,7 +142,7 @@ export const enrichCommand = new Command('enrich')
         if (!after.valid) {
           reportInvalid('Enrichment produced an invalid playlist:', after);
         }
-        await fs.writeFile(destination, JSON.stringify(result.playlist, null, 2));
+        await writePlaylistAtomically(destination, JSON.stringify(result.playlist, null, 2));
       }
 
       console.log(
