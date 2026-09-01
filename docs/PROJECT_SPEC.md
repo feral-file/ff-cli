@@ -248,15 +248,18 @@ and nothing else. `enrich` is the repair path for those.
   often the still itself. When the curator kept a live HTML source instead, the
   item would otherwise end up with no thumbnail — the empty grid tile this
   command exists to remove. When the indexer's source differs from the item's
-  and is http(s) **and is demonstrably an image**, it is that suppressed still
+  and is http(s) **and is media the app can rasterize**, it is that suppressed
+  still
   and becomes the thumbnail. The type check matters: `getBestMediaUrl` prefers
   `display.animation_url` and media assets over `display.image_url`, so the
   indexer's source is frequently a live HTML rendition, and putting one in the
   thumbnail slot is worse than leaving it empty — the grid still cannot
-  rasterize it and the item now claims a still it does not have. A
+  rasterize it and the item now claims a still it does not have. The predicate
+  matches the media types `playlist-builder.js` already recognizes, images plus
+  SVG and video, and rejects HTML. A
   thumbnail-only manifest is emitted where none was, unlike a title-only one:
   it is the difference between a tile and an empty square.
-- `evm` names a family, and enrichment resolves it as Ethereum. DP-1 core §6
+- `evm` names a family, and enrichment refuses to guess which member. DP-1 §6
   carries no network identity, and the indexer maps Ethereum, Polygon,
   Arbitrum, Optimism, Base, and Zora all back to `evm`, so neither the request
   nor the response can say which network is meant. Ethereum is chosen because
@@ -264,8 +267,11 @@ and nothing else. `enrich` is the repair path for those.
   ethereum to `eip155:1` and tezos to `tezos:mainnet` and throws for anything
   else. The residual risk is narrow: an L2 work whose address and token id also
   exist on Ethereum would take the Ethereum work's metadata. The command
-  reports how many coordinates this assumption covered, so it is stated rather
-  than silent; widening it belongs in the indexer client, not here.
+  is the operator's to make: `--assume-ethereum` asserts it, and without that
+  flag `evm` items are skipped with a reason that names the flag. The warning
+  prints before anything is written, so an operator who did not mean to assert
+  it still has the file they started with. Reaching an actual L2 belongs in the
+  indexer client, which maps only `ethereum` and `tezos` today.
 - In-place writes refuse to run over an input that changed while the lookup
   was in flight. The comparison is a hash of the bytes actually parsed, against
   the resolved write target, so `-o` naming the input by another spelling and a

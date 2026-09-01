@@ -17,6 +17,7 @@ const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
 interface EnrichOptions {
   output?: string;
   force: boolean;
+  assumeEthereum: boolean;
   verbose: boolean;
 }
 
@@ -181,6 +182,7 @@ const SKIP_COPY: Record<SkippedItem['reason'], string> = {
   'already-labelled': 'already has a manifest (use --force to replace)',
   'external-ref': 'carries an external ref, which outranks an inline manifest',
   'no-provenance': 'no provenance.contract chain/address/tokenId to look up',
+  'ambiguous-chain': 'chain "evm" names a family; pass --assume-ethereum to assert the network',
   // The indexer drops unresolved tokens from its response rather than
   // reporting why, so there is no per-item reason to relay here.
   'not-indexed': 'the indexer returned nothing for it',
@@ -192,6 +194,12 @@ export const enrichCommand = new Command('enrich')
   .argument('<file>', 'Path to the DP-1 playlist file')
   .option('-o, --output <filename>', 'Write here instead of overwriting the input')
   .option('--force', 'Replace manifests that already exist', false)
+  .option(
+    '--assume-ethereum',
+    'Treat DP-1 "evm" coordinates as Ethereum. Without this they are skipped, ' +
+      'because "evm" names a family and the wrong member yields another artwork.',
+    false
+  )
   .option('-v, --verbose', 'Show detailed output', false)
   .action(async (file: string, options: EnrichOptions) => {
     try {
@@ -234,10 +242,23 @@ export const enrichCommand = new Command('enrich')
 
       const result = await enrichPlaylistManifests(playlist, lookup, {
         force: options.force,
+        assumeEthereum: options.assumeEthereum,
         onProgress,
       });
       if (printedProgress) {
         process.stdout.write('\n');
+      }
+
+      // Said before anything is written, so an operator who did not mean to
+      // assert the network still has the file they started with.
+      if (result.assumedEthereum > 0) {
+        console.log(
+          chalk.yellow(
+            `\n  ${result.assumedEthereum} coordinate(s) gave chain "evm" and were looked up on` +
+              `\n  Ethereum because --assume-ethereum was passed. An L2 work sharing an` +
+              `\n  address and token id with an Ethereum one would take the wrong metadata.`
+          )
+        );
       }
 
       const destination = options.output ?? file;
@@ -279,18 +300,6 @@ export const enrichCommand = new Command('enrich')
       );
       if (shouldWrite) {
         console.log(chalk.dim(`  Output: ${destination}`));
-      }
-
-      // DP-1 carries no network identity for an EVM coordinate, and the
-      // indexer client can only reach Ethereum. Say so rather than let the
-      // assumption ride silently into a document that gets signed.
-      if (result.assumedEthereum > 0) {
-        console.log(
-          chalk.dim(
-            `\n  ${result.assumedEthereum} coordinate(s) gave chain "evm", which names a family.` +
-              `\n  Looked up on Ethereum; an L2 work would need a wider indexer client.`
-          )
-        );
       }
 
       if (result.skipped.length > 0) {

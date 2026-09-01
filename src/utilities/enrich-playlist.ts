@@ -113,6 +113,7 @@ export type SkipReason =
   | 'already-labelled'
   | 'external-ref'
   | 'no-provenance'
+  | 'ambiguous-chain'
   | 'not-indexed'
   | 'no-metadata';
 
@@ -140,6 +141,12 @@ export interface EnrichOptions {
   /** Rewrite manifests that already exist. Off by default: a hand-authored
    *  manifest may carry curator intent the indexer does not know about. */
   force?: boolean;
+  /**
+   * The operator's assertion that DP-1 `evm` coordinates in this playlist are
+   * Ethereum. Without it those items are skipped rather than guessed at; see
+   * AMBIGUOUS_CHAIN.
+   */
+  assumeEthereum?: boolean;
   onProgress?: (done: number, total: number) => void;
 }
 
@@ -295,8 +302,26 @@ function stillFromIndexerSource(item: Dp1Item, resolved: IndexerItem): string {
   return looksLikeImage(indexerSource) ? indexerSource : '';
 }
 
-/** Image extensions the FF1 display path renders. */
-const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp'];
+/**
+ * Media the app can draw a grid tile from, matching the types
+ * playlist-builder.js already recognizes. SVG and video belong here: the app
+ * rasterizes both, and excluding them left works with the empty tile this
+ * command exists to remove. HTML is deliberately absent — an unrasterizable
+ * page in the thumbnail slot is worse than an empty slot, because the item
+ * then claims a still it does not have.
+ */
+const RASTERIZABLE_EXTENSIONS = [
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.avif',
+  '.bmp',
+  '.svg',
+  '.mp4',
+  '.webm',
+];
 
 /**
  * looksLikeImage tests a URL's path extension, ignoring query and fragment.
@@ -309,7 +334,7 @@ function looksLikeImage(url: string): boolean {
     pathname = url.split('?')[0].split('#')[0];
   }
   const lower = pathname.toLowerCase();
-  return IMAGE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+  return RASTERIZABLE_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
 
 /**
@@ -484,6 +509,14 @@ export async function enrichPlaylistManifests(
     const key = coordinateKeyOf(item.provenance);
     if (!coordinate || !key) {
       skipped.push({ index, title: describeItem(item, index), reason: 'no-provenance' });
+      return;
+    }
+    // `evm` names a family and the response cannot narrow it, so enriching one
+    // on the assumption of Ethereum can attach a different artwork's artist,
+    // description, and still — into a document the curator then signs. The
+    // operator has to assert the network; the command will not assume it.
+    if (key.startsWith(`${AMBIGUOUS_CHAIN}:`) && !options.assumeEthereum) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'ambiguous-chain' });
       return;
     }
     pending.push({ index, key });
