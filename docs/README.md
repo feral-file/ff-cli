@@ -197,8 +197,11 @@ ff-cli enrich playlist.json --force        # replace existing manifests
 
 It writes `inlineManifest` and nothing else. Items with no
 `provenance.contract` chain, address, and token id cannot be looked up and are
-reported rather than guessed at. Enriching changes the document, so the
-signature is removed and the playlist must be re-signed before playing:
+reported rather than guessed at, and items carrying an external `ref` are left
+alone because `ref` outranks an inline manifest at the device. The playlist is
+validated before and after; on failure the file is left untouched. Enriching
+changes the document, so the signature is removed and the playlist must be
+re-signed before playing:
 
 ```bash
 ff-cli enrich playlist.json && ff-cli sign playlist.json

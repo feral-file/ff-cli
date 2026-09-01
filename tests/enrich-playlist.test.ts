@@ -189,6 +189,50 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.skipped[0].reason, 'not-indexed');
   });
 
+  // F1: ref outranks inlineManifest at the device, so enriching a ref-backed
+  // item writes a manifest nothing reads while still voiding the signature.
+  test('treats an item with an external ref as already labelled', async () => {
+    const playlist = playlistOf(item({ ref: 'https://example.com/manifest.json' }));
+    playlist.signatures = [{ alg: 'ed25519' }];
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'external-ref');
+    assert.equal(playlist.items?.[0].inlineManifest, undefined);
+    assert.deepEqual(playlist.signatures, [{ alg: 'ed25519' }], 'signature must survive');
+  });
+
+  test('--force does not convert a ref-backed item', async () => {
+    const playlist = playlistOf(
+      item({ ref: 'https://example.com/manifest.json', refHash: 'sha256:abc' })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), { force: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'external-ref');
+    assert.equal(playlist.items?.[0].ref, 'https://example.com/manifest.json');
+    assert.equal(playlist.items?.[0].refHash, 'sha256:abc');
+  });
+
+  test('an empty ref string does not count as a reference', async () => {
+    const playlist = playlistOf(item({ ref: '   ' }));
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.enriched, 1);
+  });
+
+  // F3: a repeated work must not enqueue a separate indexing job per copy.
+  test('looks a repeated coordinate up once and applies it to every copy', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') }),
+      item({ id: 'c', title: 'C', provenance: provenance('0xAAA', '1') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(seen));
+    assert.equal(seen[0].length, 2, 'the repeated coordinate must be looked up once');
+    assert.equal(result.enriched, 3, 'every copy still gets the manifest');
+    assert.ok(playlist.items?.[0].inlineManifest);
+    assert.ok(playlist.items?.[2].inlineManifest);
+  });
+
   test('skips an item that already carries a manifest', async () => {
     const existing = manifestNamed('hand written', 'Someone');
     const playlist = playlistOf(item({ inlineManifest: existing }));

@@ -51,6 +51,9 @@ export interface Dp1Item {
   duration?: number;
   provenance?: Dp1Provenance;
   inlineManifest?: Dp1Manifest;
+  /** URI of an externally hosted Ref Manifest. Outranks inlineManifest. */
+  ref?: string;
+  refHash?: string;
   [key: string]: unknown;
 }
 
@@ -102,7 +105,7 @@ export type TokenLookup = (
 ) => Promise<IndexerItem[]>;
 
 /** SkipReason explains, per item, why enrichment did not write a manifest. */
-export type SkipReason = 'already-labelled' | 'no-provenance' | 'not-indexed';
+export type SkipReason = 'already-labelled' | 'external-ref' | 'no-provenance' | 'not-indexed';
 
 export interface SkippedItem {
   index: number;
@@ -260,9 +263,30 @@ export async function enrichPlaylistManifests(
 ): Promise<EnrichOutcome> {
   const items = Array.isArray(playlist.items) ? playlist.items : [];
   const skipped: SkippedItem[] = [];
-  const pending: { index: number; key: string; coordinate: TokenCoordinate }[] = [];
+  const pending: { index: number; key: string }[] = [];
+  // One lookup per distinct artwork, not per item. getNFTTokenInfoBatch runs a
+  // lookup for each token it is handed, and a token the indexer has not seen
+  // triggers an indexing job and a poll that can take minutes. A playlist that
+  // deliberately repeats a work — the same piece at two points in a loop —
+  // would otherwise submit that job once per appearance.
+  const coordinates = new Map<string, TokenCoordinate>();
 
   items.forEach((item, index) => {
+    // An item with a `ref` is already labelled, by a manifest this command
+    // cannot see. Ref outranks inlineManifest in the resolution order, so
+    // enriching one writes a manifest the device will ignore while still
+    // invalidating the signature: damage with no visible change.
+    //
+    // --force does not override this. Making the inline manifest win would
+    // mean deleting the curator's `ref` and `refHash`, which is a different
+    // and larger decision than filling in missing metadata — and one that
+    // silently discards the integrity hash the remote manifest is checked
+    // against. If that conversion is ever wanted it should be its own flag,
+    // named for what it does.
+    if (typeof item.ref === 'string' && item.ref.trim().length > 0) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'external-ref' });
+      return;
+    }
     if (item.inlineManifest && !options.force) {
       skipped.push({ index, title: describeItem(item, index), reason: 'already-labelled' });
       return;
@@ -273,17 +297,17 @@ export async function enrichPlaylistManifests(
       skipped.push({ index, title: describeItem(item, index), reason: 'no-provenance' });
       return;
     }
-    pending.push({ index, key, coordinate });
+    pending.push({ index, key });
+    if (!coordinates.has(key)) {
+      coordinates.set(key, coordinate);
+    }
   });
 
   if (pending.length === 0) {
     return { playlist, enriched: 0, skipped, signatureInvalidated: false };
   }
 
-  const resolved = await lookup(
-    pending.map((entry) => entry.coordinate),
-    options.onProgress
-  );
+  const resolved = await lookup([...coordinates.values()], options.onProgress);
 
   // Index what came back by its own coordinate. A response carrying no usable
   // provenance cannot be attributed to any request, so it is dropped rather

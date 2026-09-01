@@ -7,6 +7,7 @@ import {
   type SkippedItem,
   type TokenLookup,
 } from '../utilities/enrich-playlist';
+import { validatePlaylist } from '../utilities/playlist-verifier';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
@@ -18,11 +19,34 @@ interface EnrichOptions {
 }
 
 /**
+ * reportInvalid prints structural validation diagnostics and exits non-zero.
+ *
+ * Enrichment refuses to work on a document DP-1 rejects, and refuses to write
+ * one. Writing an invalid playlist would replace the operator's file with
+ * something sign, publish, and play all reject later, having reported success.
+ */
+function reportInvalid(
+  stage: string,
+  result: { error?: string; details?: Array<{ path: string; message: string }> }
+): never {
+  console.error(chalk.red(`\n${stage}`));
+  if (result.error) {
+    console.error(chalk.dim(`  ${result.error}`));
+  }
+  for (const detail of result.details ?? []) {
+    console.error(chalk.dim(`  ${detail.path}: ${detail.message}`));
+  }
+  console.error(chalk.dim('\n  The file was left unchanged.\n'));
+  process.exit(1);
+}
+
+/**
  * SKIP_COPY explains each skip in the operator's terms rather than the code's.
  * `no-provenance` is the one a person can act on, so it says what to add.
  */
 const SKIP_COPY: Record<SkippedItem['reason'], string> = {
   'already-labelled': 'already has a manifest (use --force to replace)',
+  'external-ref': 'carries an external ref, which outranks an inline manifest',
   'no-provenance': 'no provenance.contract chain/address/tokenId to look up',
   // The indexer drops unresolved tokens from its response rather than
   // reporting why, so there is no per-item reason to relay here.
@@ -44,6 +68,13 @@ export const enrichCommand = new Command('enrich')
       if (total === 0) {
         console.error(chalk.red('That playlist has no items.'));
         process.exit(1);
+      }
+
+      // Validate before spending minutes on indexer lookups for a document
+      // that was never going to be writable.
+      const before = await validatePlaylist(playlist);
+      if (!before.valid) {
+        reportInvalid('That playlist is not valid DP-1:', before);
       }
 
       // Warming previously-unseen tokens can take minutes, so a human watching
@@ -72,6 +103,13 @@ export const enrichCommand = new Command('enrich')
 
       const destination = options.output ?? file;
       if (result.enriched > 0) {
+        // Re-validate the enriched candidate. An inline manifest is schema-
+        // checked the same way a fetched one is (playlists extension §3.6), so
+        // a malformed manifest from the indexer must not reach the file.
+        const after = await validatePlaylist(result.playlist);
+        if (!after.valid) {
+          reportInvalid('Enrichment produced an invalid playlist:', after);
+        }
         await fs.writeFile(destination, JSON.stringify(result.playlist, null, 2));
       }
 

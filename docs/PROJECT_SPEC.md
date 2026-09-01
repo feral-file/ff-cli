@@ -217,9 +217,24 @@ and nothing else. `enrich` is the repair path for those.
 - DP-1 names the EVM family `evm`; the FF indexer names it `ethereum`. Enrich
   translates between the two. Unlisted chain names pass through so the indexer
   decides what it supports.
-- Enrichment changes the document, so any `signatures[]` envelope is removed and
-  the playlist must be re-signed. Leaving a stale envelope in place would
-  produce a file that fails verification at the device with no explanation.
+- Enrichment changes the document, so both the `signatures[]` envelope and the
+  legacy flat `signature` are removed and the playlist must be re-signed.
+  Leaving a stale envelope in place would produce a file that fails
+  verification at the device with no explanation.
+- An item carrying a `ref` is already labelled by a manifest the CLI cannot
+  see, and `ref` outranks `inlineManifest` in the resolution order, so
+  enrichment skips it. `--force` does not override that: making the inline
+  manifest win would mean deleting the curator's `ref` and `refHash`, which
+  discards the integrity hash the remote manifest is checked against. That
+  conversion, if ever wanted, belongs behind its own flag.
+- Enrichment looks each distinct coordinate up once, however many items share
+  it. A token the indexer has not seen triggers an indexing job and a poll that
+  can take minutes, and a playlist that repeats a work would otherwise submit
+  that job once per appearance.
+- The playlist is validated before lookup and the enriched candidate is
+  validated before writing. On either failure the diagnostics are printed and
+  the file is left untouched, rather than replaced with a document that sign,
+  publish, and play would each reject later.
 
 ## Deterministic-first behavior
 
