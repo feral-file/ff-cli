@@ -73,17 +73,31 @@ before(async () => {
   }
   serverUrl = `http://127.0.0.1:${address.port}/graphql`;
 
-  // Answers the enqueue mutation, then reports no indexed tokens, so a run
-  // that reaches indexing ends on its own instead of polling for 60s.
+  // Speaks the indexer's actual GraphQL contract, per operation: the enqueue
+  // mutation returns `job_id` (snake_case — `jobId` fails the Number.isFinite
+  // check and aborts before polling), jobStatus returns a terminal `completed`,
+  // and tokens returns the v2 `{ items: [] }` envelope. Answering with the
+  // wrong shape would let this suite stay green over a broken client/mock
+  // protocol, which is what it is here to catch.
+  //
+  // The empty token list is deliberate: the run completes the whole
+  // enqueue -> poll -> query path and then exits on "no tokens could be
+  // indexed", which is a determinate outcome the test can assert.
   indexerServer = createServer((req, res) => {
-    req.resume();
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
+      const { query } = JSON.parse(body || '{}') as { query?: string };
       res.setHeader('Content-Type', 'application/json');
-      res.end(
-        JSON.stringify({
-          data: { triggerTokenIndexing: { jobId: 'test-job' }, tokens: [] },
-        })
-      );
+      if (query?.includes('triggerTokenIndexing')) {
+        res.end(JSON.stringify({ data: { triggerTokenIndexing: { job_id: 1 } } }));
+        return;
+      }
+      if (query?.includes('jobStatus')) {
+        res.end(JSON.stringify({ data: { jobStatus: { status: 'completed', last_error: null } } }));
+        return;
+      }
+      res.end(JSON.stringify({ data: { tokens: { items: [], total: 0 } } }));
     });
   });
   await new Promise<void>((resolveListen) => {
@@ -133,8 +147,10 @@ function runFind(args: string[], options: { stdin?: string } = {}): Promise<RunR
       env: {
         ...process.env,
         RASTER_API_URL: serverUrl,
-        // Without this the run reaches the real indexer once it passes the
-        // prompt, and polls it for POLLING_TIMEOUT_MS (60s).
+        // Without these the run reaches the real indexer once it passes the
+        // prompt, and polls it for POLLING_TIMEOUT_MS (60s). The override is
+        // gated on NODE_ENV so it cannot become ambient configuration.
+        NODE_ENV: 'test',
         INDEXER_API_URL: indexerUrl,
         FORCE_COLOR: '0',
       },
@@ -275,12 +291,17 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     };
     const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
     // What this test is for: --output skips the confirm prompt and goes
-    // straight to indexing. Assert that, not the exit code — the previous
-    // version killed the child on the "Indexing" line and asserted the kill
-    // landed first (code === null), which is a race against a live network
-    // call. A fast indexer lost it, and the release gate went red.
-    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
+    // straight to indexing. The earlier version killed the child on the
+    // "Indexing" line and asserted the kill landed first (code === null),
+    // which raced a live network call; a fast indexer lost it and the release
+    // gate went red.
     assert.doesNotMatch(result.stdout, /Build playlist with/);
+    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
+    // The mock carries the run through enqueue, poll, and token query, so the
+    // flow reaches a determinate end rather than being cut short.
+    assert.match(result.stdout, /2\/2 tokens indexed/);
+    assert.match(result.stderr, /No tokens could be indexed/);
+    assert.equal(result.code, 1);
   });
 
   test('series with only unsupported-chain tokens → clear error, exit 1', async () => {
