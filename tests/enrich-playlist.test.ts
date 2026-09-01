@@ -233,6 +233,56 @@ describe('enrichPlaylistManifests', () => {
     assert.ok(playlist.items?.[2].inlineManifest);
   });
 
+  // F1: the indexer derives the manifest id from the coordinate, so two items
+  // of one artwork share it. Overriding the title without changing the id
+  // would produce two documents claiming to be the same cached manifest.
+  test('gives distinct manifest ids to repeated coordinates with distinct titles', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'Curator A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'Curator B', provenance: provenance('0xaaa', '1') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.enriched, 2);
+    const a = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = playlist.items?.[1].inlineManifest as Record<string, unknown>;
+    assert.notEqual(a.id, b.id, 'different content must not share a cache identity');
+    assert.equal((a.metadata as Record<string, unknown>).title, 'Curator A');
+    assert.equal((b.metadata as Record<string, unknown>).title, 'Curator B');
+  });
+
+  test('derives the same manifest id across runs for the same title', async () => {
+    const first = playlistOf(item({ title: 'Stable' }));
+    const second = playlistOf(item({ title: 'Stable' }));
+    await enrichPlaylistManifests(first, hit());
+    await enrichPlaylistManifests(second, hit());
+    const a = first.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = second.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal(a.id, b.id, 'ids must be deterministic, not random');
+  });
+
+  test('keeps the indexer id when the titles already agree', async () => {
+    const playlist = playlistOf(item({ title: 'Pre-Process #0' }));
+    await enrichPlaylistManifests(playlist, hit());
+    const m = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal(m.id, MANIFEST.id, 'unchanged content keeps its identity');
+  });
+
+  // F4: resolved-with-nothing-to-attach is not the same as never-resolved.
+  test('separates a resolved token with no manifest from an unresolved one', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') })
+    );
+    const lookup = async (): Promise<IndexerItem[]> => [
+      // Resolved, but the indexer had only a title, so no manifest was built.
+      { provenance: provenance('0xaaa', '1', 'evm') },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+    assert.equal(result.skipped[1].reason, 'not-indexed');
+  });
+
   test('skips an item that already carries a manifest', async () => {
     const existing = manifestNamed('hand written', 'Someone');
     const playlist = playlistOf(item({ inlineManifest: existing }));

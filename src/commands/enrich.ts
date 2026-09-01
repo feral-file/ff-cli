@@ -37,13 +37,28 @@ interface EnrichOptions {
  * are not guaranteed to be the same one.
  */
 async function writePlaylistAtomically(destination: string, contents: string): Promise<void> {
+  // Follow a symlink to its target before replacing anything. rename() would
+  // replace the link itself, silently detaching a playlist that other paths
+  // reach through that name while reporting success.
+  let target = destination;
+  const existing = await fs.lstat(destination).catch(() => null);
+  if (existing?.isSymbolicLink()) {
+    target = await fs.realpath(destination);
+  }
+
   const temporary = join(
-    dirname(destination),
-    `.${basename(destination)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
+    dirname(target),
+    `.${basename(target)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
   );
   try {
     await fs.writeFile(temporary, contents);
-    await fs.rename(temporary, destination);
+    // A new file gets the default creation mode, so replacing a playlist a
+    // curator had restricted to 0600 would quietly publish it as 0644.
+    const current = await fs.stat(target).catch(() => null);
+    if (current) {
+      await fs.chmod(temporary, current.mode & 0o7777);
+    }
+    await fs.rename(temporary, target);
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
@@ -83,6 +98,7 @@ const SKIP_COPY: Record<SkippedItem['reason'], string> = {
   // The indexer drops unresolved tokens from its response rather than
   // reporting why, so there is no per-item reason to relay here.
   'not-indexed': 'the indexer returned nothing for it',
+  'no-metadata': 'the indexer resolved it but has no artist, description, or still image',
 };
 
 export const enrichCommand = new Command('enrich')
@@ -134,7 +150,12 @@ export const enrichCommand = new Command('enrich')
       }
 
       const destination = options.output ?? file;
-      if (result.enriched > 0) {
+      // --output names a file the caller expects to find afterwards, so it is
+      // written even when nothing was enriched. Overwriting the input on a
+      // no-op would be pure risk for no gain, so that case still writes
+      // nothing.
+      const shouldWrite = result.enriched > 0 || options.output !== undefined;
+      if (shouldWrite) {
         // Re-validate the enriched candidate. An inline manifest is schema-
         // checked the same way a fetched one is (playlists extension §3.6), so
         // a malformed manifest from the indexer must not reach the file.
@@ -150,7 +171,7 @@ export const enrichCommand = new Command('enrich')
           ? chalk.green(`\n${result.enriched} of ${total} item(s) enriched`)
           : chalk.yellow('\nNothing to enrich')
       );
-      if (result.enriched > 0) {
+      if (shouldWrite) {
         console.log(chalk.dim(`  Output: ${destination}`));
       }
 

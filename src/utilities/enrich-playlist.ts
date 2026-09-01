@@ -23,6 +23,8 @@
  * artist line in a signed document is worse than a missing one.
  */
 
+import { createHash } from 'node:crypto';
+
 import * as logger from '../logger';
 
 /**
@@ -105,7 +107,12 @@ export type TokenLookup = (
 ) => Promise<IndexerItem[]>;
 
 /** SkipReason explains, per item, why enrichment did not write a manifest. */
-export type SkipReason = 'already-labelled' | 'external-ref' | 'no-provenance' | 'not-indexed';
+export type SkipReason =
+  | 'already-labelled'
+  | 'external-ref'
+  | 'no-provenance'
+  | 'not-indexed'
+  | 'no-metadata';
 
 export interface SkippedItem {
   index: number;
@@ -235,10 +242,38 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
   if (curatorTitle.length === 0) {
     return manifest;
   }
+  const metadata = manifest.metadata ?? {};
+  if (metadata.title === curatorTitle) {
+    return manifest;
+  }
+  // The indexer derives a manifest id from the token's coordinate, so two
+  // items of the same artwork receive the same id. That id is the manifest's
+  // cache identity, so overriding the title without changing it produces two
+  // different documents claiming to be the same one — and a consumer that
+  // cached the first would show its label on the second. Deriving the id from
+  // the original plus the title keeps it deterministic across runs while
+  // making distinct content distinctly identified.
+  const id = typeof manifest.id === 'string' ? manifest.id : '';
   return {
     ...manifest,
-    metadata: { ...(manifest.metadata ?? {}), title: curatorTitle },
+    id: derivedManifestId(id, curatorTitle),
+    metadata: { ...metadata, title: curatorTitle },
   };
+}
+
+/**
+ * derivedManifestId produces a stable id for a manifest whose title this
+ * command replaced, shaped as a UUID so it reads like every other manifest id.
+ */
+function derivedManifestId(originalId: string, title: string): string {
+  const digest = createHash('sha256').update(`${originalId}\n${title}`).digest('hex');
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join('-');
 }
 
 /**
@@ -327,10 +362,15 @@ export async function enrichPlaylistManifests(
     const match = byCoordinate.get(entry.key);
     const manifest = match ? manifestFor(item, match) : undefined;
     if (!manifest) {
+      // The indexer resolving a token and the indexer having anything worth
+      // attaching are different outcomes. buildInlineManifestForToken returns
+      // undefined when it has only a title, because a title-only manifest adds
+      // payload to every transfer without adding information. Reporting that
+      // as "the indexer returned nothing" would be false.
       skipped.push({
         index: entry.index,
         title: describeItem(item, entry.index),
-        reason: 'not-indexed',
+        reason: match ? 'no-metadata' : 'not-indexed',
       });
       continue;
     }

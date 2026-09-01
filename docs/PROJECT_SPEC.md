@@ -231,6 +231,25 @@ and nothing else. `enrich` is the repair path for those.
   it. A token the indexer has not seen triggers an indexing job and a poll that
   can take minutes, and a playlist that repeats a work would otherwise submit
   that job once per appearance.
+- Overriding an item's title changes the manifest's content, so it also changes
+  the manifest's `id`. The indexer derives that id from the token coordinate,
+  so two items of one artwork receive the same one; leaving it alone while
+  changing the title would produce two documents claiming to be the same cached
+  manifest. The replacement is derived from the original id and the title, so
+  it is deterministic across runs.
+- The indexer resolving a token and having something worth attaching are
+  different outcomes: `buildInlineManifestForToken` returns nothing when it has
+  only a title, since a title-only manifest adds payload without adding
+  information. Enrichment reports those separately from tokens it could not
+  resolve at all.
+- In-place writes are atomic: the candidate goes to a temporary file beside the
+  destination and is renamed over it, so an interruption cannot leave a
+  truncated playlist. A symlinked destination is followed to its target rather
+  than replaced, and the existing file's permission mode is carried onto the
+  replacement.
+- `--output` names a file the caller expects to exist afterwards, so it is
+  written even when nothing was enriched. A no-op without `--output` writes
+  nothing rather than rewriting the input for no gain.
 - The playlist is validated before lookup and the enriched candidate is
   validated before writing. On either failure the diagnostics are printed and
   the file is left untouched, rather than replaced with a document that sign,
