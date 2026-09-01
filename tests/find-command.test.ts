@@ -8,9 +8,10 @@
  * prompt bypass, the single-token fallback messaging, and the
  * zero-supported-tokens failure exit.
  *
- * All prompts are answered "n" (or bypassed and the child killed once the
- * flow provably passed the prompt), so no test reaches the FF indexer —
- * the suite stays hermetic.
+ * All prompts are answered "n", or bypassed with --output. Both the Raster
+ * client and the FF indexer client are pointed at the mock server
+ * (RASTER_API_URL, INDEXER_API_URL), so the suite is hermetic: no test
+ * reaches a network service, and none depends on how fast one answers.
  */
 
 import assert from 'node:assert/strict';
@@ -34,6 +35,12 @@ type GraphQLHandler = (query: string, variables: Record<string, unknown>) => unk
 let server: Server;
 let serverUrl: string;
 let handler: GraphQLHandler;
+
+// The FF indexer client gets its own server: sharing one with Raster would
+// force the handler to tell the two GraphQL vocabularies apart by substring,
+// and both speak of "tokens".
+let indexerServer: Server;
+let indexerUrl: string;
 
 const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
 
@@ -65,10 +72,33 @@ before(async () => {
     throw new Error('mock Raster server did not bind to a port');
   }
   serverUrl = `http://127.0.0.1:${address.port}/graphql`;
+
+  // Answers the enqueue mutation, then reports no indexed tokens, so a run
+  // that reaches indexing ends on its own instead of polling for 60s.
+  indexerServer = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(
+        JSON.stringify({
+          data: { triggerTokenIndexing: { jobId: 'test-job' }, tokens: [] },
+        })
+      );
+    });
+  });
+  await new Promise<void>((resolveListen) => {
+    indexerServer.listen(0, '127.0.0.1', resolveListen);
+  });
+  const indexerAddress = indexerServer.address();
+  if (indexerAddress === null || typeof indexerAddress === 'string') {
+    throw new Error('mock indexer server did not bind to a port');
+  }
+  indexerUrl = `http://127.0.0.1:${indexerAddress.port}/graphql`;
 });
 
 after(() => {
   server.close();
+  indexerServer.close();
 });
 
 let destroyResponseBody = false;
@@ -81,7 +111,7 @@ beforeEach(() => {
 interface RunResult {
   stdout: string;
   stderr: string;
-  /** Process exit code; null when the run was killed via `killOn`. */
+  /** Process exit code. */
   code: number | null;
 }
 
@@ -89,14 +119,13 @@ interface RunResult {
  * Run `ff-cli find <args>` against the mock Raster server.
  *
  * `stdin` is written to the child's stdin and closed (prompt answers).
- * `killOn` kills the child once stdout matches — used to stop a run that
- * has provably passed the assertion point but would otherwise continue
- * into the (hardcoded, network) FF indexer.
+ *
+ * Every run completes on its own: both GraphQL clients are pointed at local
+ * mocks, so there is no network call to cut short. The harness used to take a
+ * `killOn` regex and SIGKILL the child mid-run to stop it reaching the real
+ * indexer; that raced the network and is gone.
  */
-function runFind(
-  args: string[],
-  options: { stdin?: string; killOn?: RegExp } = {}
-): Promise<RunResult> {
+function runFind(args: string[], options: { stdin?: string } = {}): Promise<RunResult> {
   return new Promise((resolveRun, rejectRun) => {
     const dir = mkdtempSync(join(tmpdir(), 'ff-find-cmd-'));
     const child = spawn(process.execPath, [tsxCli, cliEntry, 'find', ...args], {
@@ -104,6 +133,9 @@ function runFind(
       env: {
         ...process.env,
         RASTER_API_URL: serverUrl,
+        // Without this the run reaches the real indexer once it passes the
+        // prompt, and polls it for POLLING_TIMEOUT_MS (60s).
+        INDEXER_API_URL: indexerUrl,
         FORCE_COLOR: '0',
       },
     });
@@ -111,7 +143,6 @@ function runFind(
     let stdout = '';
     let stderr = '';
     let settled = false;
-    let killedByMatcher = false;
     let timedOut = false;
 
     const finish = (result: RunResult | Error): void => {
@@ -144,10 +175,6 @@ function runFind(
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString();
-      if (options.killOn && !killedByMatcher && options.killOn.test(stdout)) {
-        killedByMatcher = true;
-        child.kill('SIGKILL');
-      }
     });
     child.stderr.on('data', (chunk: Buffer) => {
       stderr += chunk.toString();
@@ -157,7 +184,7 @@ function runFind(
       if (timedOut) {
         finish(new Error(`find timed out.\nstdout:\n${stdout}\nstderr:\n${stderr}`));
       } else {
-        finish({ stdout, stderr, code: killedByMatcher ? null : code });
+        finish({ stdout, stderr, code });
       }
     });
 
@@ -246,12 +273,13 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
     };
-    // killOn stops the run once it has provably passed the prompt — the
-    // next step would call the real FF indexer.
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
-      killOn: /Indexing 2 tokens via FF indexer/,
-    });
-    assert.equal(result.code, null);
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
+    // What this test is for: --output skips the confirm prompt and goes
+    // straight to indexing. Assert that, not the exit code — the previous
+    // version killed the child on the "Indexing" line and asserted the kill
+    // landed first (code === null), which is a race against a live network
+    // call. A fast indexer lost it, and the release gate went red.
+    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
     assert.doesNotMatch(result.stdout, /Build playlist with/);
   });
 

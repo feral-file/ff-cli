@@ -5,7 +5,10 @@
  */
 
 const { PlaylistItemBuilder, ProvenanceBuilder, ContractBuilder } = require('dp1-js');
-const GRAPHQL_ENDPOINT = 'https://indexer.feralfile.com/graphql';
+// Production by default. INDEXER_API_URL exists so tests can point the
+// client at a local mock, the same way RASTER_API_URL already works — it
+// is not user-facing configuration, which stays removed (initializeIndexer).
+const GRAPHQL_ENDPOINT = process.env.INDEXER_API_URL || 'https://indexer.feralfile.com/graphql';
 const { fetchWithTimeout } = require('./http');
 const logger = require('../logger');
 const { applyTimingToItemBuilder, buildDefaultDisplay } = require('./playlist-builder');
