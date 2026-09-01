@@ -283,6 +283,88 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.skipped[1].reason, 'not-indexed');
   });
 
+  // F1: resolveStillUri blanks a still equal to the source it was handed —
+  // the indexer's source, not the curator's. A live HTML item then ends up
+  // with no thumbnail, which is the empty grid tile this command exists to fix.
+  test('recovers a still the indexer suppressed against its own source', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-x',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { title: 'Work', artists: [{ name: 'A', id: '' }] },
+        },
+      },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 1);
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    const thumbs = meta.thumbnails as { default: { uri: string } };
+    assert.equal(thumbs.default.uri, 'https://cdn.example/still.png');
+  });
+
+  test('builds a thumbnail-only manifest when the still was all there was', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/still.png' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 1, 'an empty tile is worth a thumbnail-only manifest');
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(
+      (meta.thumbnails as { default: { uri: string } }).default.uri,
+      'https://cdn.example/still.png'
+    );
+  });
+
+  test('does not invent a thumbnail when the sources agree', async () => {
+    const shared = 'https://generator.example/live.html';
+    const playlist = playlistOf(item({ source: shared }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: shared },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+  });
+
+  test('leaves an existing thumbnail alone', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/other.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-x',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { thumbnails: { default: { uri: 'https://cdn.example/kept.png' } } },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(playlist, lookup);
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(
+      (meta.thumbnails as { default: { uri: string } }).default.uri,
+      'https://cdn.example/kept.png'
+    );
+  });
+
+  test('ignores a non-http indexer source', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'ipfs://QmSomething' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 0, 'ipfs is not resolvable by the display path');
+  });
+
   test('skips an item that already carries a manifest', async () => {
     const existing = manifestNamed('hand written', 'Someone');
     const playlist = playlistOf(item({ inlineManifest: existing }));

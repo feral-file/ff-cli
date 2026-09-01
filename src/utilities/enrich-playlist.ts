@@ -92,6 +92,8 @@ export interface TokenCoordinate {
 export interface IndexerItem {
   provenance?: Dp1Provenance;
   inlineManifest?: Dp1Manifest;
+  /** The source the indexer chose, which need not be the curator's. */
+  source?: string;
   [key: string]: unknown;
 }
 
@@ -150,6 +152,12 @@ export interface EnrichOptions {
 const CHAIN_ALIASES: Record<string, string> = {
   evm: 'ethereum',
 };
+
+/**
+ * One CLI invocation stamps one manifest timestamp, matching ref-manifest.ts:
+ * a run that synthesizes several manifests should not write several clocks.
+ */
+const MANIFEST_CREATED = new Date().toISOString();
 
 /**
  * canonicalChain collapses both vocabularies onto one name so a coordinate
@@ -234,7 +242,32 @@ function coordinateFor(item: Dp1Item): TokenCoordinate | null {
  * thumbnails) is what enrichment exists to fetch and is taken as given.
  */
 function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefined {
-  const manifest = resolved.inlineManifest;
+  const still = stillFromIndexerSource(item, resolved);
+  let manifest = resolved.inlineManifest;
+
+  if (manifest && still && !hasThumbnail(manifest)) {
+    manifest = {
+      ...manifest,
+      metadata: {
+        ...(manifest.metadata ?? {}),
+        thumbnails: { default: { uri: still } },
+      },
+    };
+  } else if (!manifest && still) {
+    // Nothing was emitted because the still was the only content the token
+    // had, and it had been suppressed. A thumbnail-only manifest is worth its
+    // payload in a way a title-only one is not: it is the difference between
+    // a grid tile and an empty square.
+    const title = typeof item.title === 'string' ? item.title.trim() : '';
+    manifest = {
+      refVersion: '1.1.0',
+      id: derivedManifestId(still, title),
+      created: MANIFEST_CREATED,
+      locale: 'en',
+      metadata: { ...(title ? { title } : {}), thumbnails: { default: { uri: still } } },
+    };
+  }
+
   if (!manifest) {
     return undefined;
   }
@@ -259,6 +292,44 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
     id: derivedManifestId(id, curatorTitle),
     metadata: { ...metadata, title: curatorTitle },
   };
+}
+
+/**
+ * stillFromIndexerSource recovers a thumbnail the manifest builder suppressed.
+ *
+ * `resolveStillUri` blanks a still that equals the source it was given, on the
+ * reasonable ground that pointing a thumbnail at the artwork itself adds
+ * payload and no information. But the source it was given is the one the
+ * INDEXER chose, not the one the curator kept. For a static work the indexer
+ * commonly selects the still as the source, so the thumbnail is dropped —
+ * and when the curator's item points at a live HTML generator instead, the
+ * item ends up with no still at all. That is precisely the case this command
+ * exists to repair: a live work the app cannot rasterize, whose grid tile
+ * stays empty.
+ *
+ * Recovering it is the inverse of the suppression. When the indexer's source
+ * differs from the item's and is an http(s) URL, that source IS the still that
+ * was elided, so it becomes the thumbnail relative to the item's own source.
+ */
+function stillFromIndexerSource(item: Dp1Item, resolved: IndexerItem): string {
+  const indexerSource = typeof resolved.source === 'string' ? resolved.source.trim() : '';
+  const itemSource = typeof item.source === 'string' ? item.source.trim() : '';
+  if (!indexerSource || indexerSource === itemSource) {
+    return '';
+  }
+  if (!indexerSource.startsWith('http://') && !indexerSource.startsWith('https://')) {
+    return '';
+  }
+  return indexerSource;
+}
+
+/**
+ * hasThumbnail reports whether a manifest already carries a default still.
+ */
+function hasThumbnail(manifest: Dp1Manifest): boolean {
+  const thumbnails = (manifest.metadata as { thumbnails?: { default?: { uri?: unknown } } })
+    ?.thumbnails;
+  return typeof thumbnails?.default?.uri === 'string' && thumbnails.default.uri.length > 0;
 }
 
 /**

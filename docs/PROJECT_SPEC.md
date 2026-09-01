@@ -242,6 +242,23 @@ and nothing else. `enrich` is the repair path for those.
   only a title, since a title-only manifest adds payload without adding
   information. Enrichment reports those separately from tokens it could not
   resolve at all.
+- A still the manifest builder suppressed is recovered against the item's own
+  source. `resolveStillUri` blanks a thumbnail equal to the source it was
+  handed, which is the source the *indexer* chose; for a static work that is
+  often the still itself. When the curator kept a live HTML source instead, the
+  item would otherwise end up with no thumbnail — the empty grid tile this
+  command exists to remove. When the indexer's source differs from the item's
+  and is http(s), it is that suppressed still and becomes the thumbnail. A
+  thumbnail-only manifest is emitted where none was, unlike a title-only one:
+  it is the difference between a tile and an empty square.
+- In-place writes refuse to run over an input that changed while the lookup
+  was in flight. The lookup can take minutes and the default destination is the
+  input, so a curator's edit or re-sign in that window would otherwise be
+  overwritten by a result computed from older bytes.
+- In-place writes are atomic and crash-durable: the contents are synced before
+  the rename and the containing directory after it, so a power loss cannot
+  leave the destination name pointing at incomplete data. The directory sync is
+  best-effort, since it is not portable.
 - In-place writes are atomic: the candidate goes to a temporary file beside the
   destination and is renamed over it, so an interruption cannot leave a
   truncated playlist. A symlinked destination is followed to its target rather

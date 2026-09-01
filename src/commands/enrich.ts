@@ -71,13 +71,42 @@ async function writePlaylistAtomically(destination: string, contents: string): P
         await handle.chmod(mode);
       }
       await handle.writeFile(contents);
+      // rename() is atomic against concurrent readers but says nothing about
+      // power loss: the directory entry can reach disk before the data it
+      // points at. Without this a crash mid-write can leave the playlist
+      // present and empty, which is the outcome the temporary file exists to
+      // prevent. Sync the contents first, then the directory entry after.
+      await handle.sync();
     } finally {
       await handle.close();
     }
     await fs.rename(temporary, target);
+    await syncDirectory(dirname(target));
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * syncDirectory flushes a directory entry so a rename survives power loss.
+ *
+ * Best-effort by design. Directory fsync is not portable — Windows rejects it
+ * outright — and a durability barrier that cannot be raised is not a reason to
+ * fail a write that has already succeeded. The data itself was synced before
+ * the rename, so the worst case here is the old name surviving a crash, not a
+ * corrupt file.
+ */
+async function syncDirectory(directory: string): Promise<void> {
+  try {
+    const handle = await fs.open(directory, 'r');
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch {
+    /* not supported on this platform or filesystem */
   }
 }
 
@@ -128,6 +157,11 @@ export const enrichCommand = new Command('enrich')
       console.log(chalk.blue('\nEnrich playlist\n'));
 
       const playlist = JSON.parse(await fs.readFile(file, 'utf-8')) as Dp1Playlist;
+      // The lookup below can take minutes while the indexer warms tokens, and
+      // the default destination is this same file. Remember what was read so a
+      // curator's edit, re-sign, or replacement during that window is not
+      // silently overwritten by a result computed from the older bytes.
+      const readAt = await fs.stat(file).catch(() => null);
       const total = Array.isArray(playlist.items) ? playlist.items.length : 0;
       if (total === 0) {
         console.error(chalk.red('That playlist has no items.'));
@@ -171,6 +205,22 @@ export const enrichCommand = new Command('enrich')
       // no-op would be pure risk for no gain, so that case still writes
       // nothing.
       const shouldWrite = result.enriched > 0 || options.output !== undefined;
+      if (shouldWrite && destination === file) {
+        const now = await fs.stat(file).catch(() => null);
+        const changed =
+          !readAt || !now || now.mtimeMs !== readAt.mtimeMs || now.size !== readAt.size;
+        if (changed) {
+          console.error(chalk.red('\nThat playlist changed while the lookup ran.'));
+          console.error(
+            chalk.dim(
+              '  Enrichment was computed from the earlier version, so writing it\n' +
+                '  would discard whatever changed. Nothing was written. Re-run to\n' +
+                '  enrich the current file, or pass -o to write somewhere else.\n'
+            )
+          );
+          process.exit(1);
+        }
+      }
       if (shouldWrite) {
         // Re-validate the enriched candidate. An inline manifest is schema-
         // checked the same way a fetched one is (playlists extension §3.6), so
