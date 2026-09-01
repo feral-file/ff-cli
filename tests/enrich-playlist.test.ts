@@ -395,6 +395,55 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.assumedEthereum, 1, 'only the evm coordinate is ambiguous');
   });
 
+  // F2: the indexer prefers animation_url over image_url, so its source is
+  // often live HTML. Writing that into the thumbnail slot is worse than an
+  // empty slot — the grid still cannot draw it, and the item claims a still.
+  test('refuses to treat a live HTML indexer source as a still', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/other.html' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+  });
+
+  test('accepts an image source with a query string', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png?w=1080',
+      },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup);
+    assert.equal(result.enriched, 1);
+  });
+
+  // F3: --force can bring a changed artist or description while the title and
+  // thumbnail stay put; the id must follow the whole payload.
+  test('re-keys when the indexer changes an artist under --force', async () => {
+    const base = {
+      refVersion: '1.1.0',
+      id: 'ref-shared',
+      created: '2026-09-01T00:00:00Z',
+      locale: 'en',
+    };
+    const playlist = playlistOf(item({ title: 'Pre-Process', inlineManifest: { ...base } }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        inlineManifest: {
+          ...base,
+          metadata: { title: 'Pre-Process', artists: [{ name: 'Someone Else', id: '' }] },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(playlist, lookup, { force: true });
+    const m = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.notEqual(m.id, 'ref-shared', 'a changed artist must change the cache identity');
+  });
+
   test('skips an item that already carries a manifest', async () => {
     const existing = manifestNamed('hand written', 'Someone');
     const playlist = playlistOf(item({ inlineManifest: existing }));

@@ -282,7 +282,34 @@ function stillFromIndexerSource(item: Dp1Item, resolved: IndexerItem): string {
   if (!indexerSource.startsWith('http://') && !indexerSource.startsWith('https://')) {
     return '';
   }
-  return indexerSource;
+  // The indexer's source is not necessarily a still. getBestMediaUrl prefers
+  // display.animation_url and media assets over display.image_url, so it is
+  // frequently a live HTML rendition — and writing one into the thumbnail slot
+  // is worse than leaving the slot empty: the grid still cannot rasterize it,
+  // and the item now claims a still it does not have.
+  //
+  // Only a URL that is demonstrably an image is used. The indexer exposes no
+  // separately identified still on the item this command receives, so the file
+  // extension is the evidence available; carrying a real image field through
+  // the batch result would be the better fix and belongs upstream.
+  return looksLikeImage(indexerSource) ? indexerSource : '';
+}
+
+/** Image extensions the FF1 display path renders. */
+const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.avif', '.bmp'];
+
+/**
+ * looksLikeImage tests a URL's path extension, ignoring query and fragment.
+ */
+function looksLikeImage(url: string): boolean {
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    pathname = url.split('?')[0].split('#')[0];
+  }
+  const lower = pathname.toLowerCase();
+  return IMAGE_EXTENSIONS.some((extension) => lower.endsWith(extension));
 }
 
 /**
@@ -350,17 +377,40 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
 
   // Any change to the manifest's content has to change its id. The indexer
   // derives that id from the token coordinate, so two items of one artwork
-  // receive the same one — and the id is the manifest's cache identity. Two
-  // renditions that differ in title OR in a recovered thumbnail must not both
-  // claim it, or a consumer holding the first will serve it for the second.
-  const identity = `${overrideTitle ? curatorTitle : (metadata.title ?? '')}\n${
-    (metadata.thumbnails as { default?: { uri?: string } } | undefined)?.default?.uri ?? ''
-  }`;
+  // receive the same one — and the id is the manifest's cache identity, so two
+  // documents that differ must not both claim it.
+  //
+  // The key is the whole finished metadata block rather than the fields this
+  // command happens to touch. Under --force the indexer may also have changed
+  // an artist or a description, and an id derived from title and thumbnail
+  // alone would miss that and hand two different payloads one identity.
+  const finalMetadata = overrideTitle ? { ...metadata, title: curatorTitle } : metadata;
   return {
     ...manifest,
-    id: derivedManifestId(typeof manifest.id === 'string' ? manifest.id : '', identity),
-    metadata: overrideTitle ? { ...metadata, title: curatorTitle } : metadata,
+    id: derivedManifestId(
+      typeof manifest.id === 'string' ? manifest.id : '',
+      stableStringify(finalMetadata)
+    ),
+    metadata: finalMetadata,
   };
+}
+
+/**
+ * stableStringify serializes a value with object keys in sorted order, so the
+ * same content hashes the same however it was assembled.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`);
+  return `{${entries.join(',')}}`;
 }
 
 /**

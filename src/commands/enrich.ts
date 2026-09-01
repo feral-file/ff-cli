@@ -36,7 +36,11 @@ interface EnrichOptions {
  * system temp directory: rename is only atomic within a filesystem, and those
  * are not guaranteed to be the same one.
  */
-async function writePlaylistAtomically(destination: string, contents: string): Promise<void> {
+async function writePlaylistAtomically(
+  destination: string,
+  contents: string,
+  expectedDigest?: string
+): Promise<boolean> {
   // Follow a symlink to its target before replacing anything. rename() would
   // replace the link itself, silently detaching a playlist that other paths
   // reach through that name while reporting success.
@@ -80,8 +84,27 @@ async function writePlaylistAtomically(destination: string, contents: string): P
     } finally {
       await handle.close();
     }
+    // Checked here, as late as the sequence allows: everything expensive is
+    // already done, so the interval between this read and the rename below is
+    // a few syscalls rather than the minutes a lookup takes.
+    //
+    // It narrows the race; it cannot close it. Comparing and then replacing is
+    // not atomic against an editor that does not participate in any protocol,
+    // and nothing available in userspace makes it so — every tool that edits a
+    // file in place carries this. Passing no digest (a distinct --output) opts
+    // out entirely, which is the safe path when a file is being actively
+    // edited.
+    if (expectedDigest !== undefined) {
+      const current = await fs.readFile(target).catch(() => null);
+      const digest = current && createHash('sha256').update(current).digest('hex');
+      if (digest !== expectedDigest) {
+        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        return false;
+      }
+    }
     await fs.rename(temporary, target);
     await syncDirectory(dirname(target));
+    return true;
   } catch (error) {
     await fs.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
@@ -223,14 +246,20 @@ export const enrichCommand = new Command('enrich')
       // no-op would be pure risk for no gain, so that case still writes
       // nothing.
       const shouldWrite = result.enriched > 0 || options.output !== undefined;
-      // Compare the physical write target, not the spelling of the argument.
-      // `-o ./playlist.json` for the input, or a symlink and its target, are
-      // the same file under different names and must not slip past this guard.
-      if (shouldWrite && (await isSameFile(file, destination))) {
-        const current = await fs.readFile(destination).catch(() => null);
-        const changed =
-          current === null || createHash('sha256').update(current).digest('hex') !== originalDigest;
-        if (changed) {
+      if (shouldWrite) {
+        // Re-validate the enriched candidate. An inline manifest is schema-
+        // checked the same way a fetched one is (playlists extension §3.6), so
+        // a malformed manifest from the indexer must not reach the file.
+        const after = await validatePlaylist(result.playlist);
+        if (!after.valid) {
+          reportInvalid('Enrichment produced an invalid playlist:', after);
+        }
+        const replaced = await writePlaylistAtomically(
+          destination,
+          JSON.stringify(result.playlist, null, 2),
+          (await isSameFile(file, destination)) ? originalDigest : undefined
+        );
+        if (!replaced) {
           console.error(chalk.red('\nThat playlist changed while the lookup ran.'));
           console.error(
             chalk.dim(
@@ -241,16 +270,6 @@ export const enrichCommand = new Command('enrich')
           );
           process.exit(1);
         }
-      }
-      if (shouldWrite) {
-        // Re-validate the enriched candidate. An inline manifest is schema-
-        // checked the same way a fetched one is (playlists extension §3.6), so
-        // a malformed manifest from the indexer must not reach the file.
-        const after = await validatePlaylist(result.playlist);
-        if (!after.valid) {
-          reportInvalid('Enrichment produced an invalid playlist:', after);
-        }
-        await writePlaylistAtomically(destination, JSON.stringify(result.playlist, null, 2));
       }
 
       console.log(

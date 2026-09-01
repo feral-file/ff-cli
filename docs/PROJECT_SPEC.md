@@ -248,7 +248,12 @@ and nothing else. `enrich` is the repair path for those.
   often the still itself. When the curator kept a live HTML source instead, the
   item would otherwise end up with no thumbnail — the empty grid tile this
   command exists to remove. When the indexer's source differs from the item's
-  and is http(s), it is that suppressed still and becomes the thumbnail. A
+  and is http(s) **and is demonstrably an image**, it is that suppressed still
+  and becomes the thumbnail. The type check matters: `getBestMediaUrl` prefers
+  `display.animation_url` and media assets over `display.image_url`, so the
+  indexer's source is frequently a live HTML rendition, and putting one in the
+  thumbnail slot is worse than leaving it empty — the grid still cannot
+  rasterize it and the item now claims a still it does not have. A
   thumbnail-only manifest is emitted where none was, unlike a title-only one:
   it is the difference between a tile and an empty square.
 - `evm` names a family, and enrichment resolves it as Ethereum. DP-1 core §6
@@ -264,7 +269,17 @@ and nothing else. `enrich` is the repair path for those.
 - In-place writes refuse to run over an input that changed while the lookup
   was in flight. The comparison is a hash of the bytes actually parsed, against
   the resolved write target, so `-o` naming the input by another spelling and a
-  symlink pointing at it are both recognized as the in-place case.
+  symlink pointing at it are both recognized as the in-place case. It runs
+  immediately before the rename, so the exposed interval is a few syscalls
+  rather than the minutes a lookup takes. It narrows the race and does not
+  close it: compare-then-replace is not atomic against an editor participating
+  in no protocol, and no userspace sequence makes it so. Writing to a distinct
+  `--output` opts out of in-place replacement entirely, which is the right
+  choice when a file is being actively edited.
+- A replacement manifest's id is derived from its whole finished metadata
+  block, not from the fields this command happens to touch. Under `--force` the
+  indexer may also have changed an artist or a description, and an id keyed on
+  title and thumbnail alone would give two different payloads one identity.
 - In-place writes refuse to run over an input that changed while the lookup
   was in flight. The lookup can take minutes and the default destination is the
   input, so a curator's edit or re-sign in that window would otherwise be
