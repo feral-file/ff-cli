@@ -197,6 +197,30 @@ nowhere to host a manifest document. Behavior worth knowing downstream:
 - An inline manifest has no `refHash`; its integrity comes from the playlist
   signature.
 
+### Enriching a playlist the CLI did not build
+
+`find` and `build` attach a manifest as they create each item. A playlist that
+arrives another way — assembled by hand, copied out of another document, or
+written before §3.6 existed — has items with a `source` and a `provenance` block
+and nothing else. `enrich` is the repair path for those.
+
+- Enrichment is keyed on `provenance.contract` (chain, address, token id), not
+  on `source`. A source URL is one rendition of a work and several renditions
+  share one; the coordinate is what identifies the artwork.
+- It writes `inlineManifest` and nothing else. `source`, `duration`, `title`,
+  `id`, and `display` are curator decisions and survive untouched even when the
+  indexer disagrees with them.
+- An item the indexer cannot resolve is reported, never synthesized. The same
+  rule the manifest mapping follows applies here: the CLI does not invent fields
+  it cannot substantiate, and an invented artist line inside a signed document
+  is worse than an absent one.
+- DP-1 names the EVM family `evm`; the FF indexer names it `ethereum`. Enrich
+  translates between the two. Unlisted chain names pass through so the indexer
+  decides what it supports.
+- Enrichment changes the document, so any `signatures[]` envelope is removed and
+  the playlist must be re-signed. Leaving a stale envelope in place would
+  produce a file that fails verification at the device with no explanation.
+
 ## Deterministic-first behavior
 
 The CLI is deterministic end to end. There is no natural-language interface; any natural-language layer lives in the user's coding agent, which drives these commands:

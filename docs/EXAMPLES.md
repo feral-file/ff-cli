@@ -232,6 +232,44 @@ JSON
 npm run dev -- build /tmp/mixed.json -o playlist-mixed.json -v
 ```
 
+## Enrich an existing playlist
+
+A playlist whose items carry `provenance` but no `inlineManifest` labels
+title-only on the FF1 tombstone, and shows empty tiles in the app for every
+live HTML work. `enrich` repairs it in place.
+
+```bash
+ff-cli enrich playlist.json
+```
+
+```text
+Enrich playlist
+
+  18/18 looked up...
+
+18 of 18 item(s) enriched
+  Output: playlist.json
+```
+
+Items the indexer cannot resolve are listed rather than guessed at:
+
+```text
+Nothing to enrich
+
+  Skipped 2:
+    Kim Asendorf — PXL NET — no provenance.contract chain/address/tokenId to look up
+    Untitled — the indexer returned nothing for it
+```
+
+Enrichment changes the document, so a signed playlist loses its envelope and
+has to be re-signed:
+
+```bash
+ff-cli enrich playlist.json
+ff-cli sign playlist.json
+ff-cli play playlist.json -d "living room"
+```
+
 ## Validate / Sign / Play
 
 ```bash
