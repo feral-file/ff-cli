@@ -245,8 +245,9 @@ and nothing else. `enrich` is the repair path for those.
 - In-place writes are atomic: the candidate goes to a temporary file beside the
   destination and is renamed over it, so an interruption cannot leave a
   truncated playlist. A symlinked destination is followed to its target rather
-  than replaced, and the existing file's permission mode is carried onto the
-  replacement.
+  than replaced, and the existing file's permission mode is read before the
+  temporary file is created and applied to it before any bytes are written, so
+  a curator-restricted playlist is never briefly world-readable mid-write.
 - `--output` names a file the caller expects to exist afterwards, so it is
   written even when nothing was enriched. A no-op without `--output` writes
   nothing rather than rewriting the input for no gain.

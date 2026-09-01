@@ -50,13 +50,29 @@ async function writePlaylistAtomically(destination: string, contents: string): P
     dirname(target),
     `.${basename(target)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
   );
+
+  // The destination's mode has to be known before the file exists, not after
+  // it holds the contents. Creating at the default 0o666-minus-umask and
+  // chmod'ing afterwards leaves the enriched playlist readable by other local
+  // users for the length of the write — short, but a disclosure window on a
+  // file the curator deliberately restricted.
+  const current = await fs.stat(target).catch(() => null);
+  const mode = current ? current.mode & 0o7777 : undefined;
+
   try {
-    await fs.writeFile(temporary, contents);
-    // A new file gets the default creation mode, so replacing a playlist a
-    // curator had restricted to 0600 would quietly publish it as 0644.
-    const current = await fs.stat(target).catch(() => null);
-    if (current) {
-      await fs.chmod(temporary, current.mode & 0o7777);
+    // 'wx' fails rather than truncating if the name somehow exists, so a
+    // collision can never destroy another process's work in progress.
+    const handle = await fs.open(temporary, 'wx', mode);
+    try {
+      // open() applies the mode through umask, which can strip bits the
+      // destination had. chmod is not subject to umask, so this restores the
+      // exact mode — still before any bytes are written.
+      if (mode !== undefined) {
+        await handle.chmod(mode);
+      }
+      await handle.writeFile(contents);
+    } finally {
+      await handle.close();
     }
     await fs.rename(temporary, target);
   } catch (error) {
