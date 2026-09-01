@@ -41,6 +41,8 @@ let handler: GraphQLHandler;
 // and both speak of "tokens".
 let indexerServer: Server;
 let indexerUrl: string;
+/** Operations the indexer mock was asked for, in order, per test. */
+let indexerOps: string[] = [];
 
 const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
 
@@ -73,12 +75,13 @@ before(async () => {
   }
   serverUrl = `http://127.0.0.1:${address.port}/graphql`;
 
-  // Speaks the indexer's actual GraphQL contract, per operation: the enqueue
-  // mutation returns `job_id` (snake_case — `jobId` fails the Number.isFinite
-  // check and aborts before polling), jobStatus returns a terminal `completed`,
-  // and tokens returns the v2 `{ items: [] }` envelope. Answering with the
-  // wrong shape would let this suite stay green over a broken client/mock
-  // protocol, which is what it is here to catch.
+  // Speaks the indexer's actual GraphQL contract, per operation, and REJECTS
+  // anything else. A permissive fallback is what let the previous version pass
+  // without proving anything: it answered every unrecognized operation with an
+  // empty token envelope, so a client regression (consuming `jobId` instead of
+  // the real `job_id`, say) still produced "2/2 tokens indexed" and the same
+  // "no tokens could be indexed" exit. Rejecting the unexpected is what makes
+  // the recorded sequence below evidence rather than decoration.
   //
   // The empty token list is deliberate: the run completes the whole
   // enqueue -> poll -> query path and then exits on "no tokens could be
@@ -90,14 +93,23 @@ before(async () => {
       const { query } = JSON.parse(body || '{}') as { query?: string };
       res.setHeader('Content-Type', 'application/json');
       if (query?.includes('triggerTokenIndexing')) {
+        indexerOps.push('enqueue');
         res.end(JSON.stringify({ data: { triggerTokenIndexing: { job_id: 1 } } }));
         return;
       }
       if (query?.includes('jobStatus')) {
+        indexerOps.push('jobStatus');
         res.end(JSON.stringify({ data: { jobStatus: { status: 'completed', last_error: null } } }));
         return;
       }
-      res.end(JSON.stringify({ data: { tokens: { items: [], total: 0 } } }));
+      if (query?.includes('tokens')) {
+        indexerOps.push('tokens');
+        res.end(JSON.stringify({ data: { tokens: { items: [], total: 0 } } }));
+        return;
+      }
+      indexerOps.push('UNEXPECTED');
+      res.statusCode = 400;
+      res.end(JSON.stringify({ errors: [{ message: 'mock: unexpected indexer operation' }] }));
     });
   });
   await new Promise<void>((resolveListen) => {
@@ -120,6 +132,7 @@ let destroyResponseBody = false;
 beforeEach(() => {
   handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
   destroyResponseBody = false;
+  indexerOps = [];
 });
 
 interface RunResult {
@@ -302,6 +315,22 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.match(result.stdout, /2\/2 tokens indexed/);
     assert.match(result.stderr, /No tokens could be indexed/);
     assert.equal(result.code, 1);
+    // The exit message alone proves nothing: a client that regressed to
+    // reading `jobId` would fail at the enqueue and still land here. Asserting
+    // the operation sequence is what shows enqueue -> poll -> re-query
+    // actually completed for both tokens: each is looked up, missed, enqueued,
+    // polled to a terminal status, and looked up again.
+    assert.deepEqual(indexerOps, [
+      'tokens',
+      'tokens',
+      'enqueue',
+      'enqueue',
+      'jobStatus',
+      'jobStatus',
+      'tokens',
+      'tokens',
+    ]);
+    assert.ok(!indexerOps.includes('UNEXPECTED'), 'mock saw an operation it does not model');
   });
 
   test('series with only unsupported-chain tokens → clear error, exit 1', async () => {
