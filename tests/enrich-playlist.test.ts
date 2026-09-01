@@ -1,0 +1,610 @@
+/**
+ * Unit tests for the playlist enrichment mapping.
+ *
+ * The token lookup is injected, so nothing here touches the FF indexer. That
+ * is deliberate and not merely convenient: a suite that reaches a live service
+ * fails for reasons unrelated to the code under test, and the release pipeline
+ * runs this suite (see the hermetic fix in find-command.test.ts).
+ *
+ * The fakes below mimic the real contract exactly: `getNFTTokenInfoBatch`
+ * FILTERS unresolved tokens out of its return rather than representing them,
+ * so a fake that answers one entry per input would hide the correlation bug
+ * these tests exist to prevent.
+ */
+
+import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
+import {
+  enrichPlaylistManifests,
+  type Dp1Playlist,
+  type IndexerItem,
+  type TokenCoordinate,
+} from '../src/utilities/enrich-playlist';
+
+function manifestNamed(title: string, artist: string) {
+  return {
+    refVersion: '1.1.0',
+    id: `ref-${artist.toLowerCase().replace(/\s+/g, '-')}`,
+    created: '2026-09-01T00:00:00Z',
+    locale: 'en',
+    metadata: {
+      title,
+      artists: [{ name: artist, id: '' }],
+      thumbnails: { default: { uri: `https://example.com/${title}.png` } },
+    },
+  };
+}
+
+const MANIFEST = manifestNamed('Pre-Process #0', 'Casey REAS');
+
+function provenance(address = '0xabc', tokenId = '1', chain = 'evm') {
+  return { type: 'onChain', contract: { chain, standard: 'erc721', address, tokenId } };
+}
+
+function item(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'item-1',
+    title: 'Pre-Process',
+    source: 'https://generator.example/1',
+    duration: 300,
+    provenance: provenance(),
+    ...overrides,
+  };
+}
+
+function playlistOf(...items: Record<string, unknown>[]): Dp1Playlist {
+  return { dpVersion: '1.1.0', title: 'Test', items } as Dp1Playlist;
+}
+
+/**
+ * indexerReturning answers only the coordinates it is told to resolve, echoing
+ * provenance the way the indexer does — checksummed address, DP-1 chain name —
+ * and omitting everything else, exactly as the production filter does.
+ */
+function indexerReturning(
+  resolvable: Record<string, { manifest: unknown; address?: string }>,
+  seen: TokenCoordinate[][] = []
+) {
+  return async (tokens: TokenCoordinate[]): Promise<IndexerItem[]> => {
+    seen.push(tokens);
+    return tokens
+      .filter((token) => resolvable[token.tokenId])
+      .map((token) => {
+        const entry = resolvable[token.tokenId];
+        return {
+          title: 'from indexer',
+          provenance: provenance(entry.address ?? token.contractAddress, token.tokenId, 'evm'),
+          inlineManifest: entry.manifest,
+        } as IndexerItem;
+      });
+  };
+}
+
+/** hit resolves every coordinate handed to it. */
+function hit(seen: TokenCoordinate[][] = []) {
+  return async (tokens: TokenCoordinate[]): Promise<IndexerItem[]> => {
+    seen.push(tokens);
+    // Echo the chain that was asked for. canonicalChain folds the indexer's
+    // "ethereum" back to DP-1 "evm", so echoing keeps both families matching.
+    return tokens.map((token) => ({
+      provenance: provenance(token.contractAddress, token.tokenId, token.chain),
+      inlineManifest: MANIFEST,
+    }));
+  };
+}
+
+describe('enrichPlaylistManifests', () => {
+  test('attaches a manifest to an item that has none', async () => {
+    const playlist = playlistOf(item());
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+    assert.equal(result.skipped.length, 0);
+    const metadata = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.deepEqual(metadata.artists, MANIFEST.metadata.artists);
+    assert.deepEqual(metadata.thumbnails, MANIFEST.metadata.thumbnails);
+  });
+
+  test('leaves source, duration and id untouched', async () => {
+    const playlist = playlistOf(item());
+    const before = JSON.parse(JSON.stringify(playlist.items?.[0]));
+    await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    const after = playlist.items?.[0] ?? {};
+    for (const field of ['id', 'title', 'source', 'duration'] as const) {
+      assert.deepEqual(after[field], before[field], `${field} must not change`);
+    }
+  });
+
+  // F3: the tombstone reads the manifest before item.title, so an indexer
+  // title would change the displayed label while item.title looked preserved.
+  test("keeps the curator's title as the manifest title", async () => {
+    const playlist = playlistOf(item({ title: 'Pre-Process' }));
+    await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    const metadata = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(metadata.title, 'Pre-Process', 'indexer title must not win');
+  });
+
+  test('uses the indexer title when the item has none', async () => {
+    const playlist = playlistOf(item({ title: '' }));
+    await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    const metadata = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(metadata.title, 'Pre-Process #0');
+  });
+
+  test('does not mutate the manifest object the lookup returned', async () => {
+    const playlist = playlistOf(item({ title: 'Curator Title' }));
+    await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(MANIFEST.metadata.title, 'Pre-Process #0', 'shared object was mutated');
+  });
+
+  // F1: the production lookup drops unresolved tokens, so results are neither
+  // aligned nor complete. Correlation must be by coordinate.
+  test('does not attach a manifest to the wrong item when a lookup fails', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') })
+    );
+    // Only B resolves; the array comes back with one entry, not two.
+    const lookup = indexerReturning({ '2': { manifest: manifestNamed('B work', 'Artist B') } });
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+    assert.equal(playlist.items?.[0].inlineManifest, undefined, 'A must stay unlabelled');
+    const bMeta = playlist.items?.[1].inlineManifest?.metadata as Record<string, unknown>;
+    assert.deepEqual(bMeta.artists, [{ name: 'Artist B', id: '' }]);
+    assert.equal(result.skipped.length, 1);
+    assert.equal(result.skipped[0].title, 'A');
+    assert.equal(result.skipped[0].reason, 'not-indexed');
+  });
+
+  test('correlates correctly when results come back out of order', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') })
+    );
+    const lookup = async (tokens: TokenCoordinate[]): Promise<IndexerItem[]> =>
+      [...tokens].reverse().map((token) => ({
+        provenance: provenance(token.contractAddress, token.tokenId, 'evm'),
+        inlineManifest: manifestNamed(`work ${token.tokenId}`, `Artist ${token.tokenId}`),
+      }));
+    await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    const a = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    const b = playlist.items?.[1].inlineManifest?.metadata as Record<string, unknown>;
+    assert.deepEqual(a.artists, [{ name: 'Artist 1', id: '' }]);
+    assert.deepEqual(b.artists, [{ name: 'Artist 2', id: '' }]);
+  });
+
+  test('matches a checksummed address against a lowercase one', async () => {
+    const playlist = playlistOf(
+      item({ provenance: provenance('0xabcdefabcdefabcdefabcdefabcdefabcdefabcd', '1') })
+    );
+    const lookup = indexerReturning({
+      '1': { manifest: MANIFEST, address: '0xABCDEFabcdefABCDEFabcdefABCDEFabcdefABCD' },
+    });
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+  });
+
+  test('drops a response that carries no usable provenance', async () => {
+    const playlist = playlistOf(item());
+    const lookup = async (): Promise<IndexerItem[]> => [{ inlineManifest: MANIFEST }];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'not-indexed');
+  });
+
+  // F1: ref outranks inlineManifest at the device, so enriching a ref-backed
+  // item writes a manifest nothing reads while still voiding the signature.
+  test('treats an item with an external ref as already labelled', async () => {
+    const playlist = playlistOf(item({ ref: 'https://example.com/manifest.json' }));
+    playlist.signatures = [{ alg: 'ed25519' }];
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'external-ref');
+    assert.equal(playlist.items?.[0].inlineManifest, undefined);
+    assert.deepEqual(playlist.signatures, [{ alg: 'ed25519' }], 'signature must survive');
+  });
+
+  test('--force does not convert a ref-backed item', async () => {
+    const playlist = playlistOf(
+      item({ ref: 'https://example.com/manifest.json', refHash: 'sha256:abc' })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), {
+      force: true,
+      assumeEthereum: true,
+    });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'external-ref');
+    assert.equal(playlist.items?.[0].ref, 'https://example.com/manifest.json');
+    assert.equal(playlist.items?.[0].refHash, 'sha256:abc');
+  });
+
+  test('an empty ref string does not count as a reference', async () => {
+    const playlist = playlistOf(item({ ref: '   ' }));
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+  });
+
+  // F3: a repeated work must not enqueue a separate indexing job per copy.
+  test('looks a repeated coordinate up once and applies it to every copy', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') }),
+      item({ id: 'c', title: 'C', provenance: provenance('0xAAA', '1') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(seen), { assumeEthereum: true });
+    assert.equal(seen[0].length, 2, 'the repeated coordinate must be looked up once');
+    assert.equal(result.enriched, 3, 'every copy still gets the manifest');
+    assert.ok(playlist.items?.[0].inlineManifest);
+    assert.ok(playlist.items?.[2].inlineManifest);
+  });
+
+  // F1: the indexer derives the manifest id from the coordinate, so two items
+  // of one artwork share it. Overriding the title without changing the id
+  // would produce two documents claiming to be the same cached manifest.
+  test('gives distinct manifest ids to repeated coordinates with distinct titles', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'Curator A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'Curator B', provenance: provenance('0xaaa', '1') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 2);
+    const a = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = playlist.items?.[1].inlineManifest as Record<string, unknown>;
+    assert.notEqual(a.id, b.id, 'different content must not share a cache identity');
+    assert.equal((a.metadata as Record<string, unknown>).title, 'Curator A');
+    assert.equal((b.metadata as Record<string, unknown>).title, 'Curator B');
+  });
+
+  test('derives the same manifest id across runs for the same title', async () => {
+    const first = playlistOf(item({ title: 'Stable' }));
+    const second = playlistOf(item({ title: 'Stable' }));
+    await enrichPlaylistManifests(first, hit(), { assumeEthereum: true });
+    await enrichPlaylistManifests(second, hit(), { assumeEthereum: true });
+    const a = first.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = second.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal(a.id, b.id, 'ids must be deterministic, not random');
+  });
+
+  test('gives identical payloads one identity', async () => {
+    // The id follows the payload rather than the indexer's coordinate-derived
+    // value, so two runs over the same content agree and two different
+    // payloads never collide.
+    const first = playlistOf(item({ title: 'Pre-Process #0' }));
+    const second = playlistOf(item({ title: 'Pre-Process #0' }));
+    await enrichPlaylistManifests(first, hit(), { assumeEthereum: true });
+    await enrichPlaylistManifests(second, hit(), { assumeEthereum: true });
+    const a = first.items?.[0].inlineManifest as Record<string, unknown>;
+    const b = second.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal(a.id, b.id);
+  });
+
+  // F4: resolved-with-nothing-to-attach is not the same as never-resolved.
+  test('separates a resolved token with no manifest from an unresolved one', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xbbb', '2') })
+    );
+    const lookup = async (): Promise<IndexerItem[]> => [
+      // Resolved, but the indexer had only a title, so no manifest was built.
+      { provenance: provenance('0xaaa', '1', 'evm') },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+    assert.equal(result.skipped[1].reason, 'not-indexed');
+  });
+
+  // F1: resolveStillUri blanks a still equal to the source it was handed —
+  // the indexer's source, not the curator's. A live HTML item then ends up
+  // with no thumbnail, which is the empty grid tile this command exists to fix.
+  test('recovers a still the indexer suppressed against its own source', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-x',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { title: 'Work', artists: [{ name: 'A', id: '' }] },
+        },
+      },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    const thumbs = meta.thumbnails as { default: { uri: string } };
+    assert.equal(thumbs.default.uri, 'https://cdn.example/still.png');
+  });
+
+  test('builds a thumbnail-only manifest when the still was all there was', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/still.png' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1, 'an empty tile is worth a thumbnail-only manifest');
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(
+      (meta.thumbnails as { default: { uri: string } }).default.uri,
+      'https://cdn.example/still.png'
+    );
+  });
+
+  test('does not invent a thumbnail when the sources agree', async () => {
+    const shared = 'https://generator.example/live.html';
+    const playlist = playlistOf(item({ source: shared }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: shared },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+  });
+
+  test('leaves an existing thumbnail alone', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/other.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-x',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { thumbnails: { default: { uri: 'https://cdn.example/kept.png' } } },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(
+      (meta.thumbnails as { default: { uri: string } }).default.uri,
+      'https://cdn.example/kept.png'
+    );
+  });
+
+  test('ignores a non-http indexer source', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'ipfs://QmSomething' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0, 'ipfs is not resolvable by the display path');
+  });
+
+  // F3: a recovered thumbnail changes content, so it must change identity too.
+  test('re-keys a manifest whose thumbnail was recovered', async () => {
+    const withStill = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png',
+        inlineManifest: {
+          refVersion: '1.1.0',
+          id: 'ref-shared',
+          created: '2026-09-01T00:00:00Z',
+          locale: 'en',
+          metadata: { title: 'Pre-Process', artists: [{ name: 'A', id: '' }] },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(withStill, lookup, { assumeEthereum: true });
+    const m = withStill.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.notEqual(m.id, 'ref-shared', 'recovered content must not keep the shared id');
+  });
+
+  test('reports how many coordinates were assumed to be Ethereum', async () => {
+    const playlist = playlistOf(
+      item({ id: 'a', provenance: provenance('0xaaa', '1', 'evm') }),
+      item({ id: 'b', provenance: provenance('KT1abc', '2', 'tezos') })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.assumedEthereum, 1, 'only the evm coordinate is ambiguous');
+  });
+
+  // F2: the indexer prefers animation_url over image_url, so its source is
+  // often live HTML. Writing that into the thumbnail slot is worse than an
+  // empty slot — the grid still cannot draw it, and the item claims a still.
+  test('refuses to treat a live HTML indexer source as a still', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/other.html' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+  });
+
+  test('accepts an image source with a query string', async () => {
+    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        source: 'https://cdn.example/still.png?w=1080',
+      },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+  });
+
+  // F3: --force can bring a changed artist or description while the title and
+  // thumbnail stay put; the id must follow the whole payload.
+  test('re-keys when the indexer changes an artist under --force', async () => {
+    const base = {
+      refVersion: '1.1.0',
+      id: 'ref-shared',
+      created: '2026-09-01T00:00:00Z',
+      locale: 'en',
+    };
+    const playlist = playlistOf(item({ title: 'Pre-Process', inlineManifest: { ...base } }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        inlineManifest: {
+          ...base,
+          metadata: { title: 'Pre-Process', artists: [{ name: 'Someone Else', id: '' }] },
+        },
+      },
+    ];
+    await enrichPlaylistManifests(playlist, lookup, { force: true, assumeEthereum: true });
+    const m = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.notEqual(m.id, 'ref-shared', 'a changed artist must change the cache identity');
+  });
+
+  // F1: "evm" names a family and the response cannot narrow it, so enriching
+  // one on an assumption can sign another artwork's metadata into a playlist.
+  test('skips an evm coordinate unless the operator asserts the network', async () => {
+    const playlist = playlistOf(item());
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'ambiguous-chain');
+    assert.equal(playlist.items?.[0].inlineManifest, undefined);
+  });
+
+  test('enriches an evm coordinate once the network is asserted', async () => {
+    const playlist = playlistOf(item());
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+  });
+
+  test('a tezos coordinate needs no assertion', async () => {
+    const playlist = playlistOf(item({ provenance: provenance('KT1abc', '7', 'tezos') }));
+    const result = await enrichPlaylistManifests(playlist, hit());
+    assert.equal(result.enriched, 1, 'tezos is unambiguous');
+  });
+
+  test('recovers an SVG or video still, never HTML', async () => {
+    for (const [source, expected] of [
+      ['https://cdn.example/work.svg', 1],
+      ['https://cdn.example/work.mp4', 1],
+      ['https://cdn.example/work.webm', 1],
+      ['https://cdn.example/work.html', 0],
+    ] as [string, number][]) {
+      const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+      const lookup = async (): Promise<IndexerItem[]> => [
+        { provenance: provenance('0xabc', '1', 'evm'), source },
+      ];
+      const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+      assert.equal(result.enriched, expected, `${source} should enrich ${expected}`);
+    }
+  });
+
+  test('skips an item that already carries a manifest', async () => {
+    const existing = manifestNamed('hand written', 'Someone');
+    const playlist = playlistOf(item({ inlineManifest: existing }));
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.deepEqual(playlist.items?.[0].inlineManifest, existing);
+    assert.equal(result.skipped[0].reason, 'already-labelled');
+  });
+
+  test('--force replaces an existing manifest', async () => {
+    const playlist = playlistOf(item({ inlineManifest: { id: 'stale' } }));
+    const result = await enrichPlaylistManifests(playlist, hit(), {
+      force: true,
+      assumeEthereum: true,
+    });
+    assert.equal(result.enriched, 1);
+    const metadata = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.deepEqual(metadata.artists, MANIFEST.metadata.artists);
+  });
+
+  test('skips an item with no provenance rather than guessing', async () => {
+    const playlist = playlistOf(item({ provenance: undefined }));
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-provenance');
+    assert.equal(playlist.items?.[0].inlineManifest, undefined);
+  });
+
+  test('a contract with no tokenId identifies a collection, not a work', async () => {
+    const playlist = playlistOf(
+      item({ provenance: { contract: { chain: 'evm', address: '0xabc' } } })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.skipped[0].reason, 'no-provenance');
+  });
+
+  test("translates the DP-1 chain name into the indexer's", async () => {
+    const seen: TokenCoordinate[][] = [];
+    await enrichPlaylistManifests(playlistOf(item()), hit(seen), { assumeEthereum: true });
+    assert.equal(seen[0][0].chain, 'ethereum');
+  });
+
+  test('passes an unaliased chain through untranslated', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(item({ provenance: provenance('KT1abc', '7', 'tezos') }));
+    await enrichPlaylistManifests(playlist, hit(seen), { assumeEthereum: true });
+    assert.equal(seen[0][0].chain, 'tezos');
+  });
+
+  test('looks every unresolved item up in one batch', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(
+      item({ id: 'a', provenance: provenance('0xaaa', '1') }),
+      item({ id: 'b', provenance: provenance('0xbbb', '2') }),
+      item({ id: 'c', provenance: provenance('0xccc', '3') })
+    );
+    await enrichPlaylistManifests(playlist, hit(seen), { assumeEthereum: true });
+    assert.equal(seen.length, 1, 'one call, not one per item');
+    assert.equal(seen[0].length, 3);
+  });
+
+  test('drops the v1.1.0 signature envelope when the document changed', async () => {
+    const playlist = playlistOf(item());
+    playlist.signatures = [{ alg: 'ed25519' }];
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.signatureInvalidated, true);
+    assert.equal(playlist.signatures, undefined);
+  });
+
+  // F2: verify and sign in this repo still read a legacy flat `signature`.
+  test('drops the legacy flat signature when the document changed', async () => {
+    const playlist = playlistOf(item());
+    playlist.signature = 'ed25519:deadbeef';
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.signatureInvalidated, true);
+    assert.equal(playlist.signature, undefined);
+  });
+
+  test('drops both signature forms together', async () => {
+    const playlist = playlistOf(item());
+    playlist.signature = 'ed25519:deadbeef';
+    playlist.signatures = [{ alg: 'ed25519' }];
+    await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(playlist.signature, undefined);
+    assert.equal(playlist.signatures, undefined);
+  });
+
+  test('keeps signatures when nothing changed', async () => {
+    const signatures = [{ alg: 'ed25519' }];
+    const playlist = playlistOf(item({ inlineManifest: MANIFEST }));
+    playlist.signatures = signatures;
+    playlist.signature = 'ed25519:deadbeef';
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.signatureInvalidated, false);
+    assert.deepEqual(playlist.signatures, signatures);
+    assert.equal(playlist.signature, 'ed25519:deadbeef');
+  });
+
+  test('does not call the indexer when there is nothing to resolve', async () => {
+    const playlist = playlistOf(item({ inlineManifest: MANIFEST }));
+    let called = false;
+    await enrichPlaylistManifests(playlist, async () => {
+      called = true;
+      return [];
+    });
+    assert.equal(called, false);
+  });
+
+  test('tolerates a playlist whose items array is absent', async () => {
+    const playlist = { dpVersion: '1.1.0' } as Dp1Playlist;
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped.length, 0);
+  });
+});

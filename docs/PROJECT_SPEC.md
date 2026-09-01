@@ -197,6 +197,128 @@ nowhere to host a manifest document. Behavior worth knowing downstream:
 - An inline manifest has no `refHash`; its integrity comes from the playlist
   signature.
 
+### Enriching a playlist the CLI did not build
+
+`find` and `build` attach a manifest as they create each item. A playlist that
+arrives another way — assembled by hand, copied out of another document, or
+written before §3.6 existed — has items with a `source` and a `provenance` block
+and nothing else. `enrich` is the repair path for those.
+
+- Enrichment is keyed on `provenance.contract` (chain, address, token id), not
+  on `source`. A source URL is one rendition of a work and several renditions
+  share one; the coordinate is what identifies the artwork.
+- It writes `inlineManifest` and nothing else. `source`, `duration`, `title`,
+  `id`, and `display` are curator decisions and survive untouched even when the
+  indexer disagrees with them.
+- An item the indexer cannot resolve is reported, never synthesized. The same
+  rule the manifest mapping follows applies here: the CLI does not invent fields
+  it cannot substantiate, and an invented artist line inside a signed document
+  is worse than an absent one.
+- DP-1 names the EVM family `evm`; the FF indexer names it `ethereum`. Enrich
+  translates between the two. Unlisted chain names pass through so the indexer
+  decides what it supports.
+- Enrichment changes the document, so both the `signatures[]` envelope and the
+  legacy flat `signature` are removed and the playlist must be re-signed.
+  Leaving a stale envelope in place would produce a file that fails
+  verification at the device with no explanation.
+- An item carrying a `ref` is already labelled by a manifest the CLI cannot
+  see, and `ref` outranks `inlineManifest` in the resolution order, so
+  enrichment skips it. `--force` does not override that: making the inline
+  manifest win would mean deleting the curator's `ref` and `refHash`, which
+  discards the integrity hash the remote manifest is checked against. That
+  conversion, if ever wanted, belongs behind its own flag.
+- Enrichment looks each distinct coordinate up once, however many items share
+  it. A token the indexer has not seen triggers an indexing job and a poll that
+  can take minutes, and a playlist that repeats a work would otherwise submit
+  that job once per appearance.
+- Overriding an item's title changes the manifest's content, so it also changes
+  the manifest's `id`. The indexer derives that id from the token coordinate,
+  so two items of one artwork receive the same one; leaving it alone while
+  changing the title would produce two documents claiming to be the same cached
+  manifest. The replacement is derived from the original id and the title, so
+  it is deterministic across runs.
+- The indexer resolving a token and having something worth attaching are
+  different outcomes: `buildInlineManifestForToken` returns nothing when it has
+  only a title, since a title-only manifest adds payload without adding
+  information. Enrichment reports those separately from tokens it could not
+  resolve at all.
+- A still the manifest builder suppressed is recovered against the item's own
+  source. `resolveStillUri` blanks a thumbnail equal to the source it was
+  handed, which is the source the *indexer* chose; for a static work that is
+  often the still itself. When the curator kept a live HTML source instead, the
+  item would otherwise end up with no thumbnail — the empty grid tile this
+  command exists to remove. When the indexer's source differs from the item's
+  and is http(s) **and is media the app can rasterize**, it is that suppressed
+  still
+  and becomes the thumbnail. The type check matters: `getBestMediaUrl` prefers
+  `display.animation_url` and media assets over `display.image_url`, so the
+  indexer's source is frequently a live HTML rendition, and putting one in the
+  thumbnail slot is worse than leaving it empty — the grid still cannot
+  rasterize it and the item now claims a still it does not have. The predicate
+  matches the media types `playlist-builder.js` already recognizes, images plus
+  SVG and video, and rejects HTML. A
+  thumbnail-only manifest is emitted where none was, unlike a title-only one:
+  it is the difference between a tile and an empty square.
+- `evm` names a family, and enrichment refuses to guess which member. DP-1 §6
+  carries no network identity, and the indexer maps Ethereum, Polygon,
+  Arbitrum, Optimism, Base, and Zora all back to `evm`, so neither the request
+  nor the response can say which network is meant. Ethereum is chosen because
+  it is the only EVM network this client can reach — `buildTokenCID` maps
+  ethereum to `eip155:1` and tezos to `tezos:mainnet` and throws for anything
+  else. The residual risk is narrow: an L2 work whose address and token id also
+  exist on Ethereum would take the Ethereum work's metadata. The command
+  is the operator's to make: `--assume-ethereum` asserts it, and without that
+  flag `evm` items are skipped with a reason that names the flag. The warning
+  prints before anything is written, so an operator who did not mean to assert
+  it still has the file they started with. Reaching an actual L2 belongs in the
+  indexer client, which maps only `ethereum` and `tezos` today.
+- In-place writes refuse to run over an input that changed while the lookup
+  was in flight. The comparison is a hash of the bytes actually parsed, against
+  the resolved write target, so `-o` naming the input by another spelling and a
+  symlink pointing at it are both recognized as the in-place case. It runs
+  immediately before the rename, so the exposed interval is a few syscalls
+  rather than the minutes a lookup takes. It narrows the race and does not
+  close it: compare-then-replace is not atomic against an editor participating
+  in no protocol, and no userspace sequence makes it so. Writing to a distinct
+  `--output` opts out of in-place replacement entirely, which is the right
+  choice when a file is being actively edited.
+- An attached manifest's id is derived from its whole finished metadata block,
+  every time rather than only when this command changed something. The indexer
+  keys its id on the token coordinate, so every rendition of one artwork
+  carries the same id whatever its content, and under `--force` the indexer may
+  itself return a different artist or description under that unchanged id.
+  Deriving from the payload is the only rule that holds in every case:
+  identical content keeps one identity, differing content never shares one. The
+  original id is folded in so the result stays anchored to the token and stays
+  deterministic across runs.
+- In-place writes refuse to run over an input that changed while the lookup
+  was in flight. The lookup can take minutes and the default destination is the
+  input, so a curator's edit or re-sign in that window would otherwise be
+  overwritten by a result computed from older bytes.
+- In-place writes are atomic and crash-durable: the contents are synced before
+  the rename and the containing directory after it, so a power loss cannot
+  leave the destination name pointing at incomplete data. The directory sync is
+  best-effort, since it is not portable.
+- In-place writes are atomic: the candidate goes to a temporary file beside the
+  destination and is renamed over it, so an interruption cannot leave a
+  truncated playlist. A symlinked destination is followed to its target rather
+  than replaced, and the existing file's permission mode is read before the
+  temporary file is created and applied to it before any bytes are written, so
+  a curator-restricted playlist is never briefly world-readable mid-write. The
+  destination's owner and group are carried across too, since a replacement is
+  a new inode and would otherwise take this process's ownership — silently
+  reassigning a shared playlist. Where that cannot be done, the in-place
+  replacement is refused and `--output` is offered instead. Extended ACLs are
+  not preserved, because Node exposes no portable way to read them; a playlist
+  carrying them should be enriched through `--output`.
+- `--output` names a file the caller expects to exist afterwards, so it is
+  written even when nothing was enriched. A no-op without `--output` writes
+  nothing rather than rewriting the input for no gain.
+- The playlist is validated before lookup and the enriched candidate is
+  validated before writing. On either failure the diagnostics are printed and
+  the file is left untouched, rather than replaced with a document that sign,
+  publish, and play would each reject later.
+
 ## Deterministic-first behavior
 
 The CLI is deterministic end to end. There is no natural-language interface; any natural-language layer lives in the user's coding agent, which drives these commands:

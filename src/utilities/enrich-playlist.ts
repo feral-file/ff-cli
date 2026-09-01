@@ -1,0 +1,582 @@
+/**
+ * Fills in missing inline Ref Manifests on an existing DP-1 playlist.
+ *
+ * `find` and `build` attach an `inlineManifest` to every item they create, so
+ * playlists this CLI authors end to end are already labelled. Playlists that
+ * arrive any other way are not: items copied out of another playlist, items
+ * hand-written against a known contract, items inherited from a document
+ * predating §3.6. Those carry a `source` and a `provenance` block and nothing
+ * else, and there was no way to repair them short of editing JSON by hand.
+ *
+ * What the gap costs is visible on a device. The FF1 tombstone resolves its
+ * label through `ref` -> `inlineManifest` -> `item.metadata` and falls back to
+ * the item title, so an unlabelled item shows a title with no artist line. The
+ * app's grid is worse: it can rasterize a thumbnail from a direct image, video,
+ * or SVG source, but not from a live HTML work, so every generative item in an
+ * unlabelled playlist renders as an empty tile. A playlist of computational art
+ * is mostly live HTML, which is exactly the case that looks broken.
+ *
+ * Enrichment is additive and narrow on purpose. It writes `inlineManifest` and
+ * nothing else: `source`, `duration`, `id`, and `display` are the curator's
+ * decisions and are left exactly as found, even when the indexer disagrees. An
+ * item the indexer cannot resolve is reported, never guessed at — a fabricated
+ * artist line in a signed document is worse than a missing one.
+ */
+
+import { createHash } from 'node:crypto';
+
+import * as logger from '../logger';
+
+/**
+ * Dp1Provenance is the on-chain coordinate block DP-1 items carry. Enrichment
+ * is keyed on it because it is the only field that identifies *which* artwork
+ * an item is; a `source` URL is a rendition, and many renditions share one.
+ */
+export interface Dp1Provenance {
+  type?: string;
+  contract?: {
+    chain?: string;
+    address?: string;
+    tokenId?: string | number;
+  };
+}
+
+export interface Dp1Manifest {
+  metadata?: { title?: string; [key: string]: unknown };
+  [key: string]: unknown;
+}
+
+export interface Dp1Item {
+  id?: string;
+  title?: string;
+  source?: string;
+  duration?: number;
+  provenance?: Dp1Provenance;
+  inlineManifest?: Dp1Manifest;
+  /** URI of an externally hosted Ref Manifest. Outranks inlineManifest. */
+  ref?: string;
+  refHash?: string;
+  [key: string]: unknown;
+}
+
+export interface Dp1Playlist {
+  items?: Dp1Item[];
+  /** DP-1 v1.1.0 multi-signature envelope. */
+  signatures?: unknown;
+  /** Legacy flat signature, still read by verify and sign in this repo. */
+  signature?: unknown;
+  [key: string]: unknown;
+}
+
+/** TokenCoordinate is the lookup key shape `getNFTTokenInfoBatch` expects. */
+export interface TokenCoordinate {
+  chain: string;
+  contractAddress: string;
+  tokenId: string;
+}
+
+/**
+ * IndexerItem is one entry of what `getNFTTokenInfoBatch` returns: a DP-1 item
+ * carrying `provenance` and, when the indexer had enough to build one, an
+ * `inlineManifest`.
+ *
+ * Critically, the returned array is NOT positionally aligned with the input.
+ * `getNFTTokenInfoBatch` ends with
+ * `results.filter((r) => r.success && r.item).map((r) => r.item)`, so a token
+ * the indexer cannot resolve is dropped rather than represented. Two tokens in,
+ * one item out, and nothing in the payload says which request it answers except
+ * its own provenance. Correlating by array position would attach one artwork's
+ * artist and thumbnail to a different artwork — silently, inside a document
+ * that then gets signed. Everything below correlates by coordinate instead.
+ */
+export interface IndexerItem {
+  provenance?: Dp1Provenance;
+  inlineManifest?: Dp1Manifest;
+  /** The source the indexer chose, which need not be the curator's. */
+  source?: string;
+  [key: string]: unknown;
+}
+
+/**
+ * TokenLookup resolves coordinates to indexer items. The result may be shorter
+ * than the input and in any order. Injected rather than imported so tests
+ * exercise the mapping without a network call; the CLI passes an adapter over
+ * `getNFTTokenInfoBatch`.
+ */
+export type TokenLookup = (
+  tokens: TokenCoordinate[],
+  onProgress?: (done: number, total: number) => void
+) => Promise<IndexerItem[]>;
+
+/** SkipReason explains, per item, why enrichment did not write a manifest. */
+export type SkipReason =
+  | 'already-labelled'
+  | 'external-ref'
+  | 'no-provenance'
+  | 'ambiguous-chain'
+  | 'not-indexed'
+  | 'no-metadata';
+
+export interface SkippedItem {
+  index: number;
+  title: string;
+  reason: SkipReason;
+}
+
+export interface EnrichOutcome {
+  playlist: Dp1Playlist;
+  enriched: number;
+  skipped: SkippedItem[];
+  /** True when the document changed and any prior signature is now void. */
+  signatureInvalidated: boolean;
+  /**
+   * How many distinct coordinates were looked up as Ethereum on the strength
+   * of a DP-1 `evm` chain name. Reported so the assumption is visible rather
+   * than silent; see CHAIN_ALIASES.
+   */
+  assumedEthereum: number;
+}
+
+export interface EnrichOptions {
+  /** Rewrite manifests that already exist. Off by default: a hand-authored
+   *  manifest may carry curator intent the indexer does not know about. */
+  force?: boolean;
+  /**
+   * The operator's assertion that DP-1 `evm` coordinates in this playlist are
+   * Ethereum. Without it those items are skipped rather than guessed at; see
+   * AMBIGUOUS_CHAIN.
+   */
+  assumeEthereum?: boolean;
+  onProgress?: (done: number, total: number) => void;
+}
+
+/**
+ * CHAIN_ALIASES translates a DP-1 chain name into the indexer's, outbound.
+ *
+ * DP-1 names the EVM family `evm` (core spec §6: "evm" | "tezos" | "bitmark" |
+ * "other"), because the protocol describes a class of chains. The FF indexer
+ * names the same thing `ethereum`, because it queries a specific one. Without
+ * this every EVM item comes back unresolved, and the failure looks like a
+ * missing artwork rather than a vocabulary mismatch.
+ *
+ * Unlisted values pass through so the indexer, not this table, decides what it
+ * supports.
+ */
+const CHAIN_ALIASES: Record<string, string> = {
+  evm: 'ethereum',
+};
+
+/**
+ * `evm` names a family, and this maps it to one member of that family.
+ *
+ * DP-1 core §6 offers "evm" | "tezos" | "bitmark" | "other" and carries no
+ * network identity, while the indexer maps Ethereum, Polygon, Arbitrum,
+ * Optimism, Base, and Zora all back to `evm`. So a DP-1 coordinate cannot say
+ * which EVM network it means, and neither can the response.
+ *
+ * Ethereum is chosen because it is the only EVM network this client can reach:
+ * buildTokenCID maps ethereum to eip155:1 and tezos to tezos:mainnet, and
+ * throws for everything else. A --chain flag would not widen that — it would
+ * only move the throw. The residual risk is narrow and real: an L2 work whose
+ * address and token id also exist on Ethereum would be enriched with the
+ * Ethereum work's metadata, and nothing in the response could reveal it.
+ *
+ * The count is surfaced so the assumption is stated at the point of use rather
+ * than buried here. Widening it belongs upstream, in the indexer client.
+ */
+const AMBIGUOUS_CHAIN = 'evm';
+
+/**
+ * One CLI invocation stamps one manifest timestamp, matching ref-manifest.ts:
+ * a run that synthesizes several manifests should not write several clocks.
+ */
+const MANIFEST_CREATED = new Date().toISOString();
+
+/**
+ * canonicalChain collapses both vocabularies onto one name so a coordinate
+ * sent to the indexer and a coordinate read back off its response compare
+ * equal. The direction is deliberately the reverse of CHAIN_ALIASES: this one
+ * is for matching, that one is for querying.
+ */
+function canonicalChain(chain: string): string {
+  const lower = chain.trim().toLowerCase();
+  return lower === 'ethereum' ? 'evm' : lower;
+}
+
+/**
+ * coordinateKeyOf builds the correlation key for a provenance block, or null
+ * when the block cannot identify a single work.
+ *
+ * The address is lowercased because the indexer echoes it checksummed while
+ * callers typically write it lowercase, and the two must still match.
+ */
+function coordinateKeyOf(provenance: Dp1Provenance | undefined): string | null {
+  const contract = provenance?.contract;
+  if (!contract) {
+    return null;
+  }
+  const { chain, address, tokenId } = contract;
+  if (!chain || !address || tokenId === undefined || tokenId === null) {
+    return null;
+  }
+  const token = String(tokenId).trim();
+  if (token.length === 0) {
+    return null;
+  }
+  return `${canonicalChain(chain)}:${address.trim().toLowerCase()}:${token}`;
+}
+
+/**
+ * describeItem names an item for operator output, preferring its title.
+ */
+function describeItem(item: Dp1Item, index: number): string {
+  const title = typeof item.title === 'string' ? item.title.trim() : '';
+  return title.length > 0 ? title : `item ${index + 1}`;
+}
+
+/**
+ * coordinateFor extracts a lookup key from an item, or null when the item
+ * carries no usable on-chain coordinate.
+ *
+ * All three parts are required. A contract with no token id identifies a
+ * collection rather than a work, and resolving that would attach some other
+ * item's manifest to this one.
+ */
+function coordinateFor(item: Dp1Item): TokenCoordinate | null {
+  const contract = item.provenance?.contract;
+  if (!contract) {
+    return null;
+  }
+  const { chain, address, tokenId } = contract;
+  if (!chain || !address || tokenId === undefined || tokenId === null) {
+    return null;
+  }
+  const token = String(tokenId).trim();
+  if (token.length === 0) {
+    return null;
+  }
+  const normalized = chain.trim().toLowerCase();
+  return {
+    chain: CHAIN_ALIASES[normalized] ?? normalized,
+    contractAddress: address,
+    tokenId: token,
+  };
+}
+
+/**
+ * stillFromIndexerSource recovers a thumbnail the manifest builder suppressed.
+ *
+ * `resolveStillUri` blanks a still that equals the source it was given, on the
+ * reasonable ground that pointing a thumbnail at the artwork itself adds
+ * payload and no information. But the source it was given is the one the
+ * INDEXER chose, not the one the curator kept. For a static work the indexer
+ * commonly selects the still as the source, so the thumbnail is dropped —
+ * and when the curator's item points at a live HTML generator instead, the
+ * item ends up with no still at all. That is precisely the case this command
+ * exists to repair: a live work the app cannot rasterize, whose grid tile
+ * stays empty.
+ *
+ * Recovering it is the inverse of the suppression. When the indexer's source
+ * differs from the item's and is an http(s) URL, that source IS the still that
+ * was elided, so it becomes the thumbnail relative to the item's own source.
+ */
+function stillFromIndexerSource(item: Dp1Item, resolved: IndexerItem): string {
+  const indexerSource = typeof resolved.source === 'string' ? resolved.source.trim() : '';
+  const itemSource = typeof item.source === 'string' ? item.source.trim() : '';
+  if (!indexerSource || indexerSource === itemSource) {
+    return '';
+  }
+  if (!indexerSource.startsWith('http://') && !indexerSource.startsWith('https://')) {
+    return '';
+  }
+  // The indexer's source is not necessarily a still. getBestMediaUrl prefers
+  // display.animation_url and media assets over display.image_url, so it is
+  // frequently a live HTML rendition — and writing one into the thumbnail slot
+  // is worse than leaving the slot empty: the grid still cannot rasterize it,
+  // and the item now claims a still it does not have.
+  //
+  // Only a URL that is demonstrably an image is used. The indexer exposes no
+  // separately identified still on the item this command receives, so the file
+  // extension is the evidence available; carrying a real image field through
+  // the batch result would be the better fix and belongs upstream.
+  return looksLikeImage(indexerSource) ? indexerSource : '';
+}
+
+/**
+ * Media the app can draw a grid tile from, matching the types
+ * playlist-builder.js already recognizes. SVG and video belong here: the app
+ * rasterizes both, and excluding them left works with the empty tile this
+ * command exists to remove. HTML is deliberately absent — an unrasterizable
+ * page in the thumbnail slot is worse than an empty slot, because the item
+ * then claims a still it does not have.
+ */
+const RASTERIZABLE_EXTENSIONS = [
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.avif',
+  '.bmp',
+  '.svg',
+  '.mp4',
+  '.webm',
+];
+
+/**
+ * looksLikeImage tests a URL's path extension, ignoring query and fragment.
+ */
+function looksLikeImage(url: string): boolean {
+  let pathname = url;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    pathname = url.split('?')[0].split('#')[0];
+  }
+  const lower = pathname.toLowerCase();
+  return RASTERIZABLE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+}
+
+/**
+ * hasThumbnail reports whether a manifest already carries a default still.
+ */
+function hasThumbnail(manifest: Dp1Manifest): boolean {
+  const thumbnails = (manifest.metadata as { thumbnails?: { default?: { uri?: unknown } } })
+    ?.thumbnails;
+  return typeof thumbnails?.default?.uri === 'string' && thumbnails.default.uri.length > 0;
+}
+
+/**
+ * manifestFor returns the manifest to write onto an item, or undefined when
+ * the indexer resolved the token without building one.
+ *
+ * The curator's own title wins. `item.title` survives enrichment untouched,
+ * but the tombstone reads the manifest first, so attaching an indexer title
+ * that disagrees would change the displayed label while appearing to preserve
+ * it — the indexer writes "Pre-Process #0" where a curator wrote
+ * "Pre-Process". Everything else in the manifest (artist, description,
+ * thumbnails) is what enrichment exists to fetch and is taken as given.
+ */
+function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefined {
+  const still = stillFromIndexerSource(item, resolved);
+  let manifest = resolved.inlineManifest;
+  let rekey = false;
+
+  if (manifest && still && !hasThumbnail(manifest)) {
+    manifest = {
+      ...manifest,
+      metadata: {
+        ...(manifest.metadata ?? {}),
+        thumbnails: { default: { uri: still } },
+      },
+    };
+    rekey = true;
+  } else if (!manifest && still) {
+    // Nothing was emitted because the still was the only content the token
+    // had, and it had been suppressed. A thumbnail-only manifest is worth its
+    // payload in a way a title-only one is not: it is the difference between
+    // a grid tile and an empty square.
+    const synthesizedTitle = typeof item.title === 'string' ? item.title.trim() : '';
+    manifest = {
+      refVersion: '1.1.0',
+      id: derivedManifestId('', `${synthesizedTitle}\n${still}`),
+      created: MANIFEST_CREATED,
+      locale: 'en',
+      metadata: {
+        ...(synthesizedTitle ? { title: synthesizedTitle } : {}),
+        thumbnails: { default: { uri: still } },
+      },
+    };
+  }
+
+  if (!manifest) {
+    return undefined;
+  }
+
+  const metadata = manifest.metadata ?? {};
+  const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
+  const overrideTitle = curatorTitle.length > 0 && metadata.title !== curatorTitle;
+
+  // The id is derived from the finished payload every time, not only when this
+  // command changed something. The indexer keys its id on the token
+  // coordinate, so every rendition of one artwork carries the same id whatever
+  // its content — and under --force the indexer may itself return a different
+  // artist or description under that unchanged id. Deriving from the payload
+  // is the only rule that holds in every case: identical content keeps one
+  // identity, differing content never shares one.
+  //
+  // The original id is folded in, so the result stays anchored to the token
+  // rather than floating free of it, and stays deterministic across runs.
+  //
+  // `rekey` is read only to record that a thumbnail was recovered; the
+  // derivation below covers it either way.
+  void rekey;
+  const finalMetadata = overrideTitle ? { ...metadata, title: curatorTitle } : metadata;
+  return {
+    ...manifest,
+    id: derivedManifestId(
+      typeof manifest.id === 'string' ? manifest.id : '',
+      stableStringify(finalMetadata)
+    ),
+    metadata: finalMetadata,
+  };
+}
+
+/**
+ * stableStringify serializes a value with object keys in sorted order, so the
+ * same content hashes the same however it was assembled.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value) ?? 'null';
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(',')}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, entryValue]) => entryValue !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([key, entryValue]) => `${JSON.stringify(key)}:${stableStringify(entryValue)}`);
+  return `{${entries.join(',')}}`;
+}
+
+/**
+ * derivedManifestId produces a stable id for a manifest whose title this
+ * command replaced, shaped as a UUID so it reads like every other manifest id.
+ */
+function derivedManifestId(originalId: string, title: string): string {
+  const digest = createHash('sha256').update(`${originalId}\n${title}`).digest('hex');
+  return [
+    digest.slice(0, 8),
+    digest.slice(8, 12),
+    digest.slice(12, 16),
+    digest.slice(16, 20),
+    digest.slice(20, 32),
+  ].join('-');
+}
+
+/**
+ * enrichPlaylistManifests attaches an inline Ref Manifest to every item that
+ * lacks one and can be resolved on chain.
+ *
+ * The playlist is mutated in place and returned; callers that need the
+ * original should read it twice. Items are looked up in one batch so the
+ * indexer sees a single burst rather than a request per item — warming
+ * previously-unseen tokens is the slow path, and it parallelizes internally.
+ *
+ * Signatures are dropped when anything changed, in both the DP-1 v1.1.0
+ * `signatures[]` form and the legacy flat `signature` this repo still verifies.
+ * A signature covers the document bytes, and an enriched document is a
+ * different document; leaving a stale envelope in place would produce a file
+ * that fails verification at the device with no explanation of why.
+ */
+export async function enrichPlaylistManifests(
+  playlist: Dp1Playlist,
+  lookup: TokenLookup,
+  options: EnrichOptions = {}
+): Promise<EnrichOutcome> {
+  const items = Array.isArray(playlist.items) ? playlist.items : [];
+  const skipped: SkippedItem[] = [];
+  const pending: { index: number; key: string }[] = [];
+  // One lookup per distinct artwork, not per item. getNFTTokenInfoBatch runs a
+  // lookup for each token it is handed, and a token the indexer has not seen
+  // triggers an indexing job and a poll that can take minutes. A playlist that
+  // deliberately repeats a work — the same piece at two points in a loop —
+  // would otherwise submit that job once per appearance.
+  const coordinates = new Map<string, TokenCoordinate>();
+
+  items.forEach((item, index) => {
+    // An item with a `ref` is already labelled, by a manifest this command
+    // cannot see. Ref outranks inlineManifest in the resolution order, so
+    // enriching one writes a manifest the device will ignore while still
+    // invalidating the signature: damage with no visible change.
+    //
+    // --force does not override this. Making the inline manifest win would
+    // mean deleting the curator's `ref` and `refHash`, which is a different
+    // and larger decision than filling in missing metadata — and one that
+    // silently discards the integrity hash the remote manifest is checked
+    // against. If that conversion is ever wanted it should be its own flag,
+    // named for what it does.
+    if (typeof item.ref === 'string' && item.ref.trim().length > 0) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'external-ref' });
+      return;
+    }
+    if (item.inlineManifest && !options.force) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'already-labelled' });
+      return;
+    }
+    const coordinate = coordinateFor(item);
+    const key = coordinateKeyOf(item.provenance);
+    if (!coordinate || !key) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'no-provenance' });
+      return;
+    }
+    // `evm` names a family and the response cannot narrow it, so enriching one
+    // on the assumption of Ethereum can attach a different artwork's artist,
+    // description, and still — into a document the curator then signs. The
+    // operator has to assert the network; the command will not assume it.
+    if (key.startsWith(`${AMBIGUOUS_CHAIN}:`) && !options.assumeEthereum) {
+      skipped.push({ index, title: describeItem(item, index), reason: 'ambiguous-chain' });
+      return;
+    }
+    pending.push({ index, key });
+    if (!coordinates.has(key)) {
+      coordinates.set(key, coordinate);
+    }
+  });
+
+  const assumedEthereum = [...coordinates.keys()].filter((key) =>
+    key.startsWith(`${AMBIGUOUS_CHAIN}:`)
+  ).length;
+
+  if (pending.length === 0) {
+    return { playlist, enriched: 0, skipped, signatureInvalidated: false, assumedEthereum: 0 };
+  }
+
+  const resolved = await lookup([...coordinates.values()], options.onProgress);
+
+  // Index what came back by its own coordinate. A response carrying no usable
+  // provenance cannot be attributed to any request, so it is dropped rather
+  // than guessed at; the affected item then reports as not-indexed, which is
+  // exactly what happened.
+  const byCoordinate = new Map<string, IndexerItem>();
+  for (const entry of resolved) {
+    const key = coordinateKeyOf(entry.provenance);
+    if (key && !byCoordinate.has(key)) {
+      byCoordinate.set(key, entry);
+    }
+  }
+
+  let enriched = 0;
+  for (const entry of pending) {
+    const item = items[entry.index];
+    const match = byCoordinate.get(entry.key);
+    const manifest = match ? manifestFor(item, match) : undefined;
+    if (!manifest) {
+      // The indexer resolving a token and the indexer having anything worth
+      // attaching are different outcomes. buildInlineManifestForToken returns
+      // undefined when it has only a title, because a title-only manifest adds
+      // payload to every transfer without adding information. Reporting that
+      // as "the indexer returned nothing" would be false.
+      skipped.push({
+        index: entry.index,
+        title: describeItem(item, entry.index),
+        reason: match ? 'no-metadata' : 'not-indexed',
+      });
+      continue;
+    }
+    item.inlineManifest = manifest;
+    enriched += 1;
+  }
+
+  const hadSignature = playlist.signatures !== undefined || playlist.signature !== undefined;
+  const signatureInvalidated = enriched > 0 && hadSignature;
+  if (signatureInvalidated) {
+    delete playlist.signatures;
+    delete playlist.signature;
+    logger.debug('[Enrich] Dropped signatures: the enriched document must be re-signed.');
+  }
+
+  skipped.sort((a, b) => a.index - b.index);
+  return { playlist, enriched, skipped, signatureInvalidated, assumedEthereum };
+}
