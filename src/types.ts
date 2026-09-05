@@ -63,7 +63,7 @@ export interface Config {
   generativeDuration: number;
   browser: BrowserConfig;
   feed?: FeedConfig; // Legacy
-  feedServers?: FeedServer[]; // New: array of feed servers with individual API keys
+  feedServers?: FeedServer[]; // New: array of feed servers (publishing is authorized by document signatures, not keys)
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
   ff1Relayer?: FF1RelayerConfig;

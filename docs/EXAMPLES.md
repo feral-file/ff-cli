@@ -381,12 +381,34 @@ Select server (0-based index): 0
    Playlist file not found: /path/to/playlist.json
 ```
 
-**API error:**
+**Not signed:**
 
 ```
 ❌ Failed to publish playlist
-   Failed to publish: {"error":"unauthorized","message":"Invalid API key"}
+   Failed to publish: {"error":"unauthorized","message":"missing authentication: request body must carry signatures"}
 ```
+
+Run `ff-cli sign <file>` before publishing.
+
+**Signed, but the signer is not declared as a curator:**
+
+```
+❌ Failed to publish playlist
+   Failed to publish: {"error":"signature_verification_failed","message":"curator signature verification: no valid curator signature found"}
+```
+
+This is the most common publish failure, and it is not about credentials. The feed accepts a create when
+the document carries a signature whose `kid` matches a key declared in its own `curators[]`. Signing alone
+is not enough — the playlist has to name the signing key as a curator:
+
+```json
+{
+  "curators": [{ "name": "Your Name", "key": "did:key:z6Mk..." }]
+}
+```
+
+Use the `kid` from the signature `ff-cli sign` produced, and note that DP-1 requires `name` alongside
+`key`. No API key is involved: the feed does not accept one.
 
 ## Complete Flow (build → validate → sign → play → publish)
 
