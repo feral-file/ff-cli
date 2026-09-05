@@ -268,16 +268,30 @@ describe('playlist config resolution around signing', () => {
     assert.equal(curators[0].name, 'YOUR_STUDIO');
   });
 
-  // Non-string JSON must not reach the signed document: the builder assigns this after validation.
-  test('falls back rather than signing a non-string curator name', async () => {
-    const playlist = await buildWith(
-      { privateKey: keyMaterial(), role: 'agent', curatorName: 42 },
-      { PLAYLIST_CURATOR_NAME: undefined }
-    );
-    const curators = playlist.curators as Array<{ name?: unknown }>;
-    assert.equal(typeof curators[0].name, 'string');
-    assert.equal(curators[0].name, 'ff-cli');
-  });
+  // config.json is arbitrary JSON, so every runtime type has to land on a string here — the builder
+  // appends this value after schema validation, which makes it the last unguarded step before signing.
+  for (const [label, value] of [
+    ['a number', 42],
+    ['an empty string', ''],
+    ['whitespace only', '   '],
+    ['null', null],
+    ['an object', { a: 1 }],
+    ['an array', ['x']],
+    ['a boolean', true],
+  ] as Array<[string, unknown]>) {
+    test(`falls back rather than signing ${label} as a curator name`, async () => {
+      const playlist = await buildWith(
+        { privateKey: keyMaterial(), role: 'agent', curatorName: value },
+        { PLAYLIST_CURATOR_NAME: undefined }
+      );
+      const curators = playlist.curators as Array<{ name?: unknown }>;
+      assert.equal(typeof curators[0].name, 'string', `${label} produced a non-string name`);
+      assert.equal(curators[0].name, 'ff-cli');
+      // A document that carries a malformed name would fail here, which is the failure being prevented.
+      const vr = await verifyPlaylist(playlist);
+      assert.equal(vr.valid, true, vr.error);
+    });
+  }
 
   // The sample private key is truthy, so without placeholder-aware resolution it beats a real
   // environment key and every signing path fails on a key the user never chose.
