@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { parseFindInput } from '@feralfile/source-resolver';
-import { getConfig } from '../config';
+import { getPlaylistConfig } from '../config';
 import {
   isPlaylistSourceUrl,
   loadPlaylistSource,
@@ -140,7 +140,6 @@ export const playCommand = new Command('play')
         process.exit(1);
       }
 
-      const config = getConfig();
       // No explicit duration: a direct video/audio URL plays its natural
       // length (DP-1 §4.1); static media uses config.defaultDuration.
       const resolved = probed ?? (await resolvePlaySource(source));
@@ -158,7 +157,11 @@ export const playCommand = new Command('play')
       // A direct media/web URL is wrapped in an unsigned single-item playlist,
       // so it must be signed before the verify gate; a loaded playlist is sent
       // as-is. castPlaylist owns the sign → verify → send sequence.
-      const privateKey = config.playlist?.privateKey || process.env.PLAYLIST_PRIVATE_KEY;
+      // Resolve through getPlaylistConfig rather than reading config.playlist directly: it is the one
+      // place that knows a config value may still be the config.json.example placeholder, in which case a
+      // valid PLAYLIST_PRIVATE_KEY must win. Duplicating the `config || env` precedence here is what made
+      // this path sign with the template literal while every other signing path used the real key.
+      const privateKey = getPlaylistConfig().privateKey || undefined;
       const result = await castPlaylist(resolved.playlist, {
         deviceName: options.device,
         skipVerify: options.skipVerify,
