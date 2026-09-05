@@ -280,9 +280,13 @@ The `publish` command:
 Configure feed servers in `config.json`:
 
 Publishing needs no credentials. The feed authorizes a create from the signatures inside the playlist:
-it requires a signature whose `kid` matches a key the document declares in `curators[]`. Sign with
-`ff-cli sign` and make sure that key is declared, or the feed rejects the publish regardless of any
-configuration here. An `apiKey` left over in an existing config is ignored.
+it requires a signature whose `kid` matches a key the document declares in `curators[]`.
+
+Declare it before signing, not after: a signature covers `curators[]`, so adding the entry to an
+already-signed playlist invalidates it, and signing again appends rather than replaces. Run
+`ff-cli status` to read the `did:key` your signatures will carry, put it in `curators[]`, then sign
+once. `find` and `build` do this for you when a signing key is configured. An `apiKey` left over in
+an existing config is ignored.
 
 ```json
 {
