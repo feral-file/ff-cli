@@ -132,6 +132,7 @@ export function getPlaylistConfig(): PlaylistConfig {
   return {
     privateKey: playlistConfig.privateKey || process.env.PLAYLIST_PRIVATE_KEY || null,
     role: playlistConfig.role || process.env.PLAYLIST_ROLE || null,
+    curatorName: playlistConfig.curatorName || process.env.PLAYLIST_CURATOR_NAME || null,
   };
 }
 

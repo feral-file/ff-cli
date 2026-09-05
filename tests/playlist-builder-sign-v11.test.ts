@@ -112,6 +112,65 @@ describe('buildDP1Playlist signing (v1.1.0)', () => {
  * Isolates cwd and drops a cwd-local `config.json` so `getPlaylistConfig` picks up playlist.privateKey
  * the same way the CLI does for build flows.
  */
+
+/**
+ * A built playlist that is signed but declares no curator cannot be published: the feed authorizes a
+ * create by matching a signature's kid against the document's own curators[], and re-declaring one after
+ * the fact would invalidate the signature. So the builder has to write the declaration before it signs,
+ * and these cases pin that ordering — verifying the signature is what proves curators[] was covered by it.
+ */
+describe('buildDP1Playlist curator declaration', () => {
+  test('declares the signing key as a curator, inside the signed payload', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    const material = der.toString('base64');
+    await withPlaylistConfig('ff1-builder-curator-', material, async () => {
+      const playlist = await buildDP1Playlist({ items: [minimalItem], ...deterministicParams });
+
+      const curators = playlist.curators as Array<{ name?: string; key?: string }> | undefined;
+      assert.ok(Array.isArray(curators), 'builder should declare curators[]');
+      const kid = (playlist.signatures as Array<{ kid: string }>)[0].kid;
+      assert.ok(
+        curators.some((c) => c.key === kid),
+        `curators[] should declare the signing kid ${kid}, got ${JSON.stringify(curators)}`
+      );
+      // DP-1 requires a name alongside the key.
+      assert.equal(typeof curators[0].name, 'string');
+      assert.ok((curators[0].name as string).length > 0);
+
+      // The decisive assertion: the signature still verifies, so curators[] was present when signing.
+      const vr = await verifyPlaylist(playlist);
+      assert.equal(vr.valid, true, vr.error);
+    });
+  });
+
+  test('uses the configured curator name when one is set', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    const dir = join(tmpdir(), `ff1-builder-curator-name-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    const prevCwd = process.cwd();
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        playlist: { privateKey: der.toString('base64'), role: 'agent', curatorName: 'Studio Nine' },
+      }),
+      'utf-8'
+    );
+    try {
+      process.chdir(dir);
+      const playlist = await buildDP1Playlist({ items: [minimalItem], ...deterministicParams });
+      const curators = playlist.curators as Array<{ name?: string; key?: string }>;
+      assert.equal(curators[0].name, 'Studio Nine');
+      const vr = await verifyPlaylist(playlist);
+      assert.equal(vr.valid, true, vr.error);
+    } finally {
+      process.chdir(prevCwd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 async function withPlaylistConfig(
   namePrefix: string,
   playlistPrivateKey: string,

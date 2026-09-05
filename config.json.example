@@ -15,7 +15,8 @@
   ],
   "playlist": {
     "privateKey": "YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended__or_32byte_raw_seed_as_hex_or_base64__run_ff-cli_setup_to_generate",
-    "role": "agent"
+    "role": "agent",
+    "curatorName": "Your name"
   },
   "ff1Relayer": {
     "baseUrl": "https://tv-cast-coordination.autonomy-system.workers.dev"

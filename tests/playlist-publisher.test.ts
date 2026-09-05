@@ -8,6 +8,7 @@ import { describe, test } from 'node:test';
 
 import { publishPlaylist } from '../src/utilities/playlist-publisher';
 import { signPlaylist } from '../src/utilities/playlist-signer';
+import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
 
@@ -95,8 +96,15 @@ describe('publishPlaylist validation contract', () => {
         unknown
       >;
       const privateKey = makePrivateKeyBase64();
-      const signature = await signPlaylist(basePlaylist, privateKey);
-      const playlist = { ...basePlaylist, signature: undefined, signatures: [signature] };
+      // Declare the signer as a curator BEFORE signing. The feed accepts a create only when a
+      // signature's kid appears in the document's own curators[], and signing covers curators[], so
+      // adding it afterwards would invalidate the signature this test then expects to upload.
+      const withCurator = {
+        ...basePlaylist,
+        curators: [{ name: 'Test Curator', key: playlistSigningDidKey(privateKey) }],
+      };
+      const signature = await signPlaylist(withCurator, privateKey);
+      const playlist = { ...withCurator, signature: undefined, signatures: [signature] };
       const path = join(dir, 'signed.json');
       writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
 
@@ -119,4 +127,30 @@ describe('publishPlaylist validation contract', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+});
+
+test('publishPlaylist refuses a signed playlist whose signer is not a declared curator', async () => {
+  // The feed's rule, checked locally: a signature's kid must appear in the document's own curators[].
+  // Its server-side answer ("no valid curator signature found") reads as a signing problem and sends
+  // people to check their key rather than their document, so the CLI answers first with the remedy.
+  const dir = makeTempDir();
+  try {
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const privateKey = makePrivateKeyBase64();
+    const signature = await signPlaylist(basePlaylist, privateKey);
+    const playlist = { ...basePlaylist, signature: undefined, signatures: [signature] };
+    const path = join(dir, 'signed-no-curator.json');
+    writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
+
+    // A URL that would fail loudly if contacted: the point is that no request is made at all.
+    const result = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+
+    assert.equal(result.success, false);
+    assert.match(String(result.error), /not declared as a curator/i);
+    assert.match(String(result.message), /curators/);
+    // The remedy has to carry the actual kid, or the user cannot act on it.
+    assert.match(String(result.message), new RegExp(playlistSigningDidKey(privateKey)));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

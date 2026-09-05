@@ -4,6 +4,7 @@ import { readConfigFile, resolveExistingConfigPath } from './helpers/config-file
 import { getPlaylistConfig } from '../config';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
+import { playlistSigningDidKey } from '../utilities/signing-identity';
 import { configuredFF1Devices } from '../utilities/config-placeholders';
 
 export const statusCommand = new Command('status')
@@ -37,6 +38,17 @@ export const statusCommand = new Command('status')
         }
       }
 
+      // The feed matches a signature's kid against the document's own curators[], so this value is not
+      // decoration: without it a user cannot write a publishable playlist, and it appears nowhere else.
+      let signingDidKey: string | undefined;
+      if (hasPlaylistSigningKey) {
+        try {
+          signingDidKey = playlistSigningDidKey(playlistKeyMaterial);
+        } catch {
+          signingDidKey = undefined;
+        }
+      }
+
       const statuses = [
         {
           label: 'Config file',
@@ -53,6 +65,13 @@ export const statusCommand = new Command('status')
               ? 'from config/env'
               : undefined,
           hint: ' (needed for signing and legacy verification)',
+        },
+        {
+          label: 'Signing identity (did:key)',
+          ok: Boolean(signingDidKey),
+          optional: false,
+          detail: signingDidKey,
+          hint: " (declare this in the playlist's curators[] so the feed accepts a publish)",
         },
         {
           label: 'Playlist signing role',

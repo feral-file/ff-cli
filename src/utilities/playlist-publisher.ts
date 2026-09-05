@@ -66,6 +66,39 @@ export async function publishPlaylist(
       };
     }
 
+    // Step 2b: fail here, not at the feed, when the signer is not declared as a curator.
+    //
+    // The feed accepts a create only when a signature's `kid` matches a key the document declares in
+    // `curators[]`. Signing alone does not satisfy that, and the server's answer — "no valid curator
+    // signature found" — reads as a signing problem, which sends people to check their key instead of
+    // their document. Checking locally turns a confusing 400 into an instruction, and costs no request.
+    const curatorKeys = new Set(
+      (Array.isArray((playlist as { curators?: unknown }).curators)
+        ? ((playlist as unknown as { curators: Array<{ key?: unknown }> }).curators ?? [])
+        : []
+      )
+        .map((c) => (typeof c?.key === 'string' ? c.key.trim() : ''))
+        .filter((k) => k.length > 0)
+    );
+    const signatures = Array.isArray((playlist as { signatures?: unknown }).signatures)
+      ? ((playlist as unknown as { signatures: Array<{ kid?: unknown }> }).signatures ?? [])
+      : [];
+    const signingKids = signatures
+      .map((sig) => (typeof sig?.kid === 'string' ? sig.kid.trim() : ''))
+      .filter((k) => k.length > 0);
+    if (signingKids.length > 0 && !signingKids.some((kid) => curatorKeys.has(kid))) {
+      return {
+        success: false,
+        error: 'Playlist is signed, but the signing key is not declared as a curator.',
+        message:
+          `The feed accepts a publish when a signature's kid appears in the playlist's own curators[].\n` +
+          `  Add this to the playlist before signing:\n` +
+          `    "curators": [{ "name": "Your name", "key": "${signingKids[0]}" }]\n` +
+          `  then sign again from the unsigned file — signing appends, so re-signing an already-signed\n` +
+          `  playlist leaves the earlier signature covering a document that no longer exists.`,
+      };
+    }
+
     // Step 3: Send validated playlist to feed server.
     //
     // No auth header. The feed authorizes a create from the document's own signatures: it requires a

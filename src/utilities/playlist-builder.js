@@ -20,6 +20,7 @@ const {
 } = require('dp1-js');
 const { getPlaylistConfig, getConfig } = require('../config');
 const { signPlaylist } = require('./playlist-signer');
+const { playlistSigningDidKey } = require('./signing-identity');
 const { buildInlineManifestForToken } = require('./ref-manifest');
 
 /** Default display background that passes DP-1 hex color validation. */
@@ -532,9 +533,20 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
   const playlist = playlistBuilder.build();
 
   // Sign the playlist if private key is configured.
+  //
+  // The curator declaration has to be written BEFORE signing. The feed accepts a create only when a
+  // signature's kid matches a key in the document's own curators[], and a signature covers curators[],
+  // so declaring it afterwards would invalidate the signature we just produced. A playlist built without
+  // this entry is signed but unpublishable, which is how `find --publish` used to fail.
   try {
     const playlistConfig = getPlaylistConfig();
     if (playlistConfig.privateKey) {
+      const key = playlistSigningDidKey(playlistConfig.privateKey);
+      const declared = Array.isArray(playlist.curators) ? playlist.curators : [];
+      // Respect a curator the caller already declared for this key; only add what is missing.
+      if (!declared.some((curator) => curator && curator.key === key)) {
+        playlist.curators = [...declared, { name: playlistConfig.curatorName || 'ff-cli', key }];
+      }
       playlist.signatures = [await signPlaylist(playlist, playlistConfig.privateKey)];
       delete playlist.signature;
     }

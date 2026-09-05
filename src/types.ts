@@ -10,6 +10,14 @@ export interface BrowserConfig {
 export interface PlaylistConfig {
   privateKey: string | null;
   role: string | null;
+  /**
+   * Display name recorded for this signing key in a built playlist's `curators[]`.
+   *
+   * DP-1 requires `name` alongside `key`, and the feed authorizes a create by matching a signature's
+   * `kid` against a declared curator key — so a playlist built and signed without this entry cannot be
+   * published at all. Defaults to `ff-cli` rather than staying empty for that reason.
+   */
+  curatorName?: string | null;
 }
 
 export interface FeedConfig {
