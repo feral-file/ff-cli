@@ -37,7 +37,7 @@ ff-cli config validate
   "defaultDuration": 10,
   "playlist": {
     "privateKey": "your_ed25519_private_key_hex_or_base64_here",
-    "curatorName": "Your name"
+    "curatorName": "YOUR_CURATOR_NAME"
   },
   "feed": { "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"] },
   "ff1Devices": {

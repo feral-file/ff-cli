@@ -15,6 +15,23 @@ export const statusCommand = new Command('status')
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
         console.log(chalk.dim('Run: ff-cli setup'));
+        // PLAYLIST_PRIVATE_KEY is a supported signing source on its own, and the did:key it implies is
+        // the one value a user must know before they can write a publishable playlist — it has to be
+        // declared in curators[] before signing. Exiting silently here would leave an environment-only
+        // user unable to obtain it from anywhere. The exit status still reports "not configured".
+        const envKey = process.env.PLAYLIST_PRIVATE_KEY?.trim();
+        if (envKey) {
+          try {
+            console.log(
+              chalk.green(`\nSigning identity (did:key) ${playlistSigningDidKey(envKey)}`)
+            );
+            console.log(
+              chalk.dim("  from PLAYLIST_PRIVATE_KEY; declare it in the playlist's curators[]")
+            );
+          } catch (error) {
+            console.log(chalk.red(`\nPLAYLIST_PRIVATE_KEY unusable: ${(error as Error).message}`));
+          }
+        }
         process.exit(1);
       }
 

@@ -171,6 +171,49 @@ describe('buildDP1Playlist curator declaration', () => {
   });
 });
 
+/**
+ * `ff-cli setup` writes config.json.example through verbatim apart from the key and role, so any sample
+ * value left in the playlist block reaches real published documents — and this one is a public name
+ * inside the signed curators[]. The placeholder must therefore lose to the environment, not win over it.
+ */
+describe('buildDP1Playlist curator name resolution', () => {
+  test('ignores the sample placeholder and honours PLAYLIST_CURATOR_NAME', async () => {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    const dir = join(tmpdir(), `ff1-builder-placeholder-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    const prevCwd = process.cwd();
+    const prevName = process.env.PLAYLIST_CURATOR_NAME;
+    writeFileSync(
+      join(dir, 'config.json'),
+      JSON.stringify({
+        playlist: {
+          privateKey: der.toString('base64'),
+          role: 'agent',
+          curatorName: 'YOUR_CURATOR_NAME',
+        },
+      }),
+      'utf-8'
+    );
+    try {
+      process.chdir(dir);
+      process.env.PLAYLIST_CURATOR_NAME = 'Env Curator';
+      const playlist = await buildDP1Playlist({ items: [minimalItem], ...deterministicParams });
+      const curators = playlist.curators as Array<{ name?: string; key?: string }>;
+      assert.equal(curators[0].name, 'Env Curator');
+      assert.notEqual(curators[0].name, 'YOUR_CURATOR_NAME');
+    } finally {
+      process.chdir(prevCwd);
+      if (prevName === undefined) {
+        delete process.env.PLAYLIST_CURATOR_NAME;
+      } else {
+        process.env.PLAYLIST_CURATOR_NAME = prevName;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 async function withPlaylistConfig(
   namePrefix: string,
   playlistPrivateKey: string,

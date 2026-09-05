@@ -50,6 +50,18 @@ Used for signing DP‑1 playlists.
 
   ff-cli normalizes whichever form you supply to base64 PKCS#8 DER before handing it to **`dp1-js`** (`SignMultiEd25519`). A malformed key fails with an actionable message (e.g. _"Invalid Ed25519 signing key … run `ff-cli setup` to generate one"_) instead of dp1-js's cryptic OpenSSL ASN.1 error (`header too long` / `wrong tag`).
 
+- `playlist.curatorName` (string): Display name recorded alongside your signing key in the `curators[]`
+  of playlists built by `find` and `build`. Defaults to `ff-cli`; you can also set it via
+  `PLAYLIST_CURATOR_NAME`. The feed authorizes a create by matching a signature's `kid` against a key
+  declared in the document's own `curators[]`, so those commands write that declaration **before**
+  signing — a name is required next to the key by DP-1, and the value is public and covered by the
+  signature. The sample `YOUR_CURATOR_NAME` in `config.json.example` is treated as unset, so an untouched
+  config falls through to `PLAYLIST_CURATOR_NAME` or the default rather than publishing under a
+  placeholder.
+
+  To read the `did:key` your signatures will carry, run `ff-cli status`. It reports the identity from
+  `PLAYLIST_PRIVATE_KEY` even when no config file exists yet.
+
 - `playlist.role` (string): DP-1 signing role that travels with the private key. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`).
 
 ### Generate an Ed25519 private key

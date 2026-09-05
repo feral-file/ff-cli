@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { copyFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
+
+import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
 const projectRoot = resolve(__dirname, '..');
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
@@ -156,6 +159,46 @@ describe('ff1 status playlist role health', () => {
       assert.notEqual(result.status, 0);
       assert.match(result.stdout + result.stderr, /Invalid Playlist signing role/);
       assert.match(result.stdout + result.stderr, /owner/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * PLAYLIST_PRIVATE_KEY is a supported signing source by itself, and the did:key it implies has to be
+ * known *before* signing — it must be declared in curators[], which the signature then covers. If status
+ * only spoke when a config file existed, an environment-only user could not obtain that value anywhere.
+ */
+describe('status signing identity without a config file', () => {
+  test('reports the did:key from PLAYLIST_PRIVATE_KEY when no config exists', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-status-envonly-'));
+    try {
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const material = (privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer).toString(
+        'base64'
+      );
+      const expected = playlistSigningDidKey(material);
+
+      const result = runCli(dir, ['status'], { PLAYLIST_PRIVATE_KEY: material });
+      const out = result.stdout + result.stderr;
+
+      assert.match(out, /config\.json not found/);
+      assert.ok(out.includes(expected), `status should surface ${expected}; got:\n${out}`);
+      // Still "not configured" for scripts that check the status code.
+      assert.equal(result.status, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('says so rather than crashing when the environment key is unusable', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-status-envbad-'));
+    try {
+      const result = runCli(dir, ['status'], { PLAYLIST_PRIVATE_KEY: 'not-a-key' });
+      const out = result.stdout + result.stderr;
+      assert.match(out, /PLAYLIST_PRIVATE_KEY unusable/);
+      assert.equal(result.status, 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

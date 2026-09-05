@@ -13,7 +13,7 @@ import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
 } from './utilities/playlist-signing-role';
-import { configuredFF1Devices } from './utilities/config-placeholders';
+import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
 
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
@@ -132,7 +132,12 @@ export function getPlaylistConfig(): PlaylistConfig {
   return {
     privateKey: playlistConfig.privateKey || process.env.PLAYLIST_PRIVATE_KEY || null,
     role: playlistConfig.role || process.env.PLAYLIST_ROLE || null,
-    curatorName: playlistConfig.curatorName || process.env.PLAYLIST_CURATOR_NAME || null,
+    // A placeholder copied from config.json.example must not win over the environment: setup writes
+    // the sample file through verbatim, and this value ends up inside every built playlist's signed
+    // curators[] as a public name.
+    curatorName: isMissingConfigValue(playlistConfig.curatorName)
+      ? process.env.PLAYLIST_CURATOR_NAME || null
+      : playlistConfig.curatorName || null,
   };
 }
 

@@ -381,24 +381,36 @@ Select server (0-based index): 0
    Playlist file not found: /path/to/playlist.json
 ```
 
+Both of these are caught locally, before anything is uploaded.
+
 **Not signed:**
 
 ```
-❌ Failed to publish playlist
-   Failed to publish: {"error":"unauthorized","message":"missing authentication: request body must carry signatures"}
+Publish failed
+  Playlist verification failed: Playlist signature verification failed
 ```
 
-Run `ff-cli sign <file>` before publishing.
+Run `ff-cli sign <file>` before publishing. (Posting the same document straight to the feed answers
+`{"error":"unauthorized","message":"missing authentication: request body must carry signatures"}`.)
 
 **Signed, but the signer is not declared as a curator:**
 
 ```
-❌ Failed to publish playlist
-   Failed to publish: {"error":"signature_verification_failed","message":"curator signature verification: no valid curator signature found"}
+Publish failed
+  Playlist is signed, but the signing key is not declared as a curator.
+
+The feed accepts a publish when a signature's kid appears in the playlist's own curators[].
+  Add this to the playlist before signing:
+    "curators": [{ "name": "Your name", "key": "did:key:z6Mkv7qJ..." }]
+  then sign again from the unsigned file — signing appends, so re-signing an already-signed
+  playlist leaves the earlier signature covering a document that no longer exists.
 ```
 
 This is the most common publish failure, and it is not about credentials. The feed accepts a create when
-the document carries a signature whose `kid` matches a key declared in its own `curators[]`.
+the document carries a signature whose `kid` matches a key declared in its own `curators[]`; posting such
+a document directly returns
+`{"error":"signature_verification_failed","message":"curator signature verification: no valid curator signature found"}`,
+which reads as a signing fault, so `ff-cli` diagnoses it locally instead.
 
 **Order matters.** A signature covers every field except `signature`/`signatures`, so `curators[]` has to
 be declared *before* signing. Adding it afterwards invalidates the signature, and signing again does not
