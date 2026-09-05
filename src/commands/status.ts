@@ -9,8 +9,30 @@ import { configuredFF1Devices } from '../utilities/config-placeholders';
 
 export const statusCommand = new Command('status')
   .description('Show configuration status')
-  .action(async () => {
+  // Identity discovery must cover every key `sign` accepts, not just the configured one. `sign --key`
+  // signs with a key the config never mentions, so reporting only the configured identity would hand the
+  // user the wrong did:key to declare in curators[] — and a wrong declaration fails exactly like a
+  // missing one.
+  .option(
+    '-k, --key <privateKey>',
+    'Report the signing identity for this key instead of the configured one'
+  )
+  .action(async (options: { key?: string }) => {
     try {
+      const overrideKey = options.key?.trim();
+      if (overrideKey) {
+        try {
+          console.log(
+            chalk.green(`Signing identity (did:key) ${playlistSigningDidKey(overrideKey)}`)
+          );
+          console.log(chalk.dim("  declare this in the playlist's curators[] before signing"));
+          return;
+        } catch (error) {
+          console.log(chalk.red(`--key unusable: ${(error as Error).message}`));
+          process.exit(1);
+        }
+      }
+
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));

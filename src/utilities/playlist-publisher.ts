@@ -55,7 +55,34 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 2: Verify signature integrity before publishing.
+    // Step 2: refuse legacy flat-signature documents outright, before verification.
+    //
+    // A flat `signature` string carries no kid, so the curator rule below has nothing to match and such
+    // a document would reach the feed only to be refused as unauthenticated — verified against a running
+    // feed. This runs ahead of verification deliberately: the document is unpublishable whether or not
+    // its legacy signature is valid, and 're-sign as a v1.1 envelope' is the remedy either way, which
+    // 'signature verification failed' would not convey.
+    const hasLegacyFlatSignature =
+      typeof (playlist as { signature?: unknown }).signature === 'string' &&
+      (playlist as unknown as { signature: string }).signature.trim().length > 0;
+    const hasEnvelope = Array.isArray((playlist as { signatures?: unknown }).signatures)
+      ? ((playlist as unknown as { signatures: unknown[] }).signatures ?? []).length > 0
+      : false;
+    if (!hasEnvelope && hasLegacyFlatSignature) {
+      return {
+        success: false,
+        error: 'Playlist carries a legacy flat signature, which the feed cannot authorize.',
+        message:
+          `The feed authorizes a publish from a signatures[] envelope, matching a signature's kid\n` +
+          `  against the playlist's own curators[]. A flat "signature" string carries no kid.\n` +
+          `  Re-sign it as a DP-1 v1.1 envelope:\n` +
+          `    1. remove the "signature" field\n` +
+          `    2. declare your key: "curators": [{ "name": "Your name", "key": "<did:key from ff-cli status>" }]\n` +
+          `    3. ff-cli sign <file>`,
+      };
+    }
+
+    // Step 3: Verify signature integrity before publishing.
     const deliveryResult = await verifyPlaylist(playlist);
 
     if (!deliveryResult.valid) {
@@ -66,7 +93,7 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 2b: fail here, not at the feed, when the signer is not declared as a curator.
+    // Step 4: fail here, not at the feed, when the signer is not declared as a curator.
     //
     // The feed accepts a create only when a signature's `kid` matches a key the document declares in
     // `curators[]`. Signing alone does not satisfy that, and the server's answer — "no valid curator
@@ -99,7 +126,7 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 3: Send validated playlist to feed server.
+    // Step 5: Send validated playlist to feed server.
     //
     // No auth header. The feed authorizes a create from the document's own signatures: it requires a
     // signature whose kid matches a key declared in the playlist's `curators[]`. An API key is neither

@@ -170,6 +170,44 @@ describe('ff1 status playlist role health', () => {
  * known *before* signing — it must be declared in curators[], which the signature then covers. If status
  * only spoke when a config file existed, an environment-only user could not obtain that value anywhere.
  */
+/**
+ * `sign --key` signs with a key the config never mentions. If status could only report the configured
+ * identity, that user would declare the wrong did:key in curators[] — which fails exactly like declaring
+ * none. Identity discovery therefore has to accept the same key sources signing does.
+ */
+describe('status signing identity for an explicit key', () => {
+  test('reports the did:key for --key, not the configured one', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-status-explicit-'));
+    try {
+      copyFileSync(fixtureConfig, join(dir, 'config.json'));
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const material = (privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer).toString(
+        'base64'
+      );
+      const expected = playlistSigningDidKey(material);
+
+      const result = runCli(dir, ['status', '--key', material]);
+      const out = result.stdout + result.stderr;
+
+      assert.ok(out.includes(expected), `status --key should report ${expected}; got:\n${out}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('reports an unusable --key instead of a wrong identity', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-status-explicit-bad-'));
+    try {
+      copyFileSync(fixtureConfig, join(dir, 'config.json'));
+      const result = runCli(dir, ['status', '--key', 'not-a-key']);
+      assert.match(result.stdout + result.stderr, /--key unusable/);
+      assert.equal(result.status, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('status signing identity without a config file', () => {
   test('reports the did:key from PLAYLIST_PRIVATE_KEY when no config exists', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ff1-status-envonly-'));

@@ -445,9 +445,9 @@ npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -o playlist.json
 # 2. Validate it
 npm run dev -- validate playlist.json
 
-# 3. Sign it (skip if find/build already signed it with your configured key)
-#    Declare curators[] BEFORE this step: the signature covers it, and the feed only accepts a
-#    publish when a signature's kid matches a declared curator key. Run `ff-cli status` for the kid.
+# 3. Sign it. Declare curators[] BEFORE this step: the signature covers it, and the feed only
+#    accepts a publish when a signature's kid matches a declared curator key.
+#    Run `ff-cli status` for the kid (add -k <key> if you sign with `sign --key`).
 npm run dev -- sign playlist.json -o signed.json
 
 # 4. Play it on a device
@@ -457,9 +457,17 @@ npm run dev -- play signed.json -d "Living Room Display"
 npm run dev -- publish signed.json -s 0
 ```
 
-When a playlist signing key is configured, `find` and `build` sign the playlist and declare that key
-in `curators[]` for you, so what they produce is publishable as built. Set `playlist.curatorName` in
-the config to control the name recorded there; it defaults to `ff-cli`.
+With a signing key configured, `find` and `build` already produce a signed `playlist.json` with your
+key declared in `curators[]`. Skip step 3 and use `playlist.json` in steps 4 and 5 — there is no
+`signed.json` on that path:
+
+```bash
+npm run dev -- play playlist.json -d "Living Room Display"
+npm run dev -- publish playlist.json -s 0
+```
+
+Set `playlist.curatorName` in the config to control the name recorded in `curators[]`; it defaults
+to `ff-cli`.
 
 `ff-cli find` can collapse build + play + publish into one command:
 

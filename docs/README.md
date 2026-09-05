@@ -285,7 +285,8 @@ it requires a signature whose `kid` matches a key the document declares in `cura
 Declare it before signing, not after: a signature covers `curators[]`, so adding the entry to an
 already-signed playlist invalidates it, and signing again appends rather than replaces. Run
 `ff-cli status` to read the `did:key` your signatures will carry, put it in `curators[]`, then sign
-once. `find` and `build` do this for you when a signing key is configured. An `apiKey` left over in
+once. If you sign with `sign --key <privateKey>`, read that key's identity with
+`ff-cli status --key <privateKey>` — the configured identity would be the wrong one to declare. `find` and `build` do this for you when a signing key is configured. An `apiKey` left over in
 an existing config is ignored.
 
 ```json

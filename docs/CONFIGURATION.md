@@ -60,7 +60,8 @@ Used for signing DP‑1 playlists.
   placeholder.
 
   To read the `did:key` your signatures will carry, run `ff-cli status`. It reports the identity from
-  `PLAYLIST_PRIVATE_KEY` even when no config file exists yet.
+  `PLAYLIST_PRIVATE_KEY` even when no config file exists yet, and `ff-cli status --key <privateKey>`
+  reports it for an explicit key — the one `sign --key` would use.
 
 - `playlist.role` (string): DP-1 signing role that travels with the private key. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`).
 

@@ -154,3 +154,27 @@ test('publishPlaylist refuses a signed playlist whose signer is not a declared c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('publishPlaylist refuses a legacy flat-signature playlist without uploading', async () => {
+  // A flat `signature` string still verifies locally when the matching key is configured, but it carries
+  // no kid — so the curator check has nothing to match and the document would reach the feed only to be
+  // refused as unauthenticated. Verified against a running feed before this guard existed.
+  const dir = makeTempDir();
+  try {
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const playlist = { ...basePlaylist, signature: 'ed25519:deadbeef', signatures: undefined };
+    const path = join(dir, 'legacy.json');
+    writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
+
+    // Port 1 would fail loudly if contacted; the point is that nothing is sent.
+    const result = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+
+    assert.equal(result.success, false);
+    const text = `${result.error} ${result.message}`;
+    assert.match(text, /legacy flat signature|signatures\[\]/i);
+    // The remedy must name the concrete steps, not just the diagnosis.
+    assert.match(text, /ff-cli sign/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
