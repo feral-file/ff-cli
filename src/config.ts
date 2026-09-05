@@ -159,17 +159,19 @@ function resolveEffectivePlaylistRole(config: Config): string | null {
 /**
  * Get feed configuration for DP1 feed API
  *
- * Supports both legacy (feed.baseURLs/apiKey) and new (feedServers array) formats.
+ * Supports both legacy (feed.baseURLs) and new (feedServers array) formats.
+ *
+ * No API key is returned. The feed authorizes writes from the signatures inside the document, so a key
+ * is neither sent nor accepted; an `apiKey` left in an existing config file is simply ignored rather
+ * than being an error, so old configs keep working.
  *
  * @returns {Object} Feed configuration
  * @returns {string[]} returns.baseURLs - Array of base URLs for feed APIs
- * @returns {string} [returns.apiKey] - Optional API key for authentication (legacy)
- * @returns {Array<Object>} [returns.servers] - Array of feed servers with individual API keys (new)
+ * @returns {Array<Object>} [returns.servers] - Array of configured feed servers (new format)
  */
 export function getFeedConfig(): {
   baseURLs: string[];
-  apiKey?: string;
-  servers?: Array<{ baseUrl: string; apiKey?: string }>;
+  servers?: Array<{ baseUrl: string }>;
 } {
   const config = getConfig();
 
@@ -198,7 +200,6 @@ export function getFeedConfig(): {
 
   return {
     baseURLs: urls,
-    apiKey: feedConfig.apiKey,
   };
 }
 

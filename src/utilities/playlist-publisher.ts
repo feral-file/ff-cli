@@ -22,10 +22,9 @@ interface PublishResult {
  *
  * @param {string} filePath - Path to playlist JSON file
  * @param {string} feedServerUrl - Feed server base URL
- * @param {string} [apiKey] - Optional API key for authentication
  * @returns {Promise<Object>} Result with success status, playlistId, or error
  * @example
- * const result = await publishPlaylist('playlist.json', 'http://localhost:8787/api/v1', 'api-key');
+ * const result = await publishPlaylist('playlist.json', 'http://localhost:8787/api/v1');
  * if (result.success) {
  *   console.log(`Published with ID: ${result.playlistId}`);
  * } else {
@@ -34,8 +33,7 @@ interface PublishResult {
  */
 export async function publishPlaylist(
   filePath: string,
-  feedServerUrl: string,
-  apiKey?: string
+  feedServerUrl: string
 ): Promise<PublishResult> {
   try {
     // Step 1: Read and parse playlist file
@@ -68,19 +66,14 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 3: Send validated playlist to feed server
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    // Use provided apiKey, fallback to environment variable, or use empty string as last resort
-    const authKey = apiKey !== undefined ? apiKey : process.env.FEED_API_KEY || '';
-    if (authKey) {
-      headers['Authorization'] = `Bearer ${authKey}`;
-    }
-
+    // Step 3: Send validated playlist to feed server.
+    //
+    // No auth header. The feed authorizes a create from the document's own signatures: it requires a
+    // signature whose kid matches a key declared in the playlist's `curators[]`. An API key is neither
+    // sent nor accepted -- the feed removed that path entirely -- so a playlist that is not self-signed
+    // by a declared curator is rejected no matter what credentials accompany it.
     const response = await axios.post(`${feedServerUrl}/playlists`, playlist, {
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       timeout: 30000,
     });
 

@@ -15,12 +15,18 @@ export interface PlaylistConfig {
 export interface FeedConfig {
   baseURL?: string; // Legacy: single URL
   baseURLs?: string[]; // Legacy: array of URLs
-  apiKey?: string; // Legacy: single API key for all servers
+  /**
+   * @deprecated Ignored. The feed authorizes writes from the signatures inside the document and no
+   * longer accepts an API key. Still declared so existing config files parse rather than erroring; it is
+   * never read or sent.
+   */
+  apiKey?: string;
 }
 
 export interface FeedServer {
   baseUrl: string; // Feed server base URL
-  apiKey?: string; // Optional API key for this server
+  /** @deprecated Ignored; see FeedConfig.apiKey. */
+  apiKey?: string;
 }
 
 export interface FF1Device {

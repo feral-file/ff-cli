@@ -317,12 +317,10 @@ Add feed servers to `config.json`:
 {
   "feedServers": [
     {
-      "baseUrl": "http://localhost:8787/api/v1",
-      "apiKey": "your-api-key"
+      "baseUrl": "http://localhost:8787/api/v1"
     },
     {
-      "baseUrl": "https://feed.example.com/api/v1",
-      "apiKey": "your-api-key"
+      "baseUrl": "https://feed.example.com/api/v1"
     }
   ]
 }
