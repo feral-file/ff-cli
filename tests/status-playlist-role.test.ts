@@ -195,6 +195,26 @@ describe('status signing identity for an explicit key', () => {
     }
   });
 
+  test('reports the --key identity with no config file present', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-status-explicit-configless-'));
+    try {
+      const { privateKey } = generateKeyPairSync('ed25519');
+      const material = (privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer).toString(
+        'base64'
+      );
+      const expected = playlistSigningDidKey(material);
+
+      const result = runCli(dir, ['status', '--key', material]);
+      const out = result.stdout + result.stderr;
+
+      // The override answers before any config lookup, so "not configured" must not suppress it.
+      assert.ok(out.includes(expected), `expected ${expected} in:\n${out}`);
+      assert.doesNotMatch(out, /config\.json not found/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('reports an unusable --key instead of a wrong identity', () => {
     const dir = mkdtempSync(join(tmpdir(), 'ff1-status-explicit-bad-'));
     try {

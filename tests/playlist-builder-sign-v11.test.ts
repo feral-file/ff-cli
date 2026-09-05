@@ -7,6 +7,7 @@ import { describe, test } from 'node:test';
 import { createRequire } from 'module';
 
 import { verifyPlaylist } from '../src/utilities/playlist-verifier';
+import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
 const require = createRequire(import.meta.url);
 /** buildDP1Playlist signs via config-backed `playlist.privateKey`; keep import path aligned with CLI. */
@@ -211,6 +212,89 @@ describe('buildDP1Playlist curator name resolution', () => {
       }
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * config.json is arbitrary runtime JSON, and these two values decide what gets signed: the key that
+ * signs, and the public name recorded beside it in curators[]. Both are resolved before the builder
+ * assigns them into an already-validated document, so a bad value here is signed rather than rejected.
+ */
+describe('playlist config resolution around signing', () => {
+  function buildWith(
+    playlistBlock: Record<string, unknown>,
+    env: Record<string, string | undefined> = {}
+  ): Promise<Record<string, unknown>> {
+    const dir = join(tmpdir(), `ff1-cfg-${randomUUID()}`);
+    mkdirSync(dir, { recursive: true });
+    const prevCwd = process.cwd();
+    const prevEnv: Record<string, string | undefined> = {};
+    writeFileSync(join(dir, 'config.json'), JSON.stringify({ playlist: playlistBlock }), 'utf-8');
+    for (const [k, v] of Object.entries(env)) {
+      prevEnv[k] = process.env[k];
+      if (v === undefined) {
+        delete process.env[k];
+      } else {
+        process.env[k] = v;
+      }
+    }
+    process.chdir(dir);
+    return buildDP1Playlist({ items: [minimalItem], ...deterministicParams }).finally(() => {
+      process.chdir(prevCwd);
+      for (const [k, v] of Object.entries(prevEnv)) {
+        if (v === undefined) {
+          delete process.env[k];
+        } else {
+          process.env[k] = v;
+        }
+      }
+      rmSync(dir, { recursive: true, force: true });
+    });
+  }
+
+  function keyMaterial(): string {
+    const { privateKey } = generateKeyPairSync('ed25519');
+    return (privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer).toString('base64');
+  }
+
+  // A real name may legitimately contain YOUR_; discarding it would seal the wrong public attribution
+  // inside a signature, where correcting it costs a rebuild and re-sign.
+  test('keeps a configured name that merely contains YOUR_', async () => {
+    const playlist = await buildWith(
+      { privateKey: keyMaterial(), role: 'agent', curatorName: 'YOUR_STUDIO' },
+      { PLAYLIST_CURATOR_NAME: undefined }
+    );
+    const curators = playlist.curators as Array<{ name?: string }>;
+    assert.equal(curators[0].name, 'YOUR_STUDIO');
+  });
+
+  // Non-string JSON must not reach the signed document: the builder assigns this after validation.
+  test('falls back rather than signing a non-string curator name', async () => {
+    const playlist = await buildWith(
+      { privateKey: keyMaterial(), role: 'agent', curatorName: 42 },
+      { PLAYLIST_CURATOR_NAME: undefined }
+    );
+    const curators = playlist.curators as Array<{ name?: unknown }>;
+    assert.equal(typeof curators[0].name, 'string');
+    assert.equal(curators[0].name, 'ff-cli');
+  });
+
+  // The sample private key is truthy, so without placeholder-aware resolution it beats a real
+  // environment key and every signing path fails on a key the user never chose.
+  test('prefers PLAYLIST_PRIVATE_KEY over the sample key placeholder', async () => {
+    const material = keyMaterial();
+    const playlist = await buildWith(
+      { privateKey: 'YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended', role: 'agent' },
+      { PLAYLIST_PRIVATE_KEY: material, PLAYLIST_CURATOR_NAME: undefined }
+    );
+    assert.ok(
+      Array.isArray(playlist.signatures),
+      'playlist should be signed by the environment key'
+    );
+    const kid = (playlist.signatures as Array<{ kid: string }>)[0].kid;
+    assert.equal(kid, playlistSigningDidKey(material));
+    const vr = await verifyPlaylist(playlist);
+    assert.equal(vr.valid, true, vr.error);
   });
 });
 
