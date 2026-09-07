@@ -460,11 +460,13 @@ Publish failed
 
 The feed treats a key in curators[] as an owner only when that key also signed as "curator".
   curators[] is already correct — only the role is missing, so add that signature to this file:
-    ff-cli sign <file> -r curator --key <private key for did:key:z6Mkv7qJ...>
-  It has to be that key. "sign" uses the configured key unless --key says otherwise, and a
-  curator signature from any other key leaves this same failure: the feed reads roles only
-  from keys the document declares. Drop --key if that key is already your configured one, and
-  confirm which identity a key carries with "ff-cli status --key <private key>".
+    ff-cli sign <file> -r curator --key <private key for a declared curator>
+  Any key this playlist declares will do — you do not need the one that signed under the wrong
+  role. Declared: did:key:z6Mkv7qJ...
+  It must be one of those. "sign" uses the configured key unless --key says otherwise, and a
+  curator signature from an undeclared key leaves this same failure: the feed reads roles
+  only from keys the document declares. Drop --key if a declared key is already your configured
+  one, and confirm which identity a key carries with "ff-cli status --key <private key>".
   Signing appends, and the payload hash excludes signatures, so the existing entry stays valid
   and the document ends up carrying both. No unsigned copy is needed: you only have to start
   from one when changing signed content such as curators[] itself.
@@ -485,9 +487,11 @@ ff-cli sign playlist.json -r curator --key <declared curator's key>   # ["agent"
 ff-cli publish playlist.json
 ```
 
-The signature has to come from a key the playlist already declares. `sign` uses the configured key unless
-`--key` says otherwise, so on a machine whose configured key differs from the declared curator, the plain
-command appends a `curator` signature the feed ignores and the publish fails identically.
+The signature has to come from a key the playlist already declares — **any** of them, not specifically the
+one that signed under the wrong role. On a playlist with several curators, whoever holds one of the other
+declared keys can repair it. `sign` uses the configured key unless `--key` says otherwise, so on a machine
+whose configured key is not declared, the plain command appends a `curator` signature the feed ignores and
+the publish fails identically.
 
 Start again from an unsigned document only when the fix changes signed content — adding `curators[]`, for
 instance. There the earlier signature would cover a document that no longer exists.

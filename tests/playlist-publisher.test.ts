@@ -417,3 +417,66 @@ test('a curator signature from an undeclared key does not satisfy the owner-role
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('any declared curator can repair the owner-role failure, not only the one that signed', async () => {
+  // The gate accepts an owner-role signature from ANY declared key. Naming only the key that signed under
+  // the wrong role describes an impossible fix to every other curator — they may not hold it — while a key
+  // they do hold would have worked. On a co-curated playlist that is the common case, not the edge.
+  const dir = makeTempDir();
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'playlist-multi-curator' }));
+    });
+  });
+
+  try {
+    await new Promise<void>((resolvePromise) => server.listen(0, resolvePromise));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Failed to start test server');
+    }
+    const feed = `http://127.0.0.1:${address.port}`;
+
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+    const didA = playlistSigningDidKey(keyA);
+    const didB = playlistSigningDidKey(keyB);
+    const declared = {
+      ...basePlaylist,
+      curators: [
+        { name: 'Curator A', key: didA },
+        { name: 'Curator B', key: didB },
+      ],
+    };
+
+    // A signed under the wrong role; we hold only B.
+    const agentA = await signPlaylist(declared, keyA, 'agent');
+    const stuck = { ...declared, signatures: [agentA] };
+    const path = join(dir, 'multi-curator.json');
+    writeFileSync(path, JSON.stringify(stuck, null, 2), 'utf-8');
+
+    const before = await publishPlaylist(path, feed);
+    assert.equal(before.success, false);
+    // The remedy must offer both keys, or B's holder is sent after a key they do not have.
+    assert.match(String(before.message), new RegExp(didA));
+    assert.match(String(before.message), new RegExp(didB));
+
+    // B repairs it, without ever touching A's key.
+    const curatorB = await signPlaylist(stuck, keyB, 'curator');
+    writeFileSync(
+      path,
+      JSON.stringify({ ...stuck, signatures: [agentA, curatorB] }, null, 2),
+      'utf-8'
+    );
+
+    const after = await publishPlaylist(path, feed);
+    assert.equal(after.success, true, after.error);
+    assert.equal(after.playlistId, 'playlist-multi-curator');
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
