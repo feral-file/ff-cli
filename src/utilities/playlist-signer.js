@@ -166,6 +166,10 @@ module.exports = {
   signPlaylist,
   verifyPlaylist,
   signPlaylistFile,
+  // Exported for the feed-mutation intents: a delete/replace intent is signed with the same key
+  // material as a playlist, so it must accept the same encodings and raise the same guidance when the
+  // key is malformed. Duplicating the normalizer there would let the two paths drift.
+  normalizeSigningKeyToBase64Pkcs8,
 };
 
 function resolvePlaylistSigningRole(role) {
