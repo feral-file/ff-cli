@@ -789,9 +789,8 @@ async function doPublish(
   }
 
   const serverUrl = feedConfig.baseURLs[serverIndex];
-  const serverApiKey = feedConfig.servers?.[serverIndex]?.apiKey ?? feedConfig.apiKey;
 
-  const result = await publishPlaylist(savedPath, serverUrl, serverApiKey);
+  const result = await publishPlaylist(savedPath, serverUrl);
   if (result.success) {
     console.log(chalk.green('✓ Published'));
     if (result.playlistId) {

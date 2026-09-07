@@ -13,7 +13,7 @@ import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
 } from './utilities/playlist-signing-role';
-import { configuredFF1Devices } from './utilities/config-placeholders';
+import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
 
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
@@ -130,9 +130,39 @@ export function getPlaylistConfig(): PlaylistConfig {
   const playlistConfig: Partial<PlaylistConfig> = config.playlist || {};
 
   return {
-    privateKey: playlistConfig.privateKey || process.env.PLAYLIST_PRIVATE_KEY || null,
+    // `config init` writes the sample file through verbatim, so an untouched config carries the
+    // YOUR_ED25519_PRIVATE_KEY... literal. It is truthy, so without this it would beat a perfectly good
+    // PLAYLIST_PRIVATE_KEY and every signing path would fail on a key the user never chose.
+    privateKey: isMissingConfigValue(playlistConfig.privateKey)
+      ? process.env.PLAYLIST_PRIVATE_KEY || null
+      : playlistConfig.privateKey || null,
     role: playlistConfig.role || process.env.PLAYLIST_ROLE || null,
+    curatorName: resolveCuratorName(playlistConfig.curatorName),
   };
+}
+
+/** The literal shipped in config.json.example, and the only curator name treated as unset. */
+const CURATOR_NAME_TEMPLATE = 'YOUR_CURATOR_NAME';
+
+/**
+ * Resolve the curator name recorded in a built playlist's signed `curators[]`.
+ *
+ * Two hazards meet here, and they pull in opposite directions. The sample value must not win over the
+ * environment, or a freshly initialized config publishes under a placeholder. But the generic
+ * YOUR_/your_ placeholder test is too broad for a human name — a real studio called "YOUR_STUDIO" would
+ * be silently replaced, and the wrong attribution would then be sealed inside a signature. So only the
+ * exact template literal counts as unset.
+ *
+ * A non-string value is treated as unset rather than passed through: config.json is arbitrary runtime
+ * JSON, and this value is assigned into the document *after* the builder has validated it, so a number
+ * here would be signed into a malformed playlist instead of being rejected.
+ */
+function resolveCuratorName(configured: unknown): string | null {
+  const fromConfig = typeof configured === 'string' ? configured.trim() : '';
+  if (fromConfig && fromConfig !== CURATOR_NAME_TEMPLATE) {
+    return fromConfig;
+  }
+  return process.env.PLAYLIST_CURATOR_NAME?.trim() || null;
 }
 
 /**
@@ -159,17 +189,19 @@ function resolveEffectivePlaylistRole(config: Config): string | null {
 /**
  * Get feed configuration for DP1 feed API
  *
- * Supports both legacy (feed.baseURLs/apiKey) and new (feedServers array) formats.
+ * Supports both legacy (feed.baseURLs) and new (feedServers array) formats.
+ *
+ * No API key is returned. The feed authorizes writes from the signatures inside the document, so a key
+ * is neither sent nor accepted; an `apiKey` left in an existing config file is simply ignored rather
+ * than being an error, so old configs keep working.
  *
  * @returns {Object} Feed configuration
  * @returns {string[]} returns.baseURLs - Array of base URLs for feed APIs
- * @returns {string} [returns.apiKey] - Optional API key for authentication (legacy)
- * @returns {Array<Object>} [returns.servers] - Array of feed servers with individual API keys (new)
+ * @returns {Array<Object>} [returns.servers] - Array of configured feed servers (new format)
  */
 export function getFeedConfig(): {
   baseURLs: string[];
-  apiKey?: string;
-  servers?: Array<{ baseUrl: string; apiKey?: string }>;
+  servers?: Array<{ baseUrl: string }>;
 } {
   const config = getConfig();
 
@@ -198,7 +230,6 @@ export function getFeedConfig(): {
 
   return {
     baseURLs: urls,
-    apiKey: feedConfig.apiKey,
   };
 }
 
@@ -317,6 +348,17 @@ export function validateConfig(): ValidationResult {
             'playlist.privateKey must be a valid base64- or hex-encoded ed25519 private key'
           );
         }
+      }
+    }
+
+    // curatorName is signed into curators[] as a public name, and it is written into the document after
+    // the builder has validated it — so a malformed value is not caught anywhere downstream. Reporting a
+    // clean config while `build` emits an invalid signed playlist is the failure worth preventing here.
+    const curatorNameValue = (config.playlist as { curatorName?: unknown } | undefined)
+      ?.curatorName;
+    if (curatorNameValue !== undefined && curatorNameValue !== null) {
+      if (typeof curatorNameValue !== 'string' || curatorNameValue.trim().length === 0) {
+        errors.push('playlist.curatorName must be a non-empty string');
       }
     }
 

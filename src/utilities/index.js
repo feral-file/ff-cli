@@ -599,11 +599,7 @@ async function buildPlaylistDirect(params, options = {}) {
     console.log(chalk.cyan('\nPublishing to feed server...'));
     try {
       const { publishPlaylist } = require('./playlist-publisher');
-      publishResult = await publishPlaylist(
-        savedPath,
-        playlistSettings.feedServer.baseUrl,
-        playlistSettings.feedServer.apiKey
-      );
+      publishResult = await publishPlaylist(savedPath, playlistSettings.feedServer.baseUrl);
 
       if (publishResult.success) {
         console.log(chalk.green(`✓ Published to feed server`));

@@ -36,7 +36,8 @@ ff-cli config validate
 {
   "defaultDuration": 10,
   "playlist": {
-    "privateKey": "your_ed25519_private_key_hex_or_base64_here"
+    "privateKey": "your_ed25519_private_key_hex_or_base64_here",
+    "curatorName": "YOUR_CURATOR_NAME"
   },
   "feed": { "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"] },
   "ff1Devices": {
@@ -278,16 +279,24 @@ The `publish` command:
 
 Configure feed servers in `config.json`:
 
+Publishing needs no credentials. The feed authorizes a create from the signatures inside the playlist:
+it requires a signature whose `kid` matches a key the document declares in `curators[]`.
+
+Declare it before signing, not after: a signature covers `curators[]`, so adding the entry to an
+already-signed playlist invalidates it, and signing again appends rather than replaces. Run
+`ff-cli status` to read the `did:key` your signatures will carry, put it in `curators[]`, then sign
+once. If you sign with `sign --key <privateKey>`, read that key's identity with
+`ff-cli status --key <privateKey>` — the configured identity would be the wrong one to declare. `find` and `build` do this for you when a signing key is configured. An `apiKey` left over in
+an existing config is ignored.
+
 ```json
 {
   "feedServers": [
     {
-      "baseUrl": "http://localhost:8787/api/v1",
-      "apiKey": "your-api-key-optional"
+      "baseUrl": "http://localhost:8787/api/v1"
     },
     {
-      "baseUrl": "https://feed.example.com/api/v1",
-      "apiKey": "your-api-key-optional"
+      "baseUrl": "https://feed.example.com/api/v1"
     }
   ]
 }

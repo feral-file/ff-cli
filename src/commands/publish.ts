@@ -22,7 +22,6 @@ export const publishCommand = new Command('publish')
       }
 
       let serverUrl = feedConfig.baseURLs[0];
-      let serverApiKey = feedConfig.apiKey;
 
       if (feedConfig.baseURLs.length > 1) {
         if (!options.server) {
@@ -48,15 +47,9 @@ export const publishCommand = new Command('publish')
         }
 
         serverUrl = feedConfig.baseURLs[serverIndex];
-
-        if (feedConfig.servers && feedConfig.servers[serverIndex]) {
-          serverApiKey = feedConfig.servers[serverIndex].apiKey;
-        }
-      } else if (feedConfig.servers && feedConfig.servers[0]) {
-        serverApiKey = feedConfig.servers[0].apiKey;
       }
 
-      const result = await publishPlaylist(file, serverUrl, serverApiKey);
+      const result = await publishPlaylist(file, serverUrl);
 
       if (result.success) {
         console.log(chalk.green('Published'));

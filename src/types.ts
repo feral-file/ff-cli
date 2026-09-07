@@ -10,17 +10,31 @@ export interface BrowserConfig {
 export interface PlaylistConfig {
   privateKey: string | null;
   role: string | null;
+  /**
+   * Display name recorded for this signing key in a built playlist's `curators[]`.
+   *
+   * DP-1 requires `name` alongside `key`, and the feed authorizes a create by matching a signature's
+   * `kid` against a declared curator key — so a playlist built and signed without this entry cannot be
+   * published at all. Defaults to `ff-cli` rather than staying empty for that reason.
+   */
+  curatorName?: string | null;
 }
 
 export interface FeedConfig {
   baseURL?: string; // Legacy: single URL
   baseURLs?: string[]; // Legacy: array of URLs
-  apiKey?: string; // Legacy: single API key for all servers
+  /**
+   * @deprecated Ignored. The feed authorizes writes from the signatures inside the document and no
+   * longer accepts an API key. Still declared so existing config files parse rather than erroring; it is
+   * never read or sent.
+   */
+  apiKey?: string;
 }
 
 export interface FeedServer {
   baseUrl: string; // Feed server base URL
-  apiKey?: string; // Optional API key for this server
+  /** @deprecated Ignored; see FeedConfig.apiKey. */
+  apiKey?: string;
 }
 
 export interface FF1Device {
@@ -57,7 +71,7 @@ export interface Config {
   generativeDuration: number;
   browser: BrowserConfig;
   feed?: FeedConfig; // Legacy
-  feedServers?: FeedServer[]; // New: array of feed servers with individual API keys
+  feedServers?: FeedServer[]; // New: array of feed servers (publishing is authorized by document signatures, not keys)
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
   ff1Relayer?: FF1RelayerConfig;

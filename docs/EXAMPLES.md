@@ -317,12 +317,10 @@ Add feed servers to `config.json`:
 {
   "feedServers": [
     {
-      "baseUrl": "http://localhost:8787/api/v1",
-      "apiKey": "your-api-key"
+      "baseUrl": "http://localhost:8787/api/v1"
     },
     {
-      "baseUrl": "https://feed.example.com/api/v1",
-      "apiKey": "your-api-key"
+      "baseUrl": "https://feed.example.com/api/v1"
     }
   ]
 }
@@ -383,12 +381,60 @@ Select server (0-based index): 0
    Playlist file not found: /path/to/playlist.json
 ```
 
-**API error:**
+Both of these are caught locally, before anything is uploaded.
+
+**Not signed:**
 
 ```
-❌ Failed to publish playlist
-   Failed to publish: {"error":"unauthorized","message":"Invalid API key"}
+Publish failed
+  Playlist verification failed: Playlist signature verification failed
 ```
+
+Run `ff-cli sign <file>` before publishing. (Posting the same document straight to the feed answers
+`{"error":"unauthorized","message":"missing authentication: request body must carry signatures"}`.)
+
+**Signed, but the signer is not declared as a curator:**
+
+```
+Publish failed
+  Playlist is signed, but the signing key is not declared as a curator.
+
+The feed accepts a publish when a signature's kid appears in the playlist's own curators[].
+  Add this to the playlist before signing:
+    "curators": [{ "name": "Your name", "key": "did:key:z6Mkv7qJ..." }]
+  then sign again from the unsigned file — signing appends, so re-signing an already-signed
+  playlist leaves the earlier signature covering a document that no longer exists.
+```
+
+This is the most common publish failure, and it is not about credentials. The feed accepts a create when
+the document carries a signature whose `kid` matches a key declared in its own `curators[]`; posting such
+a document directly returns
+`{"error":"signature_verification_failed","message":"curator signature verification: no valid curator signature found"}`,
+which reads as a signing fault, so `ff-cli` diagnoses it locally instead.
+
+**Order matters.** A signature covers every field except `signature`/`signatures`, so `curators[]` has to
+be declared *before* signing. Adding it afterwards invalidates the signature, and signing again does not
+repair it — signing **appends**, leaving the earlier entry covering a document that no longer exists, so
+verification fails before upload.
+
+```bash
+# 1. Read your signing identity — this is the kid your signatures will carry.
+ff-cli status          # → Signing identity (did:key)  did:key:z6Mk...
+
+# 2. Declare it in the UNSIGNED playlist.
+#    "curators": [{ "name": "Your Name", "key": "did:key:z6Mk..." }]
+#    DP-1 requires `name` alongside `key`.
+
+# 3. Sign once, then publish.
+ff-cli sign playlist.json
+ff-cli publish playlist.json
+```
+
+If a playlist is already signed and you need to add `curators[]`, start again from the unsigned file
+rather than re-signing: remove `signatures`, declare the curator, then sign.
+
+`ff-cli publish` checks this before uploading, so a missing declaration fails immediately with the key to
+add rather than as a server error. No API key is involved: the feed does not accept one.
 
 ## Complete Flow (build → validate → sign → play → publish)
 
@@ -399,7 +445,9 @@ npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -o playlist.json
 # 2. Validate it
 npm run dev -- validate playlist.json
 
-# 3. Sign it
+# 3. Sign it. Declare curators[] BEFORE this step: the signature covers it, and the feed only
+#    accepts a publish when a signature's kid matches a declared curator key.
+#    Run `ff-cli status` for the kid (add -k <key> if you sign with `sign --key`).
 npm run dev -- sign playlist.json -o signed.json
 
 # 4. Play it on a device
@@ -408,6 +456,18 @@ npm run dev -- play signed.json -d "Living Room Display"
 # 5. Publish to a feed server
 npm run dev -- publish signed.json -s 0
 ```
+
+With a signing key configured, `find` and `build` already produce a signed `playlist.json` with your
+key declared in `curators[]`. Skip step 3 and use `playlist.json` in steps 4 and 5 — there is no
+`signed.json` on that path:
+
+```bash
+npm run dev -- play playlist.json -d "Living Room Display"
+npm run dev -- publish playlist.json -s 0
+```
+
+Set `playlist.curatorName` in the config to control the name recorded in `curators[]`; it defaults
+to `ff-cli`.
 
 `ff-cli find` can collapse build + play + publish into one command:
 

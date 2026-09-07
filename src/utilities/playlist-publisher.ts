@@ -22,10 +22,9 @@ interface PublishResult {
  *
  * @param {string} filePath - Path to playlist JSON file
  * @param {string} feedServerUrl - Feed server base URL
- * @param {string} [apiKey] - Optional API key for authentication
  * @returns {Promise<Object>} Result with success status, playlistId, or error
  * @example
- * const result = await publishPlaylist('playlist.json', 'http://localhost:8787/api/v1', 'api-key');
+ * const result = await publishPlaylist('playlist.json', 'http://localhost:8787/api/v1');
  * if (result.success) {
  *   console.log(`Published with ID: ${result.playlistId}`);
  * } else {
@@ -34,8 +33,7 @@ interface PublishResult {
  */
 export async function publishPlaylist(
   filePath: string,
-  feedServerUrl: string,
-  apiKey?: string
+  feedServerUrl: string
 ): Promise<PublishResult> {
   try {
     // Step 1: Read and parse playlist file
@@ -57,7 +55,34 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 2: Verify signature integrity before publishing.
+    // Step 2: refuse legacy flat-signature documents outright, before verification.
+    //
+    // A flat `signature` string carries no kid, so the curator rule below has nothing to match and such
+    // a document would reach the feed only to be refused as unauthenticated — verified against a running
+    // feed. This runs ahead of verification deliberately: the document is unpublishable whether or not
+    // its legacy signature is valid, and 're-sign as a v1.1 envelope' is the remedy either way, which
+    // 'signature verification failed' would not convey.
+    const hasLegacyFlatSignature =
+      typeof (playlist as { signature?: unknown }).signature === 'string' &&
+      (playlist as unknown as { signature: string }).signature.trim().length > 0;
+    const hasEnvelope = Array.isArray((playlist as { signatures?: unknown }).signatures)
+      ? ((playlist as unknown as { signatures: unknown[] }).signatures ?? []).length > 0
+      : false;
+    if (!hasEnvelope && hasLegacyFlatSignature) {
+      return {
+        success: false,
+        error: 'Playlist carries a legacy flat signature, which the feed cannot authorize.',
+        message:
+          `The feed authorizes a publish from a signatures[] envelope, matching a signature's kid\n` +
+          `  against the playlist's own curators[]. A flat "signature" string carries no kid.\n` +
+          `  Re-sign it as a DP-1 v1.1 envelope:\n` +
+          `    1. remove the "signature" field\n` +
+          `    2. declare your key: "curators": [{ "name": "Your name", "key": "<did:key from ff-cli status>" }]\n` +
+          `    3. ff-cli sign <file>`,
+      };
+    }
+
+    // Step 3: Verify signature integrity before publishing.
     const deliveryResult = await verifyPlaylist(playlist);
 
     if (!deliveryResult.valid) {
@@ -68,19 +93,47 @@ export async function publishPlaylist(
       };
     }
 
-    // Step 3: Send validated playlist to feed server
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-
-    // Use provided apiKey, fallback to environment variable, or use empty string as last resort
-    const authKey = apiKey !== undefined ? apiKey : process.env.FEED_API_KEY || '';
-    if (authKey) {
-      headers['Authorization'] = `Bearer ${authKey}`;
+    // Step 4: fail here, not at the feed, when the signer is not declared as a curator.
+    //
+    // The feed accepts a create only when a signature's `kid` matches a key the document declares in
+    // `curators[]`. Signing alone does not satisfy that, and the server's answer — "no valid curator
+    // signature found" — reads as a signing problem, which sends people to check their key instead of
+    // their document. Checking locally turns a confusing 400 into an instruction, and costs no request.
+    const curatorKeys = new Set(
+      (Array.isArray((playlist as { curators?: unknown }).curators)
+        ? ((playlist as unknown as { curators: Array<{ key?: unknown }> }).curators ?? [])
+        : []
+      )
+        .map((c) => (typeof c?.key === 'string' ? c.key.trim() : ''))
+        .filter((k) => k.length > 0)
+    );
+    const signatures = Array.isArray((playlist as { signatures?: unknown }).signatures)
+      ? ((playlist as unknown as { signatures: Array<{ kid?: unknown }> }).signatures ?? [])
+      : [];
+    const signingKids = signatures
+      .map((sig) => (typeof sig?.kid === 'string' ? sig.kid.trim() : ''))
+      .filter((k) => k.length > 0);
+    if (signingKids.length > 0 && !signingKids.some((kid) => curatorKeys.has(kid))) {
+      return {
+        success: false,
+        error: 'Playlist is signed, but the signing key is not declared as a curator.',
+        message:
+          `The feed accepts a publish when a signature's kid appears in the playlist's own curators[].\n` +
+          `  Add this to the playlist before signing:\n` +
+          `    "curators": [{ "name": "Your name", "key": "${signingKids[0]}" }]\n` +
+          `  then sign again from the unsigned file — signing appends, so re-signing an already-signed\n` +
+          `  playlist leaves the earlier signature covering a document that no longer exists.`,
+      };
     }
 
+    // Step 5: Send validated playlist to feed server.
+    //
+    // No auth header. The feed authorizes a create from the document's own signatures: it requires a
+    // signature whose kid matches a key declared in the playlist's `curators[]`. An API key is neither
+    // sent nor accepted -- the feed removed that path entirely -- so a playlist that is not self-signed
+    // by a declared curator is rejected no matter what credentials accompany it.
     const response = await axios.post(`${feedServerUrl}/playlists`, playlist, {
-      headers,
+      headers: { 'Content-Type': 'application/json' },
       timeout: 30000,
     });
 

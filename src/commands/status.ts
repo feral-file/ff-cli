@@ -4,16 +4,56 @@ import { readConfigFile, resolveExistingConfigPath } from './helpers/config-file
 import { getPlaylistConfig } from '../config';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
+import { playlistSigningDidKey } from '../utilities/signing-identity';
 import { configuredFF1Devices } from '../utilities/config-placeholders';
 
 export const statusCommand = new Command('status')
   .description('Show configuration status')
-  .action(async () => {
+  // Identity discovery must cover every key `sign` accepts, not just the configured one. `sign --key`
+  // signs with a key the config never mentions, so reporting only the configured identity would hand the
+  // user the wrong did:key to declare in curators[] — and a wrong declaration fails exactly like a
+  // missing one.
+  .option(
+    '-k, --key <privateKey>',
+    'Report the signing identity for this key instead of the configured one'
+  )
+  .action(async (options: { key?: string }) => {
     try {
+      const overrideKey = options.key?.trim();
+      if (overrideKey) {
+        try {
+          console.log(
+            chalk.green(`Signing identity (did:key) ${playlistSigningDidKey(overrideKey)}`)
+          );
+          console.log(chalk.dim("  declare this in the playlist's curators[] before signing"));
+          return;
+        } catch (error) {
+          console.log(chalk.red(`--key unusable: ${(error as Error).message}`));
+          process.exit(1);
+        }
+      }
+
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
         console.log(chalk.red('config.json not found'));
         console.log(chalk.dim('Run: ff-cli setup'));
+        // PLAYLIST_PRIVATE_KEY is a supported signing source on its own, and the did:key it implies is
+        // the one value a user must know before they can write a publishable playlist — it has to be
+        // declared in curators[] before signing. Exiting silently here would leave an environment-only
+        // user unable to obtain it from anywhere. The exit status still reports "not configured".
+        const envKey = process.env.PLAYLIST_PRIVATE_KEY?.trim();
+        if (envKey) {
+          try {
+            console.log(
+              chalk.green(`\nSigning identity (did:key) ${playlistSigningDidKey(envKey)}`)
+            );
+            console.log(
+              chalk.dim("  from PLAYLIST_PRIVATE_KEY; declare it in the playlist's curators[]")
+            );
+          } catch (error) {
+            console.log(chalk.red(`\nPLAYLIST_PRIVATE_KEY unusable: ${(error as Error).message}`));
+          }
+        }
         process.exit(1);
       }
 
@@ -37,6 +77,17 @@ export const statusCommand = new Command('status')
         }
       }
 
+      // The feed matches a signature's kid against the document's own curators[], so this value is not
+      // decoration: without it a user cannot write a publishable playlist, and it appears nowhere else.
+      let signingDidKey: string | undefined;
+      if (hasPlaylistSigningKey) {
+        try {
+          signingDidKey = playlistSigningDidKey(playlistKeyMaterial);
+        } catch {
+          signingDidKey = undefined;
+        }
+      }
+
       const statuses = [
         {
           label: 'Config file',
@@ -53,6 +104,13 @@ export const statusCommand = new Command('status')
               ? 'from config/env'
               : undefined,
           hint: ' (needed for signing and legacy verification)',
+        },
+        {
+          label: 'Signing identity (did:key)',
+          ok: Boolean(signingDidKey),
+          optional: false,
+          detail: signingDidKey,
+          hint: " (declare this in the playlist's curators[] so the feed accepts a publish)",
         },
         {
           label: 'Playlist signing role',

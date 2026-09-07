@@ -7,17 +7,16 @@
   },
   "feedServers": [
     {
-      "baseUrl": "https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1",
-      "apiKey": "YOUR_FEED_SERVER_API_KEY_OPTIONAL"
+      "baseUrl": "https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"
     },
     {
-      "baseUrl": "http://localhost:8787",
-      "apiKey": "YOUR_FEED_SERVER_API_KEY_OPTIONAL"
+      "baseUrl": "http://localhost:8787"
     }
   ],
   "playlist": {
     "privateKey": "YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended__or_32byte_raw_seed_as_hex_or_base64__run_ff-cli_setup_to_generate",
-    "role": "agent"
+    "role": "agent",
+    "curatorName": "YOUR_CURATOR_NAME"
   },
   "ff1Relayer": {
     "baseUrl": "https://tv-cast-coordination.autonomy-system.workers.dev"

@@ -14,13 +14,15 @@ const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.
 
 function runCli(
   cwd: string,
-  args: string[]
+  args: string[],
+  extraEnv: Record<string, string | undefined> = {}
 ): Promise<{ status: number; stdout: string; stderr: string }> {
   return new Promise((resolvePromise, rejectPromise) => {
     const child = spawn(process.execPath, [tsxCli, cliEntry, ...args], {
       cwd,
       env: {
         ...process.env,
+        ...extraEnv,
         XDG_CONFIG_HOME: join(cwd, '.xdg'),
       },
     });
@@ -192,6 +194,77 @@ describe('play delivery signing contract', () => {
       assert.equal(Array.isArray(request.request?.dp1_call?.signatures), true);
       assert.ok((request.request?.dp1_call?.signatures?.length ?? 0) > 0);
       assert.equal(request.request?.dp1_call?.signature, undefined);
+    } finally {
+      deviceServer.close();
+    }
+  });
+
+  /**
+   * Direct media is wrapped in an unsigned playlist and must be signed before delivery, so this path
+   * needs the *resolved* key. `config init` leaves the YOUR_ED25519_PRIVATE_KEY... literal in the file,
+   * which is truthy — reading config.playlist.privateKey directly picks the placeholder and signing
+   * fails on a key the user never chose, while a valid PLAYLIST_PRIVATE_KEY sits unused.
+   */
+  test('signs media with PLAYLIST_PRIVATE_KEY when the config still holds the template placeholder', async () => {
+    let deliveredBody = '';
+    const deviceServer = createServer((req, res) => {
+      let body = '';
+      req.setEncoding('utf-8');
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const parsed = JSON.parse(body) as { command?: string };
+        if (parsed.command === 'getDeviceStatus') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: { installedVersion: '1.0.0' } }));
+          return;
+        }
+        if (parsed.command === 'displayPlaylist') {
+          deliveredBody = body;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+
+    await new Promise<void>((resolvePromise) => deviceServer.listen(0, resolvePromise));
+    const address = deviceServer.address();
+    if (address === null || typeof address === 'string') {
+      deviceServer.close();
+      throw new Error('Failed to start device test server');
+    }
+
+    try {
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify({
+          ff1Devices: {
+            devices: [{ name: 'test-device', host: `http://127.0.0.1:${address.port}` }],
+          },
+          playlist: {
+            privateKey:
+              'YOUR_ED25519_PRIVATE_KEY__base64_PKCS8_DER_recommended__or_32byte_raw_seed_as_hex_or_base64__run_ff-cli_setup_to_generate',
+          },
+        }),
+        'utf-8'
+      );
+
+      const envKey = makePrivateKeyBase64();
+      const result = await runCli(dir, ['play', mediaUrl], { PLAYLIST_PRIVATE_KEY: envKey });
+      const out = result.stdout + result.stderr;
+
+      assert.equal(result.status, 0, out);
+      // The placeholder must not have been handed to the signer.
+      assert.doesNotMatch(out, /Unrecognized Ed25519 private key format/i);
+      assert.match(out, /Signed and verified/i);
+      assert.ok(deliveredBody, 'expected device request body to be captured');
+
+      const request = JSON.parse(deliveredBody) as {
+        request?: { dp1_call?: { signatures?: unknown[] } };
+      };
+      assert.equal(Array.isArray(request.request?.dp1_call?.signatures), true);
+      assert.ok((request.request?.dp1_call?.signatures?.length ?? 0) > 0);
     } finally {
       deviceServer.close();
     }
