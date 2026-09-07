@@ -300,16 +300,21 @@ test('convertToDP1Item: the row CAIP-2 chain decides the DP-1 chain', () => {
   assert.equal(tezos.item.provenance.contract.chain, 'tezos');
   assert.equal(tezos.item.provenance.contract.standard, 'fa2');
 
-  // No chain on the row: the caller's chain name still answers, as before.
+  // No chain on the row at all: the caller's chain name still answers, as before.
   const named = convertToDP1Item(mapIndexerDataToStandardFormat(mockTokenRow(), 'ethereum'), 10);
   assert.equal(named.item.provenance.contract.chain, 'evm');
 
-  // A namespace DP-1 has no value for is ignored rather than guessed at.
-  const unknown = convertToDP1Item(
+  // A row chain DP-1 cannot name resolves to `other`, and must NOT fall through to
+  // the caller's chain name — that name is 'ethereum' for every non-KT address, so
+  // falling through would publish a Solana token as an EVM contract. `other` is a
+  // true statement about a chain DP-1 has no word for; `evm` is a false one. The
+  // token is still built either way: an unnameable chain is labelled, not skipped.
+  const unmapped = convertToDP1Item(
     mapIndexerDataToStandardFormat(mockTokenRow({ chain: 'solana:mainnet' }), 'ethereum'),
     10
   );
-  assert.equal(unknown.item.provenance.contract.chain, 'evm');
+  assert.equal(unmapped.success, true, 'an unmapped row chain is labelled, not skipped');
+  assert.equal(unmapped.item.provenance.contract.chain, 'other');
 });
 
 test('mapIndexerDataToStandardFormat: returns error for null indexerData', () => {

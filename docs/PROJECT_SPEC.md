@@ -165,7 +165,9 @@ CAIP-2 `chain` (`eip155:1`, `tezos:mainnet`), and both are written through. The
 client's own detection sees a chain name and an address and nothing else, so it
 answers `erc721` for every EVM contract; it applies only to rows that carry no
 standard, and to the CID a lookup by coordinate must build before the indexer
-has been asked anything.
+has been asked anything. A row naming a chain DP-1 has no word for is recorded
+as `other` — the item is still built, and the client's guess is never
+substituted for a chain the row already named.
 
 ### DP-1 output integrity
 

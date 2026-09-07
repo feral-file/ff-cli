@@ -231,6 +231,52 @@ function dp1ChainFromCaip2(caip2Chain) {
 }
 
 /**
+ * Client chain names mapped to the chain values DP-1 `provenance.contract` allows.
+ *
+ * This is for DP-1 provenance output, NOT for indexer queries: the indexer uses
+ * `eth`/`tez`/`bmk` while DP-1 uses `evm`/`tezos`/`bitmark`. It answers only for
+ * tokens that reached us without an indexer row — a caller-supplied coordinate.
+ */
+const CHAIN_NAME_TO_DP1_CHAIN = {
+  ethereum: 'evm',
+  polygon: 'evm',
+  arbitrum: 'evm',
+  optimism: 'evm',
+  base: 'evm',
+  zora: 'evm',
+  tezos: 'tezos', // DP1 spec uses 'tezos', not 'tez'
+  bitmark: 'bitmark', // DP1 spec uses 'bitmark', not 'bmk'
+};
+
+/**
+ * resolveDp1Chain picks the DP-1 chain for a token's `provenance.contract`.
+ *
+ * The row's CAIP-2 chain and the caller's chain name are not two guesses to try
+ * in turn — they are different claims, and the row's is the network the indexer
+ * recorded. So a token carrying a row chain is answered from that chain alone:
+ * a namespace with no DP-1 equivalent becomes `other`, never the caller's name.
+ * Falling through would be actively wrong, because the owner and contract paths
+ * label every non-KT address `ethereum` before mapping — a Solana row would
+ * inherit that label and be published as an EVM contract. `other` is a true
+ * statement about a chain DP-1 cannot name; `evm` is a false one.
+ *
+ * The name map answers only when the token has no row chain at all, which is a
+ * token assembled from a caller-supplied coordinate rather than an indexer row.
+ *
+ * @param {Object} token - Token in the internal standard format
+ * @param {string} [token.caip2Chain] - CAIP-2 chain from the indexer row, when it came from one
+ * @param {string} [token.chain] - Client chain name the caller inferred
+ * @returns {string} DP-1 chain (`evm`, `tezos`, `bitmark`, or `other`)
+ */
+function resolveDp1Chain(token) {
+  const rowChain = typeof token.caip2Chain === 'string' ? token.caip2Chain.trim() : '';
+  if (rowChain) {
+    return dp1ChainFromCaip2(rowChain) || 'other';
+  }
+  return CHAIN_NAME_TO_DP1_CHAIN[String(token.chain || '').toLowerCase()] || 'other';
+}
+
+/**
  * Build CAIP-2 token CID for indexer v2
  *
  * Constructs a token identifier in CAIP-2 format compatible with ff-indexer-v2.
@@ -588,27 +634,6 @@ function convertToDP1Item(tokenData, duration) {
     };
   }
 
-  // Map chain name to DP1 format (according to DP1 spec)
-  // NOTE: This is for DP1 provenance output, NOT for indexer queries
-  // The indexer uses 'eth'/'tez'/'bmk', but DP1 spec uses 'evm'/'tezos'/'bitmark'
-  //
-  // This map is the fallback. When the token came from an indexer row it also
-  // carries the row's CAIP-2 chain, which is the network the indexer actually
-  // recorded rather than the caller's guess from the address format — that
-  // guess is only ever 'ethereum' or 'tezos', so an L2 token would land on
-  // 'ethereum' here and still be 'evm', but a chain this map has never heard of
-  // would silently become 'other'.
-  const chainMap = {
-    ethereum: 'evm',
-    polygon: 'evm',
-    arbitrum: 'evm',
-    optimism: 'evm',
-    base: 'evm',
-    zora: 'evm',
-    tezos: 'tezos', // DP1 spec uses 'tezos', not 'tez'
-    bitmark: 'bitmark', // DP1 spec uses 'bitmark', not 'bmk'
-  };
-
   // Build via dp1-js PlaylistItemBuilder so leaf blocks match DP-1 AJV schema.
   const itemBuilder = new PlaylistItemBuilder()
     .id(itemId)
@@ -617,11 +642,7 @@ function convertToDP1Item(tokenData, duration) {
     .provenance(
       new ProvenanceBuilder().type('onChain').contract(
         new ContractBuilder()
-          .chain(
-            dp1ChainFromCaip2(token.caip2Chain) ||
-              chainMap[String(token.chain || '').toLowerCase()] ||
-              'other'
-          )
+          .chain(resolveDp1Chain(token))
           .standard(token.standard || detectTokenStandard(token.chain, token.contractAddress))
           .address(token.contractAddress)
           .tokenId(String(token.tokenId))
