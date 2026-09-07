@@ -425,8 +425,8 @@ ff-cli status          # → Signing identity (did:key)  did:key:z6Mk...
 #    "curators": [{ "name": "Your Name", "key": "did:key:z6Mk..." }]
 #    DP-1 requires `name` alongside `key`.
 
-# 3. Sign once, then publish.
-ff-cli sign playlist.json
+# 3. Sign once as curator, then publish. The role must match the claim in curators[].
+ff-cli sign playlist.json -r curator
 ff-cli publish playlist.json
 ```
 
@@ -435,6 +435,30 @@ rather than re-signing: remove `signatures`, declare the curator, then sign.
 
 `ff-cli publish` checks this before uploading, so a missing declaration fails immediately with the key to
 add rather than as a server error. No API key is involved: the feed does not accept one.
+
+**Declared, but signed under a non-owner role:**
+
+```
+Publish failed
+  Playlist is signed by a declared curator, but under a non-owner role ("agent").
+
+The feed treats a key in curators[] as an owner only when that key also signed as "curator".
+  curators[] is already correct — the signature's role is not. Re-sign from the unsigned file:
+    ff-cli sign <file> -r curator
+  or set "role": "curator" under "playlist" in config.json. Signing appends, so start from
+  the unsigned document rather than adding a second signature to this one.
+```
+
+Declaring a key in `curators[]` is a claim that it owns the playlist; signing as `curator` is the proof,
+and a feed requires both. This failure means the document is right and the signature is not — the fix is
+the role, not `curators[]`.
+
+It matters beyond this publish. A feed that ignores the role accepts such a document and then cannot
+authorize a replace **or** a delete for it, because both need an owner signature it does not carry. Refusing
+here keeps that document from being created at all.
+
+`find` and `build` sign as `curator` automatically, since they declare the key themselves. This applies to
+documents you sign by hand, where `playlist.role` (default `agent`) decides the role.
 
 ## Complete Flow (build → validate → sign → play → publish)
 
@@ -448,7 +472,8 @@ npm run dev -- validate playlist.json
 # 3. Sign it. Declare curators[] BEFORE this step: the signature covers it, and the feed only
 #    accepts a publish when a signature's kid matches a declared curator key.
 #    Run `ff-cli status` for the kid (add -k <key> if you sign with `sign --key`).
-npm run dev -- sign playlist.json -o signed.json
+#    -r curator: a declared key only counts as an owner when it signed in the owner role.
+npm run dev -- sign playlist.json -r curator -o signed.json
 
 # 4. Play it on a device
 npm run dev -- play signed.json -d "Living Room Display"

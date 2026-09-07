@@ -63,7 +63,7 @@ Used for signing DP‑1 playlists.
   `PLAYLIST_PRIVATE_KEY` even when no config file exists yet, and `ff-cli status --key <privateKey>`
   reports it for an explicit key — the one `sign --key` would use.
 
-- `playlist.role` (string): DP-1 signing role that travels with the private key. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`).
+- `playlist.role` (string): DP-1 signing role used by `ff-cli sign`. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`). It does **not** apply to `find` and `build`, which always sign as `curator` — see [Signing role and ownership](#signing-role-and-ownership).
 
 ### Generate an Ed25519 private key
 
@@ -87,6 +87,25 @@ Paste the value into `playlist.privateKey`. Any of these are accepted:
 - **PKCS#8 DER as hex**.
 
 If you need a different role, set `playlist.role` to one of the DP-1 signing roles such as `agent`, `feed`, `curator`, `institution`, or `licensor`. The CLI rejects any other string before it reaches `dp1-js`.
+
+### Signing role and ownership
+
+A feed decides who owns a playlist from the document itself: the keys in `curators[]` are the owner set, and
+a key only counts as an owner when that same key **also signed in the `curator` role**. Being named is a
+claim; signing as `curator` is the proof. A playlist whose declared key signed under any other role verifies
+cleanly and is still refused — and once accepted by a feed that ignores the role, it can never be replaced or
+deleted, because both need an owner signature the document does not carry.
+
+Two consequences:
+
+- `find` and `build` declare your key in `curators[]` and therefore always sign as `curator`, whatever
+  `playlist.role` says. To build under a different role, build without a configured signing key and sign the
+  result yourself with `ff-cli sign --role`.
+- `ff-cli publish` refuses a playlist whose declared key signed under another role, and names the fix
+  (`ff-cli sign <file> -r curator`). This runs before any request, so it costs nothing and cannot be masked
+  by a feed that happens to accept the document today.
+
+Channels use `publisher` as the owner role instead of `curator`; ff-cli does not publish channels.
 
 If you already have a base64 key and want hex, convert it:
 

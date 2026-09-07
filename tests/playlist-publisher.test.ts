@@ -99,11 +99,14 @@ describe('publishPlaylist validation contract', () => {
       // Declare the signer as a curator BEFORE signing. The feed accepts a create only when a
       // signature's kid appears in the document's own curators[], and signing covers curators[], so
       // adding it afterwards would invalidate the signature this test then expects to upload.
+      //
+      // Sign as `curator`, not the configured default: a declared key only counts as an owner when it
+      // also signed in the owner role, so this is what a publishable document looks like.
       const withCurator = {
         ...basePlaylist,
         curators: [{ name: 'Test Curator', key: playlistSigningDidKey(privateKey) }],
       };
-      const signature = await signPlaylist(withCurator, privateKey);
+      const signature = await signPlaylist(withCurator, privateKey, 'curator');
       const playlist = { ...withCurator, signature: undefined, signatures: [signature] };
       const path = join(dir, 'signed.json');
       writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
@@ -174,6 +177,58 @@ test('publishPlaylist refuses a legacy flat-signature playlist without uploading
     assert.match(text, /legacy flat signature|signatures\[\]/i);
     // The remedy must name the concrete steps, not just the diagnosis.
     assert.match(text, /ff-cli sign/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('publishPlaylist refuses a declared curator who signed under a non-owner role', async () => {
+  // The feed derives a resource's owners from `curators[]` and then requires one of those keys to have
+  // signed *as curator*: being named is a claim, signing in the owner role is the proof. A key that is
+  // declared but signed as `agent` therefore authorizes nothing, and the server's answer speaks about
+  // ownership rather than about the role, which sends people to edit `curators[]` — already correct.
+  // This is a separate failure from "not declared": the document is right and the signature is wrong.
+  const dir = makeTempDir();
+  try {
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const privateKey = makePrivateKeyBase64();
+    const key = playlistSigningDidKey(privateKey);
+    const declared = { ...basePlaylist, curators: [{ name: 'Declared', key }] };
+    const signature = await signPlaylist(declared, privateKey, 'agent');
+    const playlist = { ...declared, signature: undefined, signatures: [signature] };
+    const path = join(dir, 'declared-wrong-role.json');
+    writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
+
+    const result = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+
+    assert.equal(result.success, false);
+    assert.match(String(result.error), /signed as "agent"|non-owner role/i);
+    // The remedy must name the role fix, not the declaration fix.
+    assert.match(String(result.message), /curator/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('publishPlaylist accepts a declared curator who signed in the curator role', async () => {
+  // Non-vacuity guard for the check above: the same document signed as `curator` must pass the preflight
+  // and reach the network, or the new gate would be rejecting everything rather than the wrong role.
+  const dir = makeTempDir();
+  try {
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const privateKey = makePrivateKeyBase64();
+    const key = playlistSigningDidKey(privateKey);
+    const declared = { ...basePlaylist, curators: [{ name: 'Declared', key }] };
+    const signature = await signPlaylist(declared, privateKey, 'curator');
+    const playlist = { ...declared, signature: undefined, signatures: [signature] };
+    const path = join(dir, 'declared-curator-role.json');
+    writeFileSync(path, JSON.stringify(playlist, null, 2), 'utf-8');
+
+    // Port 1 refuses the connection: reaching a transport error proves the preflight let it through.
+    const result = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+
+    assert.equal(result.success, false);
+    assert.doesNotMatch(String(result.error), /curator/i);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
