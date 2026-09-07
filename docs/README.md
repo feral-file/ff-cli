@@ -212,7 +212,7 @@ changes the document, so the signature is removed and the playlist must be
 re-signed before playing:
 
 ```bash
-ff-cli enrich playlist.json && ff-cli sign playlist.json
+ff-cli enrich playlist.json --assume-ethereum && ff-cli sign playlist.json
 ```
 
 ### Validate, sign, and play

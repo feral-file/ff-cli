@@ -239,7 +239,7 @@ title-only on the FF1 tombstone, and shows empty tiles in the app for every
 live HTML work. `enrich` repairs it in place.
 
 ```bash
-ff-cli enrich playlist.json
+ff-cli enrich playlist.json --assume-ethereum
 ```
 
 ```text
@@ -251,21 +251,29 @@ Enrich playlist
   Output: playlist.json
 ```
 
+`--assume-ethereum` is the operator's assertion that the playlist's `evm`
+coordinates are Ethereum. DP-1 records every EVM network as `chain: "evm"`,
+and `find` writes that for Ethereum works too, so an Ethereum playlist needs
+the flag; without it those items are skipped rather than guessed at, because
+the wrong network returns a different artwork's metadata. A Tezos playlist
+needs no flag.
+
 Items the indexer cannot resolve are listed rather than guessed at:
 
 ```text
 Nothing to enrich
 
-  Skipped 2:
+  Skipped 3:
     Kim Asendorf — PXL NET — no provenance.contract chain/address/tokenId to look up
     Untitled — the indexer returned nothing for it
+    Pre-Process — chain "evm" names a family; pass --assume-ethereum to assert the network
 ```
 
 Enrichment changes the document, so a signed playlist loses its envelope and
 has to be re-signed:
 
 ```bash
-ff-cli enrich playlist.json
+ff-cli enrich playlist.json --assume-ethereum
 ff-cli sign playlist.json
 ff-cli play playlist.json -d "living room"
 ```

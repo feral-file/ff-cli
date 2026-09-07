@@ -237,28 +237,41 @@ and nothing else. `enrich` is the repair path for those.
   changing the title would produce two documents claiming to be the same cached
   manifest. The replacement is derived from the original id and the title, so
   it is deterministic across runs.
+- The token standard the playlist asserts (`provenance.contract.standard`)
+  rides the lookup. The indexer keys ERC-721 and ERC-1155 tokens under
+  different CIDs (`eip155:1:erc721:…`, `eip155:1:erc1155:…`) and the client's
+  detection, having only an address, answers erc721 for every EVM contract —
+  so without the assertion an ERC-1155 work is queried as ERC-721 and never
+  found. A value outside the standards the CID can carry falls back to
+  detection.
 - The indexer resolving a token and having something worth attaching are
   different outcomes: `buildInlineManifestForToken` returns nothing when it has
-  only a title, since a title-only manifest adds payload without adding
-  information. Enrichment reports those separately from tokens it could not
-  resolve at all.
+  only a title, since on the items `find` and `build` create a title-only
+  manifest repeats what the item already says. A curator's item may carry no
+  title at all, and the tombstone then shows nothing, so enrichment does
+  synthesize a title-only manifest in that one case — the indexer's title is
+  substantiated, and `item.title` itself is still never written. An item that
+  has a title and resolves to nothing more is reported as resolved-without-
+  metadata, separately from tokens the indexer could not resolve at all.
 - A still the manifest builder suppressed is recovered against the item's own
   source. `resolveStillUri` blanks a thumbnail equal to the source it was
   handed, which is the source the *indexer* chose; for a static work that is
   often the still itself. When the curator kept a live HTML source instead, the
   item would otherwise end up with no thumbnail — the empty grid tile this
-  command exists to remove. When the indexer's source differs from the item's
-  and is http(s) **and is media the app can rasterize**, it is that suppressed
-  still
-  and becomes the thumbnail. The type check matters: `getBestMediaUrl` prefers
-  `display.animation_url` and media assets over `display.image_url`, so the
-  indexer's source is frequently a live HTML rendition, and putting one in the
-  thumbnail slot is worse than leaving it empty — the grid still cannot
-  rasterize it and the item now claims a still it does not have. The predicate
-  matches the media types `playlist-builder.js` already recognizes, images plus
-  SVG and video, and rejects HTML. A
-  thumbnail-only manifest is emitted where none was, unlike a title-only one:
-  it is the difference between a tile and an empty square.
+  command exists to remove. The lookup therefore carries the still the indexer
+  names for the token (`display.image_url`, returned beside the DP-1 item by
+  `resolveTokenBatch`), and enrichment applies the same rule against the
+  curator's source: when that still differs from the item's source it becomes
+  the thumbnail. It is the same field `find` and `build` write into
+  `thumbnails.default`, taken on the indexer's word as they take it. Nothing is
+  inferred from the indexer's *source*: `getBestMediaUrl` prefers
+  `display.animation_url` and media assets over `display.image_url`, so that
+  source is frequently a live HTML rendition, and a file-suffix check would
+  reject the extensionless CDN URLs the indexer commonly returns as stills
+  while `display.mime_type` describes the primary rendition rather than the
+  still (a live work reports `text/html` beside a PNG `image_url`). A
+  thumbnail-only manifest is emitted where none was: it is the difference
+  between a tile and an empty square.
 - `evm` names a family, and enrichment refuses to guess which member. DP-1 §6
   carries no network identity, and the indexer maps Ethereum, Polygon,
   Arbitrum, Optimism, Base, and Zora all back to `evm`, so neither the request

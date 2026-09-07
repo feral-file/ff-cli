@@ -302,7 +302,7 @@ describe('enrichPlaylistManifests', () => {
     const lookup = async (): Promise<IndexerItem[]> => [
       {
         provenance: provenance('0xabc', '1', 'evm'),
-        source: 'https://cdn.example/still.png',
+        still: 'https://cdn.example/still.png',
         inlineManifest: {
           refVersion: '1.1.0',
           id: 'ref-x',
@@ -322,7 +322,7 @@ describe('enrichPlaylistManifests', () => {
   test('builds a thumbnail-only manifest when the still was all there was', async () => {
     const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
     const lookup = async (): Promise<IndexerItem[]> => [
-      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/still.png' },
+      { provenance: provenance('0xabc', '1', 'evm'), still: 'https://cdn.example/still.png' },
     ];
     const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
     assert.equal(result.enriched, 1, 'an empty tile is worth a thumbnail-only manifest');
@@ -337,7 +337,7 @@ describe('enrichPlaylistManifests', () => {
     const shared = 'https://generator.example/live.html';
     const playlist = playlistOf(item({ source: shared }));
     const lookup = async (): Promise<IndexerItem[]> => [
-      { provenance: provenance('0xabc', '1', 'evm'), source: shared },
+      { provenance: provenance('0xabc', '1', 'evm'), still: shared },
     ];
     const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
     assert.equal(result.enriched, 0);
@@ -349,7 +349,7 @@ describe('enrichPlaylistManifests', () => {
     const lookup = async (): Promise<IndexerItem[]> => [
       {
         provenance: provenance('0xabc', '1', 'evm'),
-        source: 'https://cdn.example/other.png',
+        still: 'https://cdn.example/other.png',
         inlineManifest: {
           refVersion: '1.1.0',
           id: 'ref-x',
@@ -367,10 +367,10 @@ describe('enrichPlaylistManifests', () => {
     );
   });
 
-  test('ignores a non-http indexer source', async () => {
+  test('ignores a non-http still', async () => {
     const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
     const lookup = async (): Promise<IndexerItem[]> => [
-      { provenance: provenance('0xabc', '1', 'evm'), source: 'ipfs://QmSomething' },
+      { provenance: provenance('0xabc', '1', 'evm'), still: 'ipfs://QmSomething' },
     ];
     const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
     assert.equal(result.enriched, 0, 'ipfs is not resolvable by the display path');
@@ -382,7 +382,7 @@ describe('enrichPlaylistManifests', () => {
     const lookup = async (): Promise<IndexerItem[]> => [
       {
         provenance: provenance('0xabc', '1', 'evm'),
-        source: 'https://cdn.example/still.png',
+        still: 'https://cdn.example/still.png',
         inlineManifest: {
           refVersion: '1.1.0',
           id: 'ref-shared',
@@ -406,29 +406,38 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.assumedEthereum, 1, 'only the evm coordinate is ambiguous');
   });
 
-  // F2: the indexer prefers animation_url over image_url, so its source is
-  // often live HTML. Writing that into the thumbnail slot is worse than an
-  // empty slot — the grid still cannot draw it, and the item claims a still.
-  test('refuses to treat a live HTML indexer source as a still', async () => {
-    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
-    const lookup = async (): Promise<IndexerItem[]> => [
-      { provenance: provenance('0xabc', '1', 'evm'), source: 'https://cdn.example/other.html' },
-    ];
-    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
-    assert.equal(result.enriched, 0);
-    assert.equal(result.skipped[0].reason, 'no-metadata');
+  // The indexer prefers animation_url over image_url, so its source is often
+  // live HTML, and its stills are often extensionless CDN URLs. Neither a
+  // suffix nor the source itself is evidence of a still; only the still the
+  // indexer names is.
+  test('never infers a still from the indexer source, whatever it looks like', async () => {
+    for (const source of ['https://cdn.example/other.html', 'https://cdn.example/other.png']) {
+      const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+      const lookup = async (): Promise<IndexerItem[]> => [
+        { provenance: provenance('0xabc', '1', 'evm'), source },
+      ];
+      const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+      assert.equal(result.enriched, 0, `${source} is a source, not a still`);
+      assert.equal(result.skipped[0].reason, 'no-metadata');
+    }
   });
 
-  test('accepts an image source with a query string', async () => {
-    const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
-    const lookup = async (): Promise<IndexerItem[]> => [
-      {
-        provenance: provenance('0xabc', '1', 'evm'),
-        source: 'https://cdn.example/still.png?w=1080',
-      },
-    ];
-    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
-    assert.equal(result.enriched, 1);
+  test("takes the indexer's still on its word, extension or not", async () => {
+    for (const still of [
+      'https://cdn.example/art?id=1',
+      'https://cdn.example/still.png?w=1080',
+      'https://cdn.example/work.svg',
+      'https://cdn.example/work.mp4',
+    ]) {
+      const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
+      const lookup = async (): Promise<IndexerItem[]> => [
+        { provenance: provenance('0xabc', '1', 'evm'), still },
+      ];
+      const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+      assert.equal(result.enriched, 1, `${still} should enrich`);
+      const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+      assert.equal((meta.thumbnails as { default: { uri: string } }).default.uri, still);
+    }
   });
 
   // F3: --force can bring a changed artist or description while the title and
@@ -477,20 +486,67 @@ describe('enrichPlaylistManifests', () => {
     assert.equal(result.enriched, 1, 'tezos is unambiguous');
   });
 
-  test('recovers an SVG or video still, never HTML', async () => {
-    for (const [source, expected] of [
-      ['https://cdn.example/work.svg', 1],
-      ['https://cdn.example/work.mp4', 1],
-      ['https://cdn.example/work.webm', 1],
-      ['https://cdn.example/work.html', 0],
-    ] as [string, number][]) {
-      const playlist = playlistOf(item({ source: 'https://generator.example/live.html' }));
-      const lookup = async (): Promise<IndexerItem[]> => [
-        { provenance: provenance('0xabc', '1', 'evm'), source },
-      ];
-      const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
-      assert.equal(result.enriched, expected, `${source} should enrich ${expected}`);
-    }
+  // The indexer keys ERC-721 and ERC-1155 under different CIDs and cannot
+  // tell them apart from an address, so the standard the playlist asserts has
+  // to reach the lookup or an ERC-1155 work is queried as ERC-721 and lost.
+  test('carries the asserted token standard into the lookup', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(
+      item({
+        id: 'a',
+        provenance: {
+          type: 'onChain',
+          contract: { chain: 'evm', standard: 'ERC1155', address: '0xaaa', tokenId: '1' },
+        },
+      }),
+      item({
+        id: 'b',
+        provenance: { type: 'onChain', contract: { chain: 'evm', address: '0xbbb', tokenId: '2' } },
+      })
+    );
+    await enrichPlaylistManifests(playlist, hit(seen), { assumeEthereum: true });
+    const [first, second] = seen[0];
+    assert.equal(first.standard, 'erc1155', 'the assertion rides the coordinate, normalized');
+    assert.equal('standard' in second, false, 'no assertion, no key: detection decides');
+  });
+
+  // A title-only manifest is worthless on an item that already has a title,
+  // which is why buildInlineManifestForToken never emits one. A curator's
+  // item may carry no title at all, and then the tombstone shows nothing.
+  test('synthesizes a title-only manifest when the item has no title', async () => {
+    const playlist = playlistOf(item({ title: undefined }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), title: 'Pre-Process #0' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 1);
+    const manifest = playlist.items?.[0].inlineManifest as Record<string, unknown>;
+    assert.equal((manifest.metadata as { title: string }).title, 'Pre-Process #0');
+    assert.equal(playlist.items?.[0].title, undefined, 'item.title is never written');
+  });
+
+  test('does not synthesize a title-only manifest when the item has a title', async () => {
+    const playlist = playlistOf(item({ title: 'Pre-Process' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      { provenance: provenance('0xabc', '1', 'evm'), title: 'Pre-Process #0' },
+    ];
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(result.enriched, 0);
+    assert.equal(result.skipped[0].reason, 'no-metadata');
+  });
+
+  test("a still-only manifest takes the indexer's title when the item has none", async () => {
+    const playlist = playlistOf(item({ title: '', source: 'https://generator.example/live.html' }));
+    const lookup = async (): Promise<IndexerItem[]> => [
+      {
+        provenance: provenance('0xabc', '1', 'evm'),
+        title: 'Pre-Process #0',
+        still: 'https://cdn.example/still.png',
+      },
+    ];
+    await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    const meta = playlist.items?.[0].inlineManifest?.metadata as Record<string, unknown>;
+    assert.equal(meta.title, 'Pre-Process #0');
   });
 
   test('skips an item that already carries a manifest', async () => {

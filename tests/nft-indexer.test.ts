@@ -652,3 +652,87 @@ test('convertToDP1Item: output is byte-identical across calls (no per-item wall 
   const b = convertToDP1Item(out, 10);
   assert.equal(JSON.stringify(a.item), JSON.stringify(b.item));
 });
+
+test('buildTokenCID: an asserted standard keys the CID; anything else falls back to detection', () => {
+  const { buildTokenCID } = nftIndexer;
+  assert.equal(
+    buildTokenCID('ethereum', '0xabc', '1', 'erc1155'),
+    'eip155:1:erc1155:0xabc:1',
+    'the indexer keys ERC-1155 separately and detection cannot see it'
+  );
+  assert.equal(buildTokenCID('ethereum', '0xabc', '1', 'ERC1155'), 'eip155:1:erc1155:0xabc:1');
+  assert.equal(buildTokenCID('ethereum', '0xabc', '1', 'other'), 'eip155:1:erc721:0xabc:1');
+  assert.equal(buildTokenCID('ethereum', '0xabc', '1', undefined), 'eip155:1:erc721:0xabc:1');
+});
+
+test('mapIndexerDataToStandardFormat: preserves an asserted standard through to DP1 output', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  const out = mapIndexerDataToStandardFormat(mockTokenRow(), 'ethereum', 'erc1155');
+  assert.equal(out.token.standard, 'erc1155');
+  const dp1 = convertToDP1Item(out, 10);
+  assert.equal(dp1.success, true);
+  assert.equal(dp1.item.provenance.contract.standard, 'erc1155');
+});
+
+test('convertToDP1Item: names the still beside the item, whether or not the item carries it', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  // A live work: the still differs from the source and rides the manifest too.
+  const live = convertToDP1Item(
+    mapIndexerDataToStandardFormat(
+      mockTokenRow({
+        display: {
+          name: 'Live',
+          description: '',
+          mime_type: 'text/html',
+          image_url: 'https://cdn.example/art?id=1',
+          animation_url: 'https://generator.example/live',
+          artists: [],
+        },
+        media_assets: [],
+      }),
+      'ethereum'
+    ),
+    10
+  );
+  assert.equal(live.still, 'https://cdn.example/art?id=1', 'extensionless stills are kept');
+  // A static work: the still IS the source, so the manifest suppresses it —
+  // but a consumer with a different source still needs to know it.
+  const bare = convertToDP1Item(
+    mapIndexerDataToStandardFormat(
+      mockTokenRow({
+        display: {
+          name: 'Punk 7804',
+          description: '',
+          mime_type: 'image/png',
+          image_url: 'https://example.com/punk.png',
+          animation_url: '',
+          artists: [],
+        },
+        media_assets: [],
+      }),
+      'ethereum'
+    ),
+    10
+  );
+  assert.equal(bare.item.inlineManifest, undefined);
+  assert.equal(bare.still, 'https://example.com/punk.png');
+  // No image_url at all: no still, and never the source in its place.
+  const none = convertToDP1Item(
+    mapIndexerDataToStandardFormat(
+      mockTokenRow({
+        display: {
+          name: 'Live only',
+          description: '',
+          mime_type: 'text/html',
+          image_url: '',
+          animation_url: 'https://generator.example/live',
+          artists: [],
+        },
+        media_assets: [],
+      }),
+      'ethereum'
+    ),
+    10
+  );
+  assert.equal(none.still, '', 'the source is not a still');
+});
