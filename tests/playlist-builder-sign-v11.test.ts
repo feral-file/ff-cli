@@ -341,8 +341,8 @@ describe('buildDP1Playlist signing role', () => {
     // role (`curator`), so signing the claim as `agent` produces a document that is declared, verified —
     // and unpublishable. The role has to follow the claim the builder is making.
     //
-    // withPlaylistConfig writes `role: 'agent'` (what config.json.example ships), so this also pins that
-    // the shipped default cannot silently reintroduce the unpublishable shape.
+    // withPlaylistConfig writes `role: 'agent'` (the value the CLI falls back to when `playlist.role`
+    // is absent), so this also pins that a configured `agent` cannot reintroduce the unpublishable shape.
     const { privateKey } = generateKeyPairSync('ed25519');
     const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
     await withPlaylistConfig('ff1-builder-role-', der.toString('base64'), async () => {

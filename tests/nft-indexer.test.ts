@@ -235,6 +235,88 @@ test('mapIndexerDataToStandardFormat: infers fa2 for Tezos KT contracts and pres
   assert.equal(dp1.item.provenance.contract.standard, 'fa2');
 });
 
+test("mapIndexerDataToStandardFormat: the row's own standard beats the chain-based guess", () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  // The regression this pins: `find` by owner or by contract passes only a chain
+  // name inferred from the address format, and detection answers erc721 for every
+  // EVM contract — so every ERC-1155 work was written into playlists as ERC-721.
+  const tokenRow = mockTokenRow({
+    contract_address: '0xd07dc4262BCDbf85190C01c996b4C06a461d2430',
+    token_number: '589004',
+    chain: 'eip155:1',
+    standard: 'erc1155',
+  });
+
+  const out = mapIndexerDataToStandardFormat(tokenRow, 'ethereum');
+  assert.equal(out.token.standard, 'erc1155');
+
+  const dp1 = convertToDP1Item(out, 10);
+  assert.equal(dp1.success, true);
+  assert.equal(dp1.item.provenance.contract.standard, 'erc1155');
+  assert.equal(dp1.item.provenance.contract.chain, 'evm');
+});
+
+test("mapIndexerDataToStandardFormat: the row's standard also outranks an asserted one", () => {
+  const { mapIndexerDataToStandardFormat } = nftIndexer;
+  // An assertion is a caller's belief (a playlist's `provenance.contract.standard`,
+  // which may itself be a stale erc721 written by this bug); the row is the indexer's
+  // record of the token. Precedence is row -> asserted -> detection.
+  const out = mapIndexerDataToStandardFormat(
+    mockTokenRow({ standard: 'ERC1155 ' }),
+    'ethereum',
+    'erc721'
+  );
+  assert.equal(out.token.standard, 'erc1155', 'row standard wins, normalized');
+});
+
+test('mapIndexerDataToStandardFormat: an unusable row standard falls back to the assertion', () => {
+  const { mapIndexerDataToStandardFormat } = nftIndexer;
+  // A standard the CID format cannot carry says nothing, so it must not be passed
+  // through into a signed DP-1 provenance block.
+  assert.equal(
+    mapIndexerDataToStandardFormat(mockTokenRow({ standard: 'erc-1155' }), 'ethereum', 'erc1155')
+      .token.standard,
+    'erc1155'
+  );
+  assert.equal(
+    mapIndexerDataToStandardFormat(mockTokenRow({ standard: null }), 'ethereum').token.standard,
+    'erc721',
+    'a row without a standard still detects as before'
+  );
+});
+
+test('convertToDP1Item: the row CAIP-2 chain decides the DP-1 chain', () => {
+  const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
+  // `find` infers 'ethereum' from any non-KT address, so a Tezos row reached that
+  // way would be published as an EVM contract without the row's own chain id.
+  const tezosRow = mockTokenRow({
+    contract_address: 'KT1abcdef1234567890abcdef1234567890abcdef',
+    token_number: '42',
+    chain: 'tezos:mainnet',
+    standard: 'fa2',
+  });
+  const tezos = convertToDP1Item(mapIndexerDataToStandardFormat(tezosRow, 'ethereum'), 10);
+  assert.equal(tezos.success, true);
+  assert.equal(tezos.item.provenance.contract.chain, 'tezos');
+  assert.equal(tezos.item.provenance.contract.standard, 'fa2');
+
+  // No chain on the row at all: the caller's chain name still answers, as before.
+  const named = convertToDP1Item(mapIndexerDataToStandardFormat(mockTokenRow(), 'ethereum'), 10);
+  assert.equal(named.item.provenance.contract.chain, 'evm');
+
+  // A row chain DP-1 cannot name resolves to `other`, and must NOT fall through to
+  // the caller's chain name — that name is 'ethereum' for every non-KT address, so
+  // falling through would publish a Solana token as an EVM contract. `other` is a
+  // true statement about a chain DP-1 has no word for; `evm` is a false one. The
+  // token is still built either way: an unnameable chain is labelled, not skipped.
+  const unmapped = convertToDP1Item(
+    mapIndexerDataToStandardFormat(mockTokenRow({ chain: 'solana:mainnet' }), 'ethereum'),
+    10
+  );
+  assert.equal(unmapped.success, true, 'an unmapped row chain is labelled, not skipped');
+  assert.equal(unmapped.item.provenance.contract.chain, 'other');
+});
+
 test('mapIndexerDataToStandardFormat: returns error for null indexerData', () => {
   const { mapIndexerDataToStandardFormat } = nftIndexer;
   const out = mapIndexerDataToStandardFormat(null, 'ethereum');
@@ -410,6 +492,10 @@ test('GraphQL documents: tokens list selects display + media_assets variants onl
     offset: 2,
   });
   assert.match(q, /tokens\s*\(\s*token_cids:/);
+  // Without these two the client guesses: erc721 for every EVM contract, and a
+  // chain inferred from the address format. They are the only source of truth.
+  assert.match(q, /^\s*chain\s*$/m);
+  assert.match(q, /^\s*standard\s*$/m);
   assert.match(q, /display\s*\{/);
   assert.match(q, /\bname\b/);
   assert.match(q, /\bdescription\b/);

@@ -206,8 +206,8 @@ describe('play delivery signing contract', () => {
    *
    * Signing REPLACES `signatures[]` rather than appending, so the cast-time signature is the only one that
    * reaches the device — the builder's `curator` envelope is discarded on the way. Config here sets
-   * `role: "agent"` (what config.json.example ships) precisely so the assertion fails if the delivery path
-   * ever falls back to the configured role again.
+   * `role: "agent"` (the value the CLI falls back to when `playlist.role` is absent) precisely so the
+   * assertion fails if the delivery path ever falls back to the configured role again.
    */
   test('delivers a curator-role signature even when config sets role agent', async () => {
     let deliveredBody = '';
