@@ -333,3 +333,62 @@ async function withPlaylistConfig(
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+describe('buildDP1Playlist signing role', () => {
+  test('signs as curator when it declares its own key, even though config says agent', async () => {
+    // The builder writes its signing key into `curators[]`, which is the document asserting that key is
+    // an owner. The feed only treats a declared key as an owner when that key also signed in the owner
+    // role (`curator`), so signing the claim as `agent` produces a document that is declared, verified —
+    // and unpublishable. The role has to follow the claim the builder is making.
+    //
+    // withPlaylistConfig writes `role: 'agent'` (what config.json.example ships), so this also pins that
+    // the shipped default cannot silently reintroduce the unpublishable shape.
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    await withPlaylistConfig('ff1-builder-role-', der.toString('base64'), async () => {
+      const playlist = await buildDP1Playlist({
+        items: [minimalItem],
+        ...deterministicParams,
+      });
+
+      const signatures = playlist.signatures as Array<{ kid: string; role: string }>;
+      assert.equal(signatures.length, 1);
+      assert.equal(signatures[0].role, 'curator');
+
+      // The signing key must be the one declared, or the role is attached to the wrong identity.
+      const curators = playlist.curators as Array<{ key: string }>;
+      const expected = playlistSigningDidKey(der.toString('base64'));
+      assert.ok(curators.some((curator) => curator.key === expected));
+      assert.equal(signatures[0].kid, expected);
+
+      const vr = await verifyPlaylist(playlist as Record<string, unknown>);
+      assert.equal(vr.valid, true, vr.error);
+    });
+  });
+
+  test('an explicit PLAYLIST_ROLE does not downgrade the builder signature', async () => {
+    // `playlist.role` governs the standalone `sign` command, where the user chooses what claim to make.
+    // It must not reach the builder: the builder has already declared the key as a curator, so any other
+    // role would contradict the document it just wrote and strand it as unpublishable.
+    const { privateKey } = generateKeyPairSync('ed25519');
+    const der = privateKey.export({ format: 'der', type: 'pkcs8' }) as Buffer;
+    const previous = process.env.PLAYLIST_ROLE;
+    process.env.PLAYLIST_ROLE = 'institution';
+    try {
+      await withPlaylistConfig('ff1-builder-role-env-', der.toString('base64'), async () => {
+        const playlist = await buildDP1Playlist({
+          items: [minimalItem],
+          ...deterministicParams,
+        });
+        const signatures = playlist.signatures as Array<{ role: string }>;
+        assert.equal(signatures[0].role, 'curator');
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PLAYLIST_ROLE;
+      } else {
+        process.env.PLAYLIST_ROLE = previous;
+      }
+    }
+  });
+});

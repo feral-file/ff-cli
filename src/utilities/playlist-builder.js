@@ -27,6 +27,15 @@ const { buildInlineManifestForToken } = require('./ref-manifest');
 const DEFAULT_BACKGROUND = '#111111';
 
 /**
+ * DP-1 signature role that carries ownership of a playlist.
+ *
+ * The feed derives a playlist's owners from `curators[]` and then requires one of those keys to have
+ * signed as `curator`: being named is a claim, signing in this role is the proof. Playlist groups use
+ * the same role; channels use `publisher`, which ff-cli does not publish.
+ */
+const PLAYLIST_OWNER_ROLE = 'curator';
+
+/**
  * isTimeBasedMedia reports whether an item's media has an intrinsic runtime
  * (video or audio) per DP-1 §4.1 "time-based sources".
  *
@@ -547,7 +556,16 @@ async function buildDP1Playlist(paramsOrItems, options = {}) {
       if (!declared.some((curator) => curator && curator.key === key)) {
         playlist.curators = [...declared, { name: playlistConfig.curatorName || 'ff-cli', key }];
       }
-      playlist.signatures = [await signPlaylist(playlist, playlistConfig.privateKey)];
+      // Sign in the `curator` role, not the configured one. Declaring the key in curators[] is the
+      // document claiming that key is an owner; the feed treats a declared key as an owner only when the
+      // same key also signed in the owner role, so any other role leaves the document declared, verified
+      // and unpublishable — the exact shape that made every ff-cli playlist fail before (#107). The role
+      // has to follow the claim the builder just wrote. `playlist.role` still governs `ff-cli sign`,
+      // where the user chooses what claim to make; to build under a different role, build without a
+      // configured key and sign the result explicitly.
+      playlist.signatures = [
+        await signPlaylist(playlist, playlistConfig.privateKey, PLAYLIST_OWNER_ROLE),
+      ];
       delete playlist.signature;
     }
   } catch (error) {
