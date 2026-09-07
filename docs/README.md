@@ -280,14 +280,27 @@ The `publish` command:
 Configure feed servers in `config.json`:
 
 Publishing needs no credentials. The feed authorizes a create from the signatures inside the playlist:
-it requires a signature whose `kid` matches a key the document declares in `curators[]`.
+it requires a signature whose `kid` matches a key the document declares in `curators[]`, **and** that
+signature must carry the `curator` role. Being named in `curators[]` is a claim; signing as `curator` is
+the proof, and the feed needs both.
 
 Declare it before signing, not after: a signature covers `curators[]`, so adding the entry to an
 already-signed playlist invalidates it, and signing again appends rather than replaces. Run
 `ff-cli status` to read the `did:key` your signatures will carry, put it in `curators[]`, then sign
-once. If you sign with `sign --key <privateKey>`, read that key's identity with
-`ff-cli status --key <privateKey>` — the configured identity would be the wrong one to declare. `find` and `build` do this for you when a signing key is configured. An `apiKey` left over in
-an existing config is ignored.
+once **with the owner role**:
+
+```bash
+ff-cli sign playlist.json -r curator
+```
+
+The flag is needed because plain `ff-cli sign` uses `playlist.role`, which defaults to `agent` — a
+document `ff-cli publish` then refuses. Set `"role": "curator"` under `playlist` in `config.json` to make
+that the default for hand-signed playlists.
+
+If you sign with `sign --key <privateKey>`, read that key's identity with
+`ff-cli status --key <privateKey>` — the configured identity would be the wrong one to declare. `find`
+and `build` need none of this: they declare the key and sign it as `curator` for you when a signing key
+is configured. An `apiKey` left over in an existing config is ignored.
 
 ```json
 {
