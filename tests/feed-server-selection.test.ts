@@ -105,8 +105,8 @@ describe('non-TTY server selection at the CLI', () => {
     const output = `${result.stdout}${result.stderr}`;
     assert.match(output, /Multiple feed servers configured/);
     assert.match(output, /--server/);
-    assert.match(output, new RegExp(TWO_SERVERS[0]));
-    assert.match(output, new RegExp(TWO_SERVERS[1]));
+    assert.ok(output.includes(TWO_SERVERS[0]), `expected ${TWO_SERVERS[0]} in output`);
+    assert.ok(output.includes(TWO_SERVERS[1]), `expected ${TWO_SERVERS[1]} in output`);
     // It must fail on the ambiguity, not on the missing file: the file is never read.
     assert.doesNotMatch(output, /Playlist file not found/);
   });
