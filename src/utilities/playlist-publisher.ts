@@ -85,7 +85,9 @@ export async function publishPlaylist(
           `  Re-sign it as a DP-1 v1.1 envelope:\n` +
           `    1. remove the "signature" field\n` +
           `    2. declare your key: "curators": [{ "name": "Your name", "key": "<did:key from ff-cli status>" }]\n` +
-          `    3. ff-cli sign <file>`,
+          `    3. ff-cli sign <file> -r ${OWNER_ROLE}\n` +
+          `  The role matters: a declared key counts as an owner only when it also signed as "${OWNER_ROLE}",\n` +
+          `  and plain "ff-cli sign" uses playlist.role, which defaults to "agent".`,
       };
     }
 
@@ -133,8 +135,10 @@ export async function publishPlaylist(
           `The feed accepts a publish when a signature's kid appears in the playlist's own curators[].\n` +
           `  Add this to the playlist before signing:\n` +
           `    "curators": [{ "name": "Your name", "key": "${signingKids[0]}" }]\n` +
-          `  then sign again from the unsigned file — signing appends, so re-signing an already-signed\n` +
-          `  playlist leaves the earlier signature covering a document that no longer exists.`,
+          `  then sign again from the unsigned file with "ff-cli sign <file> -r ${OWNER_ROLE}" — signing\n` +
+          `  appends, so re-signing an already-signed playlist leaves the earlier signature covering a\n` +
+          `  document that no longer exists, and a declared key only counts as an owner when it signed\n` +
+          `  as "${OWNER_ROLE}".`,
       };
     }
 

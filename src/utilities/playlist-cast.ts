@@ -1,5 +1,19 @@
 import type { Playlist } from '../types';
 
+/**
+ * DP-1 signature role used when signing a playlist for playback.
+ *
+ * A cast never passes through a feed, so the delivered document carries no `feed` signature and its own
+ * entry is the only one a player can judge. DP-1 §7.1.1 rule 1 has players verify a `feed` or `curator`
+ * signature, so signing under the configured role (shipped default `agent`) leaves a document a
+ * role-aware player may refuse, with nothing else in the envelope to fall back on.
+ *
+ * This also has to match what the builder wrote: a wrapped media URL arrives here already declaring the
+ * signing key in `curators[]` and signed as `curator`, and signing REPLACES `signatures[]` rather than
+ * appending — so any other role here silently downgrades that envelope on its way to the device.
+ */
+const PLAYBACK_SIGNING_ROLE = 'curator';
+
 // playlist-signer and ff1-device are still CommonJS; require keeps interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { signPlaylist } = require('./playlist-signer');
@@ -76,7 +90,7 @@ export async function castPlaylist(
         };
       }
       try {
-        const signature = await signPlaylist(current, options.signingKey);
+        const signature = await signPlaylist(current, options.signingKey, PLAYBACK_SIGNING_ROLE);
         current = {
           ...current,
           signature: undefined,

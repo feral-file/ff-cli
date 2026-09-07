@@ -233,3 +233,56 @@ test('publishPlaylist accepts a declared curator who signed in the curator role'
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('every publish remedy names the curator role, so following one cannot fail the next gate', async () => {
+  // A remedy that hands back a document this same preflight rejects is worse than no remedy: the user
+  // follows the instruction exactly and hits a second failure. Both recovery paths tell people to sign,
+  // and plain `ff-cli sign` uses playlist.role, whose shipped default is `agent` — which the owner-role
+  // gate then refuses. Pin the role on every remedy so the sequence terminates.
+  const dir = makeTempDir();
+  try {
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const privateKey = makePrivateKeyBase64();
+
+    // Legacy flat signature.
+    const legacyPath = join(dir, 'legacy.json');
+    writeFileSync(
+      legacyPath,
+      JSON.stringify({ ...basePlaylist, signature: 'ed25519:0xdeadbeef' }, null, 2),
+      'utf-8'
+    );
+    const legacy = await publishPlaylist(legacyPath, 'http://127.0.0.1:1/api/v1');
+    assert.equal(legacy.success, false);
+    assert.match(String(legacy.message), /-r curator/);
+
+    // Signed, but the signer is not declared.
+    const undeclaredPath = join(dir, 'undeclared.json');
+    const undeclaredSig = await signPlaylist(basePlaylist, privateKey, 'curator');
+    writeFileSync(
+      undeclaredPath,
+      JSON.stringify({ ...basePlaylist, signatures: [undeclaredSig] }, null, 2),
+      'utf-8'
+    );
+    const undeclared = await publishPlaylist(undeclaredPath, 'http://127.0.0.1:1/api/v1');
+    assert.equal(undeclared.success, false);
+    assert.match(String(undeclared.message), /-r curator/);
+
+    // Declared, but signed under a non-owner role.
+    const wrongRolePath = join(dir, 'wrong-role.json');
+    const declared = {
+      ...basePlaylist,
+      curators: [{ name: 'Declared', key: playlistSigningDidKey(privateKey) }],
+    };
+    const agentSig = await signPlaylist(declared, privateKey, 'agent');
+    writeFileSync(
+      wrongRolePath,
+      JSON.stringify({ ...declared, signatures: [agentSig] }, null, 2),
+      'utf-8'
+    );
+    const wrongRole = await publishPlaylist(wrongRolePath, 'http://127.0.0.1:1/api/v1');
+    assert.equal(wrongRole.success, false);
+    assert.match(String(wrongRole.message), /-r curator/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

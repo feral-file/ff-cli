@@ -200,6 +200,81 @@ describe('play delivery signing contract', () => {
   });
 
   /**
+   * A cast never passes through a feed, so the delivered document carries no `feed` signature and its own
+   * entry is all a player can judge. DP-1 §7.1.1 rule 1 has players verify a `feed` or `curator`
+   * signature, so an `agent`-only envelope is one a role-aware player may refuse.
+   *
+   * Signing REPLACES `signatures[]` rather than appending, so the cast-time signature is the only one that
+   * reaches the device — the builder's `curator` envelope is discarded on the way. Config here sets
+   * `role: "agent"` (what config.json.example ships) precisely so the assertion fails if the delivery path
+   * ever falls back to the configured role again.
+   */
+  test('delivers a curator-role signature even when config sets role agent', async () => {
+    let deliveredBody = '';
+    const deviceServer = createServer((req, res) => {
+      let body = '';
+      req.setEncoding('utf-8');
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        const parsed = JSON.parse(body) as { command?: string };
+        if (parsed.command === 'getDeviceStatus') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ message: { installedVersion: '1.0.0' } }));
+          return;
+        }
+        if (parsed.command === 'displayPlaylist') {
+          deliveredBody = body;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ ok: true }));
+      });
+    });
+
+    await new Promise<void>((resolvePromise) => deviceServer.listen(0, resolvePromise));
+    const address = deviceServer.address();
+    if (address === null || typeof address === 'string') {
+      deviceServer.close();
+      throw new Error('Failed to start device test server');
+    }
+
+    try {
+      writeFileSync(
+        join(dir, 'config.json'),
+        JSON.stringify(
+          {
+            ff1Devices: {
+              devices: [{ name: 'test-device', host: `http://127.0.0.1:${address.port}` }],
+            },
+            playlist: { privateKey: privateKeyBase64, role: 'agent' },
+          },
+          null,
+          2
+        ),
+        'utf-8'
+      );
+
+      const result = await runCli(dir, ['play', mediaUrl]);
+
+      assert.equal(result.status, 0);
+      assert.ok(deliveredBody, 'expected device request body to be captured');
+
+      const request = JSON.parse(deliveredBody) as {
+        request?: { dp1_call?: { signatures?: Array<{ role?: string; kid?: string }> } };
+      };
+      const signatures = request.request?.dp1_call?.signatures ?? [];
+      assert.ok(signatures.length > 0, 'expected a signature on the delivered playlist');
+      assert.ok(
+        signatures.some((signature) => signature.role === 'curator'),
+        `expected a curator-role signature, got: ${signatures.map((s) => s.role).join(', ')}`
+      );
+    } finally {
+      deviceServer.close();
+    }
+  });
+
+  /**
    * Direct media is wrapped in an unsigned playlist and must be signed before delivery, so this path
    * needs the *resolved* key. `config init` leaves the YOUR_ED25519_PRIVATE_KEY... literal in the file,
    * which is truthy — reading config.playlist.privateKey directly picks the placeholder and signing
