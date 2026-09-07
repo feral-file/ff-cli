@@ -68,7 +68,7 @@
     "dp1-js": "2.3.1",
     "ff1": "^1.0.0",
     "fuzzysort": "^3.1.0",
-    "viem": "^2.38.2"
+    "viem": "^2.56.3"
   },
   "devDependencies": {
     "@types/node": "^24.7.1",
@@ -82,8 +82,5 @@
     "prettier": "^3.6.2",
     "tsx": "^4.20.6",
     "typescript": "^5.9.3"
-  },
-  "overrides": {
-    "ws": "^8.21.0"
   }
 }

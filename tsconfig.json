@@ -11,6 +11,17 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "moduleResolution": "node",
+    // ox (pulled in by viem >= 2.50) ships its raw .ts sources beside the
+    // compiled output and relies on `exports` to steer resolvers at `_types`.
+    // Node-style resolution ignores `exports`, so tsc lands on the sources,
+    // type-checks them as project code (skipLibCheck only covers .d.ts), and
+    // fails on browser-only types. Point ox at its declarations directly.
+    // Nothing in this repo imports ox, so emitted output is unaffected.
+    "baseUrl": ".",
+    "paths": {
+      "ox": ["node_modules/ox/_types/index.d.ts"],
+      "ox/*": ["node_modules/ox/_types/*"]
+    },
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,
