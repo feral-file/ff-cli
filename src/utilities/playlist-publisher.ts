@@ -124,7 +124,8 @@ export async function publishPlaylist(
     const declaredSignatures = signatures.filter((sig) =>
       curatorKeys.has(typeof sig?.kid === 'string' ? sig.kid.trim() : '')
     );
-    if (signingKids.length > 0 && !signingKids.some((kid) => curatorKeys.has(kid))) {
+    // Same predicate as `no declared signature`, expressed through the set the next gate also needs.
+    if (signingKids.length > 0 && declaredSignatures.length === 0) {
       return {
         success: false,
         error: 'Playlist is signed, but the signing key is not declared as a curator.',
