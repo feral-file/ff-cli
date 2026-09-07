@@ -466,7 +466,7 @@ async function buildDP1Playlist(items, title, slug) {
  * @returns {Promise<Object>} Result
  */
 async function sendToDevice(playlist, deviceName) {
-  const playlistVerifier = await import('./playlist-verifier');
+  const playlistVerifier = await import('./playlist-verifier.js');
   const verifyPlaylist =
     playlistVerifier.verifyPlaylist ||
     (playlistVerifier.default && playlistVerifier.default.verifyPlaylist) ||

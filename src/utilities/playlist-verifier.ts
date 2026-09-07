@@ -56,10 +56,10 @@ export async function verifyPlaylist(
     let key: string | undefined = publicKey?.trim() || undefined;
     if (!key) {
       try {
-        const { getPlaylistConfig } = await import('../config');
+        const { getPlaylistConfig } = await import('../config.js');
         const privateKeyMaterial = getPlaylistConfig().privateKey;
         if (privateKeyMaterial) {
-          const { deriveEd25519PublicKeyForVerify } = await import('./ed25519-key-derive');
+          const { deriveEd25519PublicKeyForVerify } = await import('./ed25519-key-derive.js');
           key = deriveEd25519PublicKeyForVerify(privateKeyMaterial);
         }
       } catch (err) {
@@ -74,7 +74,7 @@ export async function verifyPlaylist(
 
     if (key) {
       try {
-        const { normalizeVerifyPublicKeyToPem } = await import('./ed25519-key-derive');
+        const { normalizeVerifyPublicKeyToPem } = await import('./ed25519-key-derive.js');
         key = normalizeVerifyPublicKeyToPem(key);
       } catch (err) {
         console.warn(

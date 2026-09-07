@@ -1,7 +1,26 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    // `node20` is Node.js module semantics pinned to a stable emit, and it is
+    // what makes `moduleResolution: nodenext` legal here (TypeScript refuses
+    // `commonjs` + an exports-aware resolver). package.json has no
+    // `"type": "module"`, so every file in this project stays CommonJS and
+    // static imports still emit `require`; what changes is that TypeScript now
+    // reads package `exports` maps, and that dynamic `import()` is emitted
+    // verbatim instead of being downlevelled to `Promise.resolve().then(require)`
+    // — which is why every relative `import()` in `src/` carries an explicit
+    // `.js` extension (guarded by tests/module-resolution.test.ts).
+    //
+    // Two dependency-packaging facts make this pairing the only workable one:
+    // ox (via viem >= 2.50) ships raw .ts sources beside its compiled output
+    // and needs `exports` to steer resolvers at `_types`, and viem's own
+    // `_types/package.json` declares `"type": "module"`, so its declarations
+    // look ESM to a resolver even though `require` lands on `_cjs`. `node20`
+    // permits `require()` of ESM (Node >= 20.19 / >= 22 supports it, and
+    // package.json pins `engines.node >= 22`), which keeps the synchronous
+    // `import { getAddress } from 'viem'` call sites intact.
+    "module": "node20",
+    "moduleResolution": "nodenext",
     "lib": ["ES2022"],
     "outDir": "./dist",
     "rootDir": ".",
@@ -10,18 +29,6 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node",
-    // ox (pulled in by viem >= 2.50) ships its raw .ts sources beside the
-    // compiled output and relies on `exports` to steer resolvers at `_types`.
-    // Node-style resolution ignores `exports`, so tsc lands on the sources,
-    // type-checks them as project code (skipLibCheck only covers .d.ts), and
-    // fails on browser-only types. Point ox at its declarations directly.
-    // Nothing in this repo imports ox, so emitted output is unaffected.
-    "baseUrl": ".",
-    "paths": {
-      "ox": ["node_modules/ox/_types/index.d.ts"],
-      "ox/*": ["node_modules/ox/_types/*"]
-    },
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,

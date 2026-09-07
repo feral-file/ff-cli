@@ -37,7 +37,7 @@ export const sshCommand = new Command('ssh')
         ttlSeconds = parseTtlSeconds(options.ttl);
       }
 
-      const { sendSshAccessCommand } = await import('../utilities/ssh-access');
+      const { sendSshAccessCommand } = await import('../utilities/ssh-access.js');
 
       const result = await sendSshAccessCommand({
         enabled: isEnable,

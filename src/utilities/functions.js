@@ -143,7 +143,7 @@ async function verifyPlaylist(params) {
   logger.verbose(chalk.cyan('\nValidate playlist'));
 
   // Dynamic import to avoid circular dependency
-  const playlistVerifier = await import('./playlist-verifier');
+  const playlistVerifier = await import('./playlist-verifier.js');
   const validate =
     playlistVerifier.validatePlaylist ||
     (playlistVerifier.default && playlistVerifier.default.validatePlaylist) ||
@@ -214,7 +214,7 @@ async function verifyAddresses(params) {
   }
 
   // Dynamic import to avoid circular dependency
-  const addressValidator = await import('./address-validator');
+  const addressValidator = await import('./address-validator.js');
   const validateAddresses =
     addressValidator.validateAddresses ||
     (addressValidator.default && addressValidator.default.validateAddresses) ||
@@ -262,7 +262,7 @@ async function verifyAddresses(params) {
  * }
  */
 async function getConfiguredDevices() {
-  const configModule = await import('../config');
+  const configModule = await import('../config.js');
   const getFF1DeviceConfig =
     configModule.getFF1DeviceConfig ||
     (configModule.default && configModule.default.getFF1DeviceConfig) ||

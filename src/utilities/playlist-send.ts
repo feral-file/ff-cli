@@ -21,7 +21,7 @@ interface PlaylistSendConfirmation {
  */
 async function getAvailableDevices(): Promise<Array<{ name: string; host: string }>> {
   try {
-    const configModule = (await import('../config')) as typeof import('../config') & {
+    const configModule = (await import('../config.js')) as typeof import('../config.js') & {
       default?: {
         getFF1DeviceConfig?: () => { devices?: Array<{ name?: string; host?: string }> };
       };
@@ -147,7 +147,7 @@ export async function confirmPlaylistForSending(
     console.log(chalk.cyan('Validation'));
 
     // Dynamic import to avoid circular dependency
-    const { validatePlaylist } = await import('./playlist-verifier');
+    const { validatePlaylist } = await import('./playlist-verifier.js');
     const validateResult = await validatePlaylist(playlist);
 
     if (!validateResult.valid) {
