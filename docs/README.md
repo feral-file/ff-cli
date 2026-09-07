@@ -283,9 +283,14 @@ The `publish` command:
 Configure feed servers in `config.json`:
 
 Publishing needs no credentials. The feed authorizes a create from the signatures inside the playlist:
-it requires a signature whose `kid` matches a key the document declares in `curators[]`, **and** that
-signature must carry the `curator` role. Being named in `curators[]` is a claim; signing as `curator` is
-the proof, and the feed needs both.
+it requires a signature whose `kid` matches a key the document declares in `curators[]`.
+
+`ff-cli publish` additionally requires that signature to carry the **`curator` role**. That is ff-cli's
+check, not every feed's answer today: feeds are moving to role-aware ownership, where being named in
+`curators[]` is a claim and signing as `curator` is the proof. A feed that does not check the role yet
+accepts an `agent`-signed document — and can then authorize neither a replace nor a delete for it, since
+both need an owner signature it does not carry. Publishing is what makes that permanent, so the CLI
+refuses first.
 
 Declare it before signing, not after: a signature covers `curators[]`, so adding the entry to an
 already-signed playlist invalidates it, and signing again appends rather than replaces. Run

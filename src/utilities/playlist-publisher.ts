@@ -138,7 +138,9 @@ export async function publishPlaylist(
           `  then sign again from the unsigned file, with the same key you just declared:\n` +
           `    ff-cli sign <file> -r ${OWNER_ROLE} --key <private key for ${signingKids[0]}>\n` +
           `  Drop --key if that key is your configured one; "sign" uses the configured key otherwise, and a\n` +
-          `  signature from an undeclared key would not satisfy the feed. Start from the unsigned file\n` +
+          `  signature from an undeclared key would not satisfy the feed. The role is ff-cli's requirement\n` +
+          `  rather than every feed's: see the owner-role check for why publishing without it is refused.\n` +
+          `  Start from the unsigned file\n` +
           `  because declaring curators[] changes the signed payload: signing appends, so the earlier\n` +
           `  signature would be left covering a document that no longer exists.`,
       };
@@ -183,15 +185,21 @@ export async function publishPlaylist(
         success: false,
         error: `Playlist is signed by a declared curator, but under a non-owner role (${seen}).`,
         message:
-          `The feed treats a key in curators[] as an owner only when that key also signed as "${OWNER_ROLE}".\n` +
+          `This is ff-cli's check, not a feed's answer. Feeds are moving to role-aware ownership, where\n` +
+          `  a key in curators[] counts as an owner only if it also signed as "${OWNER_ROLE}". A feed that\n` +
+          `  does not check the role yet will accept this document, and then be unable to authorize a\n` +
+          `  replace or a delete for it: both need an owner signature it does not carry. Publishing it is\n` +
+          `  what makes that permanent, so ff-cli refuses here instead.\n` +
+          `\n` +
           `  curators[] is already correct — only the role is missing, so add that signature to this file:\n` +
           `    ff-cli sign <file> -r ${OWNER_ROLE} --key <private key for a declared curator>\n` +
           `  Any key this playlist declares will do — you do not need the one that signed under the wrong\n` +
           `  role. Declared: ${eligibleList}\n` +
-          `  It must be one of those. "sign" uses the configured key unless --key says otherwise, and a\n` +
-          `  ${OWNER_ROLE} signature from an undeclared key leaves this same failure: the feed reads roles\n` +
-          `  only from keys the document declares. Drop --key if a declared key is already your configured\n` +
-          `  one, and confirm which identity a key carries with "ff-cli status --key <private key>".\n` +
+          `  It must be one of those: a ${OWNER_ROLE} signature from an undeclared key satisfies neither\n` +
+          `  this check nor role-aware ownership, since both read roles only from declared keys. "sign"\n` +
+          `  uses the configured key unless --key says otherwise; drop --key if a declared key is already\n` +
+          `  your configured one, and confirm which identity a key carries with\n` +
+          `  "ff-cli status --key <private key>".\n` +
           `  Signing appends, and the payload hash excludes signatures, so the existing entry stays valid\n` +
           `  and the document ends up carrying both. No unsigned copy is needed: you only have to start\n` +
           `  from one when changing signed content such as curators[] itself.`,
