@@ -634,8 +634,11 @@ async function getNFTTokenInfo(params) {
   }
 
   // Handle single token
-  const { chain, contractAddress, tokenId } = params;
-  const result = await getNFTTokenInfoSingle({ chain, contractAddress, tokenId }, duration);
+  const { chain, contractAddress, tokenId, standard } = params;
+  const result = await getNFTTokenInfoSingle(
+    { chain, contractAddress, tokenId, standard },
+    duration
+  );
   return result;
 }
 

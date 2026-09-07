@@ -193,8 +193,8 @@ image, video, or SVG source, but not from a live HTML work.
 
 ```bash
 ff-cli enrich playlist.json --assume-ethereum
-ff-cli enrich playlist.json -o labelled.json
-ff-cli enrich playlist.json --force        # replace existing manifests
+ff-cli enrich playlist.json --assume-ethereum -o labelled.json
+ff-cli enrich playlist.json --assume-ethereum --force   # replace existing manifests
 ```
 
 `--assume-ethereum` is needed for most playlists. DP-1 records an EVM

@@ -37,8 +37,8 @@ function manifestNamed(title: string, artist: string) {
 
 const MANIFEST = manifestNamed('Pre-Process #0', 'Casey REAS');
 
-function provenance(address = '0xabc', tokenId = '1', chain = 'evm') {
-  return { type: 'onChain', contract: { chain, standard: 'erc721', address, tokenId } };
+function provenance(address = '0xabc', tokenId = '1', chain = 'evm', standard = 'erc721') {
+  return { type: 'onChain', contract: { chain, standard, address, tokenId } };
 }
 
 function item(overrides: Record<string, unknown> = {}): Record<string, unknown> {
@@ -73,7 +73,12 @@ function indexerReturning(
         const entry = resolvable[token.tokenId];
         return {
           title: 'from indexer',
-          provenance: provenance(entry.address ?? token.contractAddress, token.tokenId, 'evm'),
+          provenance: provenance(
+            entry.address ?? token.contractAddress,
+            token.tokenId,
+            'evm',
+            token.standard ?? 'erc721'
+          ),
           inlineManifest: entry.manifest,
         } as IndexerItem;
       });
@@ -86,8 +91,14 @@ function hit(seen: TokenCoordinate[][] = []) {
     seen.push(tokens);
     // Echo the chain that was asked for. canonicalChain folds the indexer's
     // "ethereum" back to DP-1 "evm", so echoing keeps both families matching.
+    // The standard is echoed the way the client does: asserted, else detected.
     return tokens.map((token) => ({
-      provenance: provenance(token.contractAddress, token.tokenId, token.chain),
+      provenance: provenance(
+        token.contractAddress,
+        token.tokenId,
+        token.chain,
+        token.standard ?? (token.chain === 'tezos' ? 'fa2' : 'erc721')
+      ),
       inlineManifest: MANIFEST,
     }));
   };
@@ -508,6 +519,56 @@ describe('enrichPlaylistManifests', () => {
     const [first, second] = seen[0];
     assert.equal(first.standard, 'erc1155', 'the assertion rides the coordinate, normalized');
     assert.equal('standard' in second, false, 'no assertion, no key: detection decides');
+  });
+
+  // The indexer keys ERC-721 and ERC-1155 separately, so a hybrid contract can
+  // hold both at one token id. Two items asserting different standards for one
+  // coordinate are two lookups, and each answer reaches only its own item.
+  test('keeps two standards at one coordinate apart', async () => {
+    const seen: TokenCoordinate[][] = [];
+    const playlist = playlistOf(
+      item({ id: 'a', title: 'A', provenance: provenance('0xaaa', '1', 'evm', 'erc721') }),
+      item({ id: 'b', title: 'B', provenance: provenance('0xaaa', '1', 'evm', 'erc1155') })
+    );
+    const lookup = async (tokens: TokenCoordinate[]): Promise<IndexerItem[]> => {
+      seen.push(tokens);
+      // Only the ERC-1155 row exists; the ERC-721 lookup misses.
+      return tokens
+        .filter((token) => token.standard === 'erc1155')
+        .map((token) => ({
+          provenance: provenance(token.contractAddress, token.tokenId, 'evm', 'erc1155'),
+          inlineManifest: manifestNamed('The 1155', 'Someone'),
+        }));
+    };
+    const result = await enrichPlaylistManifests(playlist, lookup, { assumeEthereum: true });
+    assert.equal(seen[0].length, 2, 'two standards are two lookups, not one');
+    assert.equal(result.enriched, 1);
+    assert.equal(playlist.items?.[0].inlineManifest, undefined, 'the 721 item got nothing');
+    assert.equal(
+      (playlist.items?.[1].inlineManifest?.metadata as { artists: { name: string }[] }).artists[0]
+        .name,
+      'Someone'
+    );
+    assert.equal(result.skipped[0].index, 0);
+    assert.equal(result.skipped[0].reason, 'not-indexed');
+  });
+
+  test('an unasserted standard correlates with the detected one the indexer echoes', async () => {
+    const playlist = playlistOf(
+      item({
+        id: 'a',
+        provenance: { type: 'onChain', contract: { chain: 'evm', address: '0xaaa', tokenId: '1' } },
+      }),
+      item({
+        id: 'b',
+        provenance: {
+          type: 'onChain',
+          contract: { chain: 'tezos', address: 'KT1abc', tokenId: '2' },
+        },
+      })
+    );
+    const result = await enrichPlaylistManifests(playlist, hit(), { assumeEthereum: true });
+    assert.equal(result.enriched, 2, 'erc721 and fa2 are what detection answers');
   });
 
   // A title-only manifest is worthless on an item that already has a title,

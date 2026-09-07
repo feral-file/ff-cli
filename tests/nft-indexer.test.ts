@@ -736,3 +736,34 @@ test('convertToDP1Item: names the still beside the item, whether or not the item
   );
   assert.equal(none.still, '', 'the source is not a still');
 });
+
+test('getNFTTokenInfo: forwards an asserted standard into the CID it queries', async () => {
+  const { getNFTTokenInfo } = nftIndexer;
+  const originalFetch = global.fetch;
+  const row = mockTokenRow();
+  const queried: string[] = [];
+
+  global.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const { query } = graphqlRequestFromInit(init);
+    queried.push(query);
+    return jsonResponse({ data: { tokens: { items: [row], total: 1 } } });
+  };
+
+  try {
+    const result = await getNFTTokenInfo({
+      chain: 'ethereum',
+      contractAddress: row.contract_address as string,
+      tokenId: row.token_number as string,
+      standard: 'erc1155',
+      duration: 10,
+    });
+    assert.equal(result.success, true);
+    assert.ok(
+      queried.some((q) => q.includes(':erc1155:')),
+      'the single-token API must query the asserted standard, not detection'
+    );
+    assert.equal(result.item.provenance.contract.standard, 'erc1155');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});

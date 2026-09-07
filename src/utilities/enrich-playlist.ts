@@ -238,7 +238,49 @@ function coordinateKeyOf(provenance: Dp1Provenance | undefined): string | null {
   if (token.length === 0) {
     return null;
   }
-  return `${canonicalChain(chain)}:${address.trim().toLowerCase()}:${token}`;
+  const canonical = canonicalChain(chain);
+  const standard = effectiveStandard(canonical, address, contract.standard);
+  return `${canonical}:${standard}:${address.trim().toLowerCase()}:${token}`;
+}
+
+/**
+ * Standards the indexer keys CIDs on. Mirrors CID_STANDARDS in nft-indexer.js.
+ */
+const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
+
+/**
+ * effectiveStandard names the standard a coordinate is looked up under, so the
+ * correlation key separates what the indexer separates.
+ *
+ * The indexer keys ERC-721 and ERC-1155 tokens at one address under different
+ * CIDs, so a hybrid contract can hold both standards at one token id. Two
+ * playlist items asserting different standards for one coordinate are two
+ * lookups, and each answer must reach only the item that asked for it.
+ *
+ * When the playlist asserts nothing the client detects, and this mirrors that
+ * detection (resolveTokenStandard in nft-indexer.js) so the request key and
+ * the key read off the response agree. The mirror is deliberate rather than
+ * an import: this module takes its lookup by injection and stays free of the
+ * indexer client. If the two ever drift, correlation fails closed — the item
+ * reports not-indexed — rather than attributing one token's metadata to
+ * another.
+ */
+function effectiveStandard(
+  canonicalChainName: string,
+  address: string,
+  asserted: string | undefined
+): string {
+  const normalized = typeof asserted === 'string' ? asserted.trim().toLowerCase() : '';
+  if (CID_STANDARDS.has(normalized)) {
+    return normalized;
+  }
+  if (canonicalChainName === 'tezos' || address.trim().startsWith('KT')) {
+    return 'fa2';
+  }
+  if (canonicalChainName === 'evm') {
+    return 'erc721';
+  }
+  return 'other';
 }
 
 /**
