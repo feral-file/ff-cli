@@ -345,3 +345,75 @@ test('appending a curator signature repairs a role-only failure without an unsig
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('a curator signature from an undeclared key does not satisfy the owner-role gate', async () => {
+  // `sign` uses the CONFIGURED key unless --key says otherwise, and that key is not necessarily the one
+  // the playlist declares. Following "sign -r curator" on a machine configured with a different key
+  // appends an owner-role signature the feed ignores — the declared key still shows only its non-owner
+  // role, so the same failure repeats and the remedy looks broken.
+  //
+  // Existing recovery coverage used one key for both roles, which cannot see this. Hence two keys here:
+  // A is declared and signed as agent; B is the configured key.
+  const dir = makeTempDir();
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'playlist-two-keys' }));
+    });
+  });
+
+  try {
+    await new Promise<void>((resolvePromise) => server.listen(0, resolvePromise));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Failed to start test server');
+    }
+    const feed = `http://127.0.0.1:${address.port}`;
+
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+    const declared = {
+      ...basePlaylist,
+      curators: [{ name: 'Declared A', key: playlistSigningDidKey(keyA) }],
+    };
+
+    // Stuck: the declared key signed under a non-owner role.
+    const agentA = await signPlaylist(declared, keyA, 'agent');
+    const stuck = { ...declared, signatures: [agentA] };
+    const path = join(dir, 'two-keys.json');
+    writeFileSync(path, JSON.stringify(stuck, null, 2), 'utf-8');
+
+    // The remedy carried out with the WRONG key: a curator signature, but from an undeclared one.
+    const curatorB = await signPlaylist(stuck, keyB, 'curator');
+    writeFileSync(
+      path,
+      JSON.stringify({ ...stuck, signatures: [agentA, curatorB] }, null, 2),
+      'utf-8'
+    );
+    const wrongKey = await publishPlaylist(path, feed);
+    assert.equal(
+      wrongKey.success,
+      false,
+      'an undeclared curator signature must not satisfy the gate'
+    );
+    assert.match(String(wrongKey.error), /non-owner role/i);
+    // The remedy must name the key that has to sign, or the user repeats the same step.
+    assert.match(String(wrongKey.message), /--key/);
+    assert.match(String(wrongKey.message), new RegExp(playlistSigningDidKey(keyA)));
+
+    // The remedy carried out correctly: the declared key signs in the owner role.
+    const curatorA = await signPlaylist(stuck, keyA, 'curator');
+    writeFileSync(
+      path,
+      JSON.stringify({ ...stuck, signatures: [agentA, curatorB, curatorA] }, null, 2),
+      'utf-8'
+    );
+    const rightKey = await publishPlaylist(path, feed);
+    assert.equal(rightKey.success, true, rightKey.error);
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

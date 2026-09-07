@@ -414,10 +414,12 @@ Publish failed
 The feed accepts a publish when a signature's kid appears in the playlist's own curators[].
   Add this to the playlist before signing:
     "curators": [{ "name": "Your name", "key": "did:key:z6Mkv7qJ..." }]
-  then sign again from the unsigned file with "ff-cli sign <file> -r curator" — signing
-  appends, so re-signing an already-signed playlist leaves the earlier signature covering a
-  document that no longer exists, and a declared key only counts as an owner when it signed
-  as "curator".
+  then sign again from the unsigned file, with the same key you just declared:
+    ff-cli sign <file> -r curator --key <private key for did:key:z6Mkv7qJ...>
+  Drop --key if that key is your configured one; "sign" uses the configured key otherwise, and a
+  signature from an undeclared key would not satisfy the feed. Start from the unsigned file
+  because declaring curators[] changes the signed payload: signing appends, so the earlier
+  signature would be left covering a document that no longer exists.
 ```
 
 This is the most common publish failure, and it is not about credentials. The feed accepts a create when
@@ -458,12 +460,14 @@ Publish failed
 
 The feed treats a key in curators[] as an owner only when that key also signed as "curator".
   curators[] is already correct — only the role is missing, so add that signature to this file:
-    ff-cli sign <file> -r curator
+    ff-cli sign <file> -r curator --key <private key for did:key:z6Mkv7qJ...>
+  It has to be that key. "sign" uses the configured key unless --key says otherwise, and a
+  curator signature from any other key leaves this same failure: the feed reads roles only
+  from keys the document declares. Drop --key if that key is already your configured one, and
+  confirm which identity a key carries with "ff-cli status --key <private key>".
   Signing appends, and the payload hash excludes signatures, so the existing entry stays valid
   and the document ends up carrying both. No unsigned copy is needed: you only have to start
   from one when changing signed content such as curators[] itself.
-  To make this the default for hand-signed playlists, set "role": "curator" under
-  "playlist" in config.json.
 ```
 
 Declaring a key in `curators[]` is a claim that it owns the playlist; signing as `curator` is the proof,
@@ -475,9 +479,15 @@ enough — the payload hash covers the document with `signature`/`signatures` st
 earlier entry valid over bytes that did not move:
 
 ```bash
-ff-cli sign playlist.json -r curator   # ["agent"] -> ["agent","curator"]
+# --key only when the declared curator is not your configured key; `ff-cli status --key <k>`
+# reports which identity a key carries.
+ff-cli sign playlist.json -r curator --key <declared curator's key>   # ["agent"] -> ["agent","curator"]
 ff-cli publish playlist.json
 ```
+
+The signature has to come from a key the playlist already declares. `sign` uses the configured key unless
+`--key` says otherwise, so on a machine whose configured key differs from the declared curator, the plain
+command appends a `curator` signature the feed ignores and the publish fails identically.
 
 Start again from an unsigned document only when the fix changes signed content — adding `curators[]`, for
 instance. There the earlier signature would cover a document that no longer exists.
