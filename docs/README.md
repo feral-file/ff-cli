@@ -215,6 +215,9 @@ re-signed before playing:
 ff-cli enrich playlist.json && ff-cli sign playlist.json
 ```
 
+That role is fine for casting. Use `ff-cli sign playlist.json -r curator` if the enriched playlist is
+also going to a feed.
+
 ### Validate, sign, and play
 
 ```bash

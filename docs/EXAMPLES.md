@@ -270,6 +270,9 @@ ff-cli sign playlist.json
 ff-cli play playlist.json -d "living room"
 ```
 
+Casting does not care about the signing role. Add `-r curator` to that `sign` if the playlist is also
+going to a feed, where a declared key counts as an owner only when it signed as `curator`.
+
 ## Validate / Sign / Play
 
 ```bash
@@ -390,7 +393,16 @@ Publish failed
   Playlist verification failed: Playlist signature verification failed
 ```
 
-Run `ff-cli sign <file>` before publishing. (Posting the same document straight to the feed answers
+Declare your key in `curators[]`, then sign it as the owner before publishing:
+
+```bash
+ff-cli status                          # the did:key to declare
+ff-cli sign <file> -r curator
+```
+
+Plain `ff-cli sign` would use `playlist.role` (default `agent`), producing a document the next two checks
+refuse — a declared key counts as an owner only when it signed as `curator`. (Posting the unsigned
+document straight to the feed answers
 `{"error":"unauthorized","message":"missing authentication: request body must carry signatures"}`.)
 
 **Signed, but the signer is not declared as a curator:**
@@ -402,8 +414,10 @@ Publish failed
 The feed accepts a publish when a signature's kid appears in the playlist's own curators[].
   Add this to the playlist before signing:
     "curators": [{ "name": "Your name", "key": "did:key:z6Mkv7qJ..." }]
-  then sign again from the unsigned file — signing appends, so re-signing an already-signed
-  playlist leaves the earlier signature covering a document that no longer exists.
+  then sign again from the unsigned file with "ff-cli sign <file> -r curator" — signing
+  appends, so re-signing an already-signed playlist leaves the earlier signature covering a
+  document that no longer exists, and a declared key only counts as an owner when it signed
+  as "curator".
 ```
 
 This is the most common publish failure, and it is not about credentials. The feed accepts a create when
