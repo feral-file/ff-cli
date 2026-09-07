@@ -178,7 +178,23 @@ substituted for a chain the row already named.
 ### Delivery
 
 - `play` (handles playlist files, playlist URLs, and media URLs)
-- `publish`
+- `publish` (`--replace` sends an owner-bound replacement instead of a create)
+- `unpublish`
+
+### Owner-bound feed mutations
+
+Creating on a feed is open; changing or removing something is not. A feed accepts a `POST` from any
+document that is self-signed by a curator it declares, and the signer becomes that resource's owner. A
+`PUT` and a `DELETE` are authorized instead against the **stored** document's `curators[]`, and neither
+accepts an API key. Both therefore carry a signed intent — `{ action, target: { type, id, slug },
+created, signatures }`, with a `payloadHash` for replace — whose `created` must fall inside the feed's
+freshness window; the intent exists because a document's own signatures are public via `GET` and could
+otherwise be replayed to roll a resource back. The CLI proves ownership before it signs anything: it
+`GET`s the stored playlist, derives the configured key's `did:key`, and refuses locally when that key is
+absent from the stored `curators[]`, naming both the identity offered and the owners that would work —
+detail a `403` does not carry. This is also why `publish` refuses a document whose declared curator did
+not sign in the `curator` role: such a playlist would be created with no owner, and could then never be
+replaced or deleted. A delete tombstones the id, so the operation is final and the id is not reusable.
 
 ### Device operations
 

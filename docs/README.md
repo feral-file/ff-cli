@@ -109,7 +109,9 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
-  - Options: `-s, --server <index>` (server index if multiple configured)
+  - Options: `-s, --server <index>` (server index if multiple configured), `--replace` (replace the playlist already stored under this document id instead of creating a new one)
+- `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the configured key to be an owner of the stored playlist, and confirms before deleting
+  - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
 - `device list` – List all configured FF1 devices
@@ -322,6 +324,34 @@ is configured. An `apiKey` left over in an existing config is ignored.
   ]
 }
 ```
+
+### Change or remove a published playlist
+
+A feed's `PUT` and `DELETE` are owner-bound. Neither takes an API key, and neither is authorized by the
+document alone: both carry a short-lived **intent** that ff-cli signs with the configured key in the
+`curator` role. Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
+why `publish` refuses to create a playlist that carries no owner-role signature — such a document can be
+neither replaced nor deleted, ever.
+
+```bash
+# Edit a published playlist: change the file, re-sign it, then replace.
+ff-cli sign playlist.json -r curator
+ff-cli publish playlist.json --replace -s 0
+
+# Delete a published playlist (id, slug, or feed URL all work).
+ff-cli unpublish 97595a2f-a790-477c-aa42-b4f2ec9f1e3b -s 0
+ff-cli unpublish https://feed.example.com/api/v1/playlists/97595a2f-a790-477c-aa42-b4f2ec9f1e3b
+```
+
+`--replace` keeps identity fixed: `id`, `slug`, and `created` must equal the stored document's, and the
+`curators[]` owner set may not change. Editing a published playlist therefore means editing the document
+you published — re-running `find` or `build` mints a fresh id, slug, and `created`, which is a new
+playlist rather than a replacement. A `publish` without `--replace` is never silently upgraded to a
+replace; an id the feed already holds fails with a conflict, as before.
+
+`unpublish` asks for confirmation first, showing the title and the server. `-y` skips it for scripts.
+Deletion is final in a way worth knowing before you run it: the feed **tombstones** the id, so the
+playlist cannot be restored and a later publish naming that id is refused. Build a new playlist instead.
 
 ### FF1 device management
 
