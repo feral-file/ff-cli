@@ -115,7 +115,7 @@ export async function castPlaylist(
       }
     }
 
-    const { verifyPlaylist } = await import('./playlist-verifier');
+    const { verifyPlaylist } = await import('./playlist-verifier.js');
     const verifyResult = await verifyPlaylist(current);
     if (!verifyResult.valid) {
       return {

@@ -729,8 +729,8 @@ async function doPublish(
   nonInteractive: boolean
 ): Promise<void> {
   console.log(chalk.blue('Publish to feed'));
-  const { getFeedConfig } = await import('../config');
-  const { publishPlaylist } = await import('../utilities/playlist-publisher');
+  const { getFeedConfig } = await import('../config.js');
+  const { publishPlaylist } = await import('../utilities/playlist-publisher.js');
 
   const feedConfig = getFeedConfig();
   if (!feedConfig.baseURLs || feedConfig.baseURLs.length === 0) {

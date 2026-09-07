@@ -77,7 +77,7 @@ export function printPlaylistVerificationFailure(
 export async function validatePlaylistSource(source: string): Promise<PlaylistVerificationResult> {
   const loaded = await loadPlaylistSource(source);
 
-  const verifier = await import('../../utilities/playlist-verifier');
+  const verifier = await import('../../utilities/playlist-verifier.js');
   const { validatePlaylist } = verifier;
   const verifyResult = await validatePlaylist(loaded.playlist);
 
@@ -95,7 +95,7 @@ export async function runValidateCommand(source: string): Promise<void> {
   try {
     console.log(chalk.blue('\nValidate playlist\n'));
 
-    const verifier = await import('../../utilities/playlist-verifier');
+    const verifier = await import('../../utilities/playlist-verifier.js');
     const { printVerificationResult } = verifier;
 
     const result = await validatePlaylistSource(source);
@@ -124,7 +124,7 @@ export async function runVerifyCommand(source: string, publicKey?: string): Prom
   try {
     console.log(chalk.blue('\nVerify playlist\n'));
 
-    const verifier = await import('../../utilities/playlist-verifier');
+    const verifier = await import('../../utilities/playlist-verifier.js');
     const { printVerificationResult } = verifier;
 
     const result = await validatePlaylistSource(source);

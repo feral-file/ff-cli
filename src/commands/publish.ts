@@ -10,8 +10,8 @@ export const publishCommand = new Command('publish')
     try {
       console.log(chalk.blue('\nPublish playlist\n'));
 
-      const { getFeedConfig } = await import('../config');
-      const { publishPlaylist } = await import('../utilities/playlist-publisher');
+      const { getFeedConfig } = await import('../config.js');
+      const { publishPlaylist } = await import('../utilities/playlist-publisher.js');
 
       const feedConfig = getFeedConfig();
 
