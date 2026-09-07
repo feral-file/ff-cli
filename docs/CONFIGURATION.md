@@ -90,11 +90,18 @@ If you need a different role, set `playlist.role` to one of the DP-1 signing rol
 
 ### Signing role and ownership
 
-A feed decides who owns a playlist from the document itself: the keys in `curators[]` are the owner set, and
-a key only counts as an owner when that same key **also signed in the `curator` role**. Being named is a
-claim; signing as `curator` is the proof. A playlist whose declared key signed under any other role verifies
-cleanly and is still refused — and once accepted by a feed that ignores the role, it can never be replaced or
-deleted, because both need an owner signature the document does not carry.
+A feed decides who owns a playlist from the document itself: the keys in `curators[]` are the owner set.
+Under **role-aware ownership**, a key counts as an owner only when that same key *also signed in the
+`curator` role* — being named is a claim, signing as `curator` is the proof.
+
+`ff-cli publish` requires that role. **This is ff-cli's check, not every feed's answer today**: a feed that
+does not yet enforce roles accepts an `agent`-signed document, so a manual upload of the same file can
+still succeed. It is refused here because once accepted, such a document can never be replaced or deleted —
+both need an owner signature it does not carry, and the only way to add one is to replace it. Publishing is
+what makes that permanent.
+
+The `kid`-to-`curators[]` match is different: feeds enforce that today, and a playlist failing it is
+rejected by the server regardless of ff-cli.
 
 Two consequences:
 
@@ -102,8 +109,9 @@ Two consequences:
   `playlist.role` says. To build under a different role, build without a configured signing key and sign the
   result yourself with `ff-cli sign --role`.
 - `ff-cli publish` refuses a playlist whose declared key signed under another role, and names the fix
-  (`ff-cli sign <file> -r curator`). This runs before any request, so it costs nothing and cannot be masked
-  by a feed that happens to accept the document today.
+  (`ff-cli sign <file> -r curator`, from any key declared in `curators[]`). This runs before any request,
+  so it costs nothing — and deliberately does not defer to a feed that would accept the document today,
+  because acceptance is what makes it unfixable.
 
 Channels use `publisher` as the owner role instead of `curator`; ff-cli does not publish channels.
 

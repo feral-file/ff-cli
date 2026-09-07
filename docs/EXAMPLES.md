@@ -271,7 +271,8 @@ ff-cli play playlist.json -d "living room"
 ```
 
 Casting does not care about the signing role. Add `-r curator` to that `sign` if the playlist is also
-going to a feed, where a declared key counts as an owner only when it signed as `curator`.
+going to a feed: `ff-cli publish` requires the owner role, for the reasons in
+[Publish to Feed Server](#publish-to-feed-server).
 
 ## Validate / Sign / Play
 
@@ -401,7 +402,8 @@ ff-cli sign <file> -r curator
 ```
 
 Plain `ff-cli sign` would use `playlist.role` (default `agent`), producing a document the next two checks
-refuse — a declared key counts as an owner only when it signed as `curator`. (Posting the unsigned
+refuse — under role-aware ownership a declared key counts as an owner only when it signed as `curator`, and
+`ff-cli publish` requires that whether or not the target feed enforces it yet. (Posting the unsigned
 document straight to the feed answers
 `{"error":"unauthorized","message":"missing authentication: request body must carry signatures"}`.)
 
@@ -521,7 +523,8 @@ npm run dev -- validate playlist.json
 # 3. Sign it. Declare curators[] BEFORE this step: the signature covers it, and the feed only
 #    accepts a publish when a signature's kid matches a declared curator key.
 #    Run `ff-cli status` for the kid (add -k <key> if you sign with `sign --key`).
-#    -r curator: a declared key only counts as an owner when it signed in the owner role.
+#    -r curator: ff-cli publish requires the owner role (role-aware ownership); the kid match is
+#    what feeds enforce today.
 npm run dev -- sign playlist.json -r curator -o signed.json
 
 # 4. Play it on a device
