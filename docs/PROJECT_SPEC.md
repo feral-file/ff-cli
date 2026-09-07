@@ -159,6 +159,14 @@ Today the CLI groups into these workflow areas:
 - `find`
 - `build`
 
+An item's `provenance.contract` is read from the indexer row, not inferred. Each
+row carries the token's own `standard` (`erc721`, `erc1155`, `fa2`) and its
+CAIP-2 `chain` (`eip155:1`, `tezos:mainnet`), and both are written through. The
+client's own detection sees a chain name and an address and nothing else, so it
+answers `erc721` for every EVM contract; it applies only to rows that carry no
+standard, and to the CID a lookup by coordinate must build before the indexer
+has been asked anything.
+
 ### DP-1 output integrity
 
 - `verify`

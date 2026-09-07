@@ -54,8 +54,15 @@ const JOB_STATUS_QUERY = `
 /**
  * buildTokensListQuery builds the `tokens { items { ... } }` request body used by queryTokens.
  *
- * Selection uses only `display` and `media_assets`. The indexer merges metadata and enrichment
- * into `display`; the client does not repeat that merge by fetching raw metadata fields.
+ * Presentation comes only from `display` and `media_assets`. The indexer merges metadata and
+ * enrichment into `display`; the client does not repeat that merge by fetching raw metadata fields.
+ *
+ * `chain` and `standard` are selected because the row is the only place either fact is known.
+ * `detectTokenStandard` has an address and a chain name and nothing else, so it answers `erc721` for
+ * every EVM contract — which wrote `erc721` into playlists for every ERC-1155 token `find` reached by
+ * owner or by contract. The indexer stores what the token actually is (`erc721`, `erc1155`, `fa2`)
+ * beside its CAIP-2 `chain` (`eip155:1`, `tezos:mainnet`), so the row answers both questions and
+ * detection drops to a fallback. Do not remove these two fields from the selection.
  *
  * @param {Object} [params]
  * @param {Array<string>} [params.token_cids]
@@ -83,6 +90,8 @@ function buildTokensListQuery(params = {}) {
           token_number
           current_owner
           burned
+          chain
+          standard
           display {
             name
             description
@@ -117,10 +126,18 @@ function initializeIndexer(_config) {
 }
 
 /**
- * Detect token standard based on chain and contract address
+ * detectTokenStandard guesses a token standard from a chain name and an address.
  *
- * Determines the appropriate ERC/token standard for the given blockchain
- * and contract format.
+ * This is the last-resort fallback, not the answer. It sees no token — only a
+ * chain name and an address format — so it cannot tell ERC-721 from ERC-1155
+ * and answers `erc721` for every EVM contract. It is still needed in two
+ * places: a lookup by coordinate has to build *some* CID before the indexer has
+ * been asked anything (see buildTokenCID), and a token row that arrived without
+ * a `standard` field has nothing better to offer.
+ *
+ * Prefer, in order: the indexer row's own `standard`, a caller's assertion, and
+ * only then this. On-chain detection is deliberately not attempted here — the
+ * indexer already stores the answer and selecting it costs nothing.
  *
  * @param {string} chain - Blockchain network
  * @param {string} contractAddress - Contract address
@@ -134,8 +151,8 @@ function detectTokenStandard(chain, contractAddress) {
     return 'fa2';
   }
 
-  // Ethereum uses ERC721
-  // TODO: Enhance with on-chain detection for ERC1155 support
+  // Ethereum: erc721 is a guess, not a reading. Only the indexer row or a
+  // caller's assertion can distinguish an ERC-1155 token from an ERC-721 one.
   if (lowerChain === 'ethereum') {
     return 'erc721';
   }
@@ -144,10 +161,27 @@ function detectTokenStandard(chain, contractAddress) {
 }
 
 /**
- * Token standards the indexer keys CIDs on. An asserted standard outside this
- * set says nothing the CID can carry, so detection decides instead.
+ * Token standards the indexer keys CIDs on. A standard outside this set —
+ * asserted by a caller or arriving on a row — says nothing the CID can carry,
+ * so detection decides instead.
  */
 const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
+
+/**
+ * normalizeCidStandard returns a standard the CID format can carry, or ''.
+ *
+ * Both the indexer row and a caller's assertion are untrusted strings from
+ * outside this module ('ERC1155', ' fa2 ', 'ERC-1155', undefined). Anything not
+ * in CID_STANDARDS is treated as absent rather than passed through, so a
+ * misspelled standard never reaches a CID or a DP-1 `provenance.contract`.
+ *
+ * @param {unknown} value - Candidate standard
+ * @returns {string} Normalized standard, or '' when it is not one we can use
+ */
+function normalizeCidStandard(value) {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  return CID_STANDARDS.has(normalized) ? normalized : '';
+}
 
 /**
  * resolveTokenStandard picks the standard a CID is built with.
@@ -165,11 +199,35 @@ const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
  * @returns {string} Token standard for the CID
  */
 function resolveTokenStandard(chain, contractAddress, asserted) {
-  const normalized = typeof asserted === 'string' ? asserted.trim().toLowerCase() : '';
-  if (CID_STANDARDS.has(normalized)) {
-    return normalized;
+  return normalizeCidStandard(asserted) || detectTokenStandard(chain, contractAddress);
+}
+
+/**
+ * CAIP-2 namespaces mapped to the chain values DP-1 `provenance.contract` allows.
+ *
+ * The indexer names a token's chain in CAIP-2 (`eip155:1`, `tezos:mainnet`),
+ * which is authoritative: it comes from the row rather than from the caller's
+ * guess at which network an address belongs to. Namespaces outside this map
+ * have no DP-1 equivalent, so they fall back to the caller's chain name.
+ */
+const CAIP2_NAMESPACE_TO_DP1_CHAIN = {
+  eip155: 'evm',
+  tezos: 'tezos',
+  bitmark: 'bitmark',
+};
+
+/**
+ * dp1ChainFromCaip2 derives a DP-1 chain from a CAIP-2 chain id.
+ *
+ * @param {unknown} caip2Chain - CAIP-2 chain id from an indexer row, e.g. `eip155:1`
+ * @returns {string} DP-1 chain (`evm`, `tezos`, `bitmark`), or '' when unknown or absent
+ */
+function dp1ChainFromCaip2(caip2Chain) {
+  if (typeof caip2Chain !== 'string') {
+    return '';
   }
-  return detectTokenStandard(chain, contractAddress);
+  const namespace = caip2Chain.trim().toLowerCase().split(':')[0];
+  return CAIP2_NAMESPACE_TO_DP1_CHAIN[namespace] || '';
 }
 
 /**
@@ -386,9 +444,16 @@ function getBestMediaUrl(display = {}, mediaAssets = []) {
  * is null or partial, we only use what is present (for example `Token #${token_number}` for name);
  * we do not splice in raw `metadata` or enrichment because those are not selected from GraphQL.
  *
+ * The row's own `standard` and `chain` outrank both the asserted `standard` and the `chain`
+ * argument, because they are the token's identity as the indexer recorded it while the arguments are
+ * the caller's inference — `find` by owner or by contract only knows "the address starts with 0x, so
+ * ethereum". Precedence for the standard is row → asserted → detection; the CAIP-2 `chain` is kept
+ * beside the caller's chain name (not in place of it) as `caip2Chain`, because the name still selects
+ * the CID prefix and the detection fallback while the CAIP-2 value answers DP-1's chain enum.
+ *
  * @param {Object} indexerData - Token fields from indexer GraphQL
- * @param {string} chain - Blockchain network
- * @param {string} [standard] - Asserted token standard; detected when omitted
+ * @param {string} chain - Blockchain network the caller inferred
+ * @param {string} [standard] - Asserted token standard; used when the row carries none
  * @returns {Object} Standardized token data
  */
 function mapIndexerDataToStandardFormat(indexerData, chain, standard) {
@@ -405,12 +470,16 @@ function mapIndexerDataToStandardFormat(indexerData, chain, standard) {
   const artistName = extractArtistName(display.artists);
   const name = display.name || `Token #${indexerData.token_number}`;
   const description = display.description || '';
-  const resolvedStandard = resolveTokenStandard(chain, indexerData.contract_address, standard);
+  const resolvedStandard =
+    normalizeCidStandard(indexerData.standard) ||
+    resolveTokenStandard(chain, indexerData.contract_address, standard);
+  const caip2Chain = typeof indexerData.chain === 'string' ? indexerData.chain : '';
 
   return {
     success: true,
     token: {
       chain,
+      caip2Chain,
       contractAddress: indexerData.contract_address,
       tokenId: indexerData.token_number,
       standard: resolvedStandard,
@@ -522,6 +591,13 @@ function convertToDP1Item(tokenData, duration) {
   // Map chain name to DP1 format (according to DP1 spec)
   // NOTE: This is for DP1 provenance output, NOT for indexer queries
   // The indexer uses 'eth'/'tez'/'bmk', but DP1 spec uses 'evm'/'tezos'/'bitmark'
+  //
+  // This map is the fallback. When the token came from an indexer row it also
+  // carries the row's CAIP-2 chain, which is the network the indexer actually
+  // recorded rather than the caller's guess from the address format — that
+  // guess is only ever 'ethereum' or 'tezos', so an L2 token would land on
+  // 'ethereum' here and still be 'evm', but a chain this map has never heard of
+  // would silently become 'other'.
   const chainMap = {
     ethereum: 'evm',
     polygon: 'evm',
@@ -541,7 +617,11 @@ function convertToDP1Item(tokenData, duration) {
     .provenance(
       new ProvenanceBuilder().type('onChain').contract(
         new ContractBuilder()
-          .chain(chainMap[token.chain.toLowerCase()] || 'other')
+          .chain(
+            dp1ChainFromCaip2(token.caip2Chain) ||
+              chainMap[String(token.chain || '').toLowerCase()] ||
+              'other'
+          )
           .standard(token.standard || detectTokenStandard(token.chain, token.contractAddress))
           .address(token.contractAddress)
           .tokenId(String(token.tokenId))
