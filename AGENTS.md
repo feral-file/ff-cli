@@ -48,6 +48,7 @@ TDD is the default discipline for behavior changes. For small, low-risk fixes, t
 - Config priority remains `config.json` > `.env` > defaults. Validate config before use.
 - Never commit secrets or local runtime files such as `config.json`, `.env`, or `node_modules`.
 - Temporary debug scripts belong in `/.tmp`, should not be committed, and should be removed after use.
+- `package.json` `overrides` pins `ws` to the patched 8.21 line under `viem`, which declares an exact vulnerable `ws`. It exists only because bumping `viem` past 2.49 pulls an `ox` whose raw `.ts` sources fail this repo's `moduleResolution: node` build; drop the override when `viem` is next bumped and the build passes without it.
 
 ## Architecture and API design
 
