@@ -172,10 +172,13 @@ export async function publishPlaylist(
         error: `Playlist is signed by a declared curator, but under a non-owner role (${seen}).`,
         message:
           `The feed treats a key in curators[] as an owner only when that key also signed as "${OWNER_ROLE}".\n` +
-          `  curators[] is already correct — the signature's role is not. Re-sign from the unsigned file:\n` +
+          `  curators[] is already correct — only the role is missing, so add that signature to this file:\n` +
           `    ff-cli sign <file> -r ${OWNER_ROLE}\n` +
-          `  or set "role": "${OWNER_ROLE}" under "playlist" in config.json. Signing appends, so start from\n` +
-          `  the unsigned document rather than adding a second signature to this one.`,
+          `  Signing appends, and the payload hash excludes signatures, so the existing entry stays valid\n` +
+          `  and the document ends up carrying both. No unsigned copy is needed: you only have to start\n` +
+          `  from one when changing signed content such as curators[] itself.\n` +
+          `  To make this the default for hand-signed playlists, set "role": "${OWNER_ROLE}" under\n` +
+          `  "playlist" in config.json.`,
       };
     }
 

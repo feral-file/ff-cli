@@ -286,3 +286,62 @@ test('every publish remedy names the curator role, so following one cannot fail 
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('appending a curator signature repairs a role-only failure without an unsigned copy', async () => {
+  // The role-only failure is repairable in place, and the remedy must say so: a user who kept only the
+  // signed file would otherwise be told to reconstruct a document they no longer have.
+  //
+  // It works because the DP-1 payload hash covers the document with `signature`/`signatures` stripped, so
+  // adding a signature moves no signed byte and the earlier entry stays valid over the same payload. That
+  // is exactly what distinguishes this case from the two other publish failures, where the fix changes
+  // signed content (curators[]) and the earlier signature would then cover a document that no longer
+  // exists — hence their "start from the unsigned file" wording, which must NOT be copied here.
+  const dir = makeTempDir();
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on('end', () => {
+      res.writeHead(201, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ id: 'playlist-appended' }));
+    });
+  });
+
+  try {
+    await new Promise<void>((resolvePromise) => server.listen(0, resolvePromise));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Failed to start test server');
+    }
+
+    const basePlaylist = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const privateKey = makePrivateKeyBase64();
+    const declared = {
+      ...basePlaylist,
+      curators: [{ name: 'Declared', key: playlistSigningDidKey(privateKey) }],
+    };
+
+    // The stuck state: declared correctly, signed under the wrong role.
+    const agentSignature = await signPlaylist(declared, privateKey, 'agent');
+    const stuck = { ...declared, signatures: [agentSignature] };
+    const path = join(dir, 'stuck.json');
+    writeFileSync(path, JSON.stringify(stuck, null, 2), 'utf-8');
+
+    const before = await publishPlaylist(path, `http://127.0.0.1:${address.port}`);
+    assert.equal(before.success, false);
+    assert.match(String(before.error), /non-owner role/i);
+
+    // The documented remedy: append, do not rebuild.
+    const curatorSignature = await signPlaylist(stuck, privateKey, 'curator');
+    const repaired = { ...stuck, signatures: [...stuck.signatures, curatorSignature] };
+    writeFileSync(path, JSON.stringify(repaired, null, 2), 'utf-8');
+
+    const after = await publishPlaylist(path, `http://127.0.0.1:${address.port}`);
+    assert.equal(after.success, true, after.error);
+    assert.equal(after.playlistId, 'playlist-appended');
+    // Both entries survive, and the original remains verifiable — publishPlaylist verifies before upload,
+    // so reaching success at all proves the appended envelope still validates as a whole.
+    assert.equal(repaired.signatures.length, 2);
+  } finally {
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

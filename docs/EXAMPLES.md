@@ -457,15 +457,30 @@ Publish failed
   Playlist is signed by a declared curator, but under a non-owner role ("agent").
 
 The feed treats a key in curators[] as an owner only when that key also signed as "curator".
-  curators[] is already correct — the signature's role is not. Re-sign from the unsigned file:
+  curators[] is already correct — only the role is missing, so add that signature to this file:
     ff-cli sign <file> -r curator
-  or set "role": "curator" under "playlist" in config.json. Signing appends, so start from
-  the unsigned document rather than adding a second signature to this one.
+  Signing appends, and the payload hash excludes signatures, so the existing entry stays valid
+  and the document ends up carrying both. No unsigned copy is needed: you only have to start
+  from one when changing signed content such as curators[] itself.
+  To make this the default for hand-signed playlists, set "role": "curator" under
+  "playlist" in config.json.
 ```
 
 Declaring a key in `curators[]` is a claim that it owns the playlist; signing as `curator` is the proof,
 and a feed requires both. This failure means the document is right and the signature is not — the fix is
 the role, not `curators[]`.
+
+**This one is repairable in place**, unlike the two above. Nothing signed needs to change, so appending is
+enough — the payload hash covers the document with `signature`/`signatures` stripped, which leaves the
+earlier entry valid over bytes that did not move:
+
+```bash
+ff-cli sign playlist.json -r curator   # ["agent"] -> ["agent","curator"]
+ff-cli publish playlist.json
+```
+
+Start again from an unsigned document only when the fix changes signed content — adding `curators[]`, for
+instance. There the earlier signature would cover a document that no longer exists.
 
 It matters beyond this publish. A feed that ignores the role accepts such a document and then cannot
 authorize a replace **or** a delete for it, because both need an owner signature it does not carry. Refusing
