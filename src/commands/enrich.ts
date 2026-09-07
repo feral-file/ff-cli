@@ -6,13 +6,14 @@ import { dirname, basename, join } from 'path';
 import {
   enrichPlaylistManifests,
   type Dp1Playlist,
+  type IndexerItem,
   type SkippedItem,
   type TokenLookup,
 } from '../utilities/enrich-playlist';
 import { validatePlaylist } from '../utilities/playlist-verifier';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
+const { resolveTokenBatch } = require('../utilities/nft-indexer');
 
 interface EnrichOptions {
   output?: string;
@@ -81,7 +82,16 @@ async function writePlaylistAtomically(
       // of it, or widen who can reach it. Carry the ownership across, and when
       // that is not permitted refuse the in-place replacement instead of
       // completing it with different access than the file had.
-      if (current && (current.uid !== process.getuid?.() || current.gid !== process.getgid?.())) {
+      //
+      // Only where POSIX identity exists. Windows has no getuid/getgid and
+      // reports uid and gid as 0 on every stat, so the comparison there would
+      // always "differ" and chown a file whose ownership never moved. (libuv
+      // makes fchown a no-op on Windows, so nothing would break — but the
+      // branch would be asserting something it cannot know.)
+      const uid = process.getuid?.();
+      const gid = process.getgid?.();
+      const canCompareOwnership = uid !== undefined && gid !== undefined;
+      if (current && canCompareOwnership && (current.uid !== uid || current.gid !== gid)) {
         try {
           await handle.chown(current.uid, current.gid);
         } catch {
@@ -258,13 +268,23 @@ export const enrichCommand = new Command('enrich')
         process.stdout.write(chalk.dim(`\r  ${done}/${count} looked up...`));
       };
 
-      // getNFTTokenInfoBatch is (tokens, duration, onProgress) — the second
+      // resolveTokenBatch is (tokens, duration, onProgress) — the second
       // positional is DP-1 display seconds, not the callback. Enrichment never
       // sets duration (the curator's timing is not ours to touch), so it is
       // passed undefined and the callback goes third. find.ts carries the same
       // warning; getting this wrong silently returns unusable results.
-      const lookup: TokenLookup = (tokens, onProgressCallback) =>
-        getNFTTokenInfoBatch(tokens, undefined, onProgressCallback);
+      //
+      // The raw results are used rather than getNFTTokenInfoBatch's items so
+      // the indexer's still rides beside each item: the item itself drops the
+      // still whenever it equals the indexer's chosen source, and enrichment
+      // needs it against the curator's source instead.
+      const lookup: TokenLookup = async (tokens, onProgressCallback) => {
+        const results: Array<{ success: boolean; item?: IndexerItem; still?: string }> =
+          await resolveTokenBatch(tokens, undefined, onProgressCallback);
+        return results
+          .filter((result) => result.success && result.item)
+          .map((result) => ({ ...(result.item as IndexerItem), still: result.still }));
+      };
 
       const result = await enrichPlaylistManifests(playlist, lookup, {
         force: options.force,

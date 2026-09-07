@@ -144,6 +144,35 @@ function detectTokenStandard(chain, contractAddress) {
 }
 
 /**
+ * Token standards the indexer keys CIDs on. An asserted standard outside this
+ * set says nothing the CID can carry, so detection decides instead.
+ */
+const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
+
+/**
+ * resolveTokenStandard picks the standard a CID is built with.
+ *
+ * detectTokenStandard cannot tell ERC-721 from ERC-1155 — it has only a chain
+ * and an address, and answers erc721 for every EVM contract. The indexer keys
+ * the two differently (`eip155:1:erc721:…` and `eip155:1:erc1155:…`), so an
+ * ERC-1155 token looked up by detection alone is simply never found. When the
+ * caller knows the standard — a DP-1 playlist carries it in
+ * `provenance.contract.standard` — that assertion wins.
+ *
+ * @param {string} chain - Blockchain network
+ * @param {string} contractAddress - Contract address
+ * @param {string} [asserted] - Standard the caller vouches for, if any
+ * @returns {string} Token standard for the CID
+ */
+function resolveTokenStandard(chain, contractAddress, asserted) {
+  const normalized = typeof asserted === 'string' ? asserted.trim().toLowerCase() : '';
+  if (CID_STANDARDS.has(normalized)) {
+    return normalized;
+  }
+  return detectTokenStandard(chain, contractAddress);
+}
+
+/**
  * Build CAIP-2 token CID for indexer v2
  *
  * Constructs a token identifier in CAIP-2 format compatible with ff-indexer-v2.
@@ -152,15 +181,19 @@ function detectTokenStandard(chain, contractAddress) {
  * @param {string} chain - Blockchain network (ethereum, polygon, tezos, etc)
  * @param {string} contractAddress - Contract address
  * @param {string} tokenId - Token ID
+ * @param {string} [standard] - Asserted token standard; detected when omitted
  * @returns {string} Token CID in CAIP-2 format
  * @example
  * // Returns: eip155:1:erc721:0xabc123:456
  * const cid = buildTokenCID('ethereum', '0xabc123', '456');
  * @example
+ * // Returns: eip155:1:erc1155:0xabc123:456
+ * const cid = buildTokenCID('ethereum', '0xabc123', '456', 'erc1155');
+ * @example
  * // Returns: tezos:mainnet:fa2:KT1abc:789
  * const cid = buildTokenCID('tezos', 'KT1abc', '789');
  */
-function buildTokenCID(chain, contractAddress, tokenId) {
+function buildTokenCID(chain, contractAddress, tokenId, standard) {
   // Map chain names to CAIP-2 format (supports only Ethereum and Tezos)
   const caip2Map = {
     ethereum: 'eip155:1',
@@ -175,9 +208,9 @@ function buildTokenCID(chain, contractAddress, tokenId) {
     throw new Error(`Unsupported chain: ${chain}. Only ethereum and tezos are supported.`);
   }
 
-  const standard = detectTokenStandard(chain, contractAddress);
+  const resolvedStandard = resolveTokenStandard(chain, contractAddress, standard);
 
-  return `${caip2Chain}:${standard}:${contractAddress}:${tokenId}`;
+  return `${caip2Chain}:${resolvedStandard}:${contractAddress}:${tokenId}`;
 }
 
 /**
@@ -355,9 +388,10 @@ function getBestMediaUrl(display = {}, mediaAssets = []) {
  *
  * @param {Object} indexerData - Token fields from indexer GraphQL
  * @param {string} chain - Blockchain network
+ * @param {string} [standard] - Asserted token standard; detected when omitted
  * @returns {Object} Standardized token data
  */
-function mapIndexerDataToStandardFormat(indexerData, chain) {
+function mapIndexerDataToStandardFormat(indexerData, chain, standard) {
   if (!indexerData) {
     return {
       success: false,
@@ -371,7 +405,7 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
   const artistName = extractArtistName(display.artists);
   const name = display.name || `Token #${indexerData.token_number}`;
   const description = display.description || '';
-  const standard = detectTokenStandard(chain, indexerData.contract_address);
+  const resolvedStandard = resolveTokenStandard(chain, indexerData.contract_address, standard);
 
   return {
     success: true,
@@ -379,7 +413,7 @@ function mapIndexerDataToStandardFormat(indexerData, chain) {
       chain,
       contractAddress: indexerData.contract_address,
       tokenId: indexerData.token_number,
-      standard,
+      standard: resolvedStandard,
       name,
       description,
       image: {
@@ -554,7 +588,35 @@ function convertToDP1Item(tokenData, duration) {
   return {
     success: true,
     item: dp1Item,
+    still: stillOf(token),
   };
+}
+
+/**
+ * stillOf names the token's still image as the indexer identifies it, or ''.
+ *
+ * This is `display.image_url`, the field the indexer reserves for a still and
+ * the same one `buildInlineManifestForToken` writes into `thumbnails.default`.
+ * It is returned beside the DP-1 item rather than inside it because the item
+ * only carries the still when it differs from the item's own source, and a
+ * consumer building a manifest against a *different* source (see
+ * enrich-playlist.ts) needs the still regardless. Nothing about the URL's
+ * shape is inspected: the indexer's word that it is an image is the evidence,
+ * and a suffix check would reject the extensionless CDN URLs it commonly
+ * returns.
+ *
+ * @param {Object} token - Token in the internal standard format
+ * @returns {string} http(s) still URL, or '' when the indexer named none
+ */
+function stillOf(token) {
+  const image = token.image;
+  // Only `thumbnail` qualifies. `image.url` is the media getBestMediaUrl
+  // selected as the source, which is the live rendition whenever one exists —
+  // exactly what must never land in a thumbnail slot.
+  const candidate =
+    typeof image === 'string' ? image : typeof image === 'object' && image ? image.thumbnail : '';
+  const trimmed = String(candidate || '').trim();
+  return trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : '';
 }
 
 /**
@@ -572,8 +634,11 @@ async function getNFTTokenInfo(params) {
   }
 
   // Handle single token
-  const { chain, contractAddress, tokenId } = params;
-  const result = await getNFTTokenInfoSingle({ chain, contractAddress, tokenId }, duration);
+  const { chain, contractAddress, tokenId, standard } = params;
+  const result = await getNFTTokenInfoSingle(
+    { chain, contractAddress, tokenId, standard },
+    duration
+  );
   return result;
 }
 
@@ -596,7 +661,7 @@ async function getNFTTokenInfo(params) {
  */
 async function getNFTTokenInfoSingle(params, duration, options = {}) {
   let chain = params.chain;
-  const { contractAddress, tokenId } = params;
+  const { contractAddress, tokenId, standard } = params;
 
   // DEFENSIVE: Auto-detect and correct chain based on contract address format
   if (contractAddress.startsWith('KT') && chain !== 'tezos') {
@@ -619,7 +684,7 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
 
   try {
     // Build token CID in CAIP-2 format
-    const tokenCID = buildTokenCID(chain, contractAddress, tokenId);
+    const tokenCID = buildTokenCID(chain, contractAddress, tokenId, standard);
     logger.info(`[NFT Indexer] Built token CID: ${tokenCID}`);
 
     // Query the indexer
@@ -631,7 +696,7 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
       logger.info(`[NFT Indexer] Token not in database, triggering async indexing...`);
 
       // Trigger background indexing workflow
-      const indexResult = await triggerIndexingAsync(chain, contractAddress, tokenId);
+      const indexResult = await triggerIndexingAsync(chain, contractAddress, tokenId, standard);
 
       if (!indexResult.success) {
         logger.debug(`[NFT Indexer] Failed to trigger indexing:`, indexResult.error);
@@ -697,7 +762,7 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
     }
 
     // Map to standard format and convert to DP1
-    const tokenData = mapIndexerDataToStandardFormat(indexerData, chain);
+    const tokenData = mapIndexerDataToStandardFormat(indexerData, chain, standard);
     return convertToDP1Item(tokenData, duration);
   } catch (error) {
     logger.debug(`[NFT Indexer] Error fetching token:`, error.message);
@@ -709,15 +774,21 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
 }
 
 /**
- * Get NFT token information in batch and return as DP1 items (parallel processing)
+ * Resolve a batch of tokens and return every outcome (parallel processing)
  *
  * For missing tokens: triggers indexing per token, polls by job_id, then fetches again.
  *
- * @param {Array} tokens - Array of token parameters
+ * Unlike getNFTTokenInfoBatch this keeps one result per input token, in input
+ * order: a resolved token as `{ success: true, item, still }`, a failed one as
+ * `{ success: false, error, token }`. Callers that must know which request an
+ * answer belongs to, or that need the still beside the item, use this.
+ *
+ * @param {Array} tokens - Array of token parameters (chain, contractAddress, tokenId, standard?)
  * @param {number} duration - Display duration in seconds
- * @returns {Promise<Array>} Array of DP1 items
+ * @param {Function} [onProgress] - Called with (done, total) after each batch
+ * @returns {Promise<Array>} One result per input token
  */
-async function getNFTTokenInfoBatch(tokens, duration, onProgress) {
+async function resolveTokenBatch(tokens, duration, onProgress) {
   logger.info(`[NFT Indexer] 📦 Starting batch processing for ${tokens.length} token(s)...`);
   logger.debug('[NFT Indexer] Batch tokens:', tokens);
 
@@ -769,6 +840,25 @@ async function getNFTTokenInfoBatch(tokens, duration, onProgress) {
   const successCount = results.filter((r) => r.success && r.item).length;
   const failedCount = results.length - successCount;
   logger.info(`[NFT Indexer] Final: ${successCount} items with data, ${failedCount} without`);
+
+  return results;
+}
+
+/**
+ * Get NFT token information in batch and return as DP1 items (parallel processing)
+ *
+ * For missing tokens: triggers indexing per token, polls by job_id, then fetches again.
+ *
+ * Returns only the resolved items. Failures are dropped, not represented, so
+ * the result is neither aligned with nor as long as the input; a caller that
+ * needs the association uses resolveTokenBatch.
+ *
+ * @param {Array} tokens - Array of token parameters
+ * @param {number} duration - Display duration in seconds
+ * @returns {Promise<Array>} Array of DP1 items
+ */
+async function getNFTTokenInfoBatch(tokens, duration, onProgress) {
+  const results = await resolveTokenBatch(tokens, duration, onProgress);
 
   // Return only items (not error objects)
   const items = results.filter((r) => r.success && r.item).map((r) => r.item);
@@ -826,10 +916,10 @@ async function getCollectionInfo(params) {
  * @returns {number} [returns.job_id] - Postgres queue job id; use with jobStatus / pollForJobCompletion
  * @returns {string} [returns.error] - Error message if failed
  */
-async function triggerIndexingAsync(chain, contractAddress, tokenId) {
+async function triggerIndexingAsync(chain, contractAddress, tokenId, standard) {
   try {
     // Build token CID
-    const tokenCID = buildTokenCID(chain, contractAddress, tokenId);
+    const tokenCID = buildTokenCID(chain, contractAddress, tokenId, standard);
 
     logger.debug('[NFT Indexer] Triggering token indexing job via GraphQL mutation:', {
       tokenCID,
@@ -1204,6 +1294,7 @@ module.exports = {
   getNFTTokenInfo,
   // Batch processing
   getNFTTokenInfoBatch,
+  resolveTokenBatch,
   // Single token processing
   getNFTTokenInfoSingle,
   // Additional functions

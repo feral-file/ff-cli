@@ -36,6 +36,7 @@ export interface Dp1Provenance {
   type?: string;
   contract?: {
     chain?: string;
+    standard?: string;
     address?: string;
     tokenId?: string | number;
   };
@@ -68,32 +69,46 @@ export interface Dp1Playlist {
   [key: string]: unknown;
 }
 
-/** TokenCoordinate is the lookup key shape `getNFTTokenInfoBatch` expects. */
+/** TokenCoordinate is the lookup key shape the indexer client expects. */
 export interface TokenCoordinate {
   chain: string;
   contractAddress: string;
   tokenId: string;
+  /**
+   * The token standard the playlist asserts, when it does. The indexer keys
+   * ERC-721 and ERC-1155 tokens under different CIDs and cannot tell them
+   * apart from an address alone, so without this an ERC-1155 work is looked
+   * up as ERC-721 and never found.
+   */
+  standard?: string;
 }
 
 /**
- * IndexerItem is one entry of what `getNFTTokenInfoBatch` returns: a DP-1 item
- * carrying `provenance` and, when the indexer had enough to build one, an
- * `inlineManifest`.
+ * IndexerItem is one resolved entry of a lookup: a DP-1 item carrying
+ * `provenance` and, when the indexer had enough to build one, an
+ * `inlineManifest`, plus the still the indexer names for the token.
  *
  * Critically, the returned array is NOT positionally aligned with the input.
- * `getNFTTokenInfoBatch` ends with
- * `results.filter((r) => r.success && r.item).map((r) => r.item)`, so a token
- * the indexer cannot resolve is dropped rather than represented. Two tokens in,
- * one item out, and nothing in the payload says which request it answers except
- * its own provenance. Correlating by array position would attach one artwork's
- * artist and thumbnail to a different artwork — silently, inside a document
- * that then gets signed. Everything below correlates by coordinate instead.
+ * The indexer client drops a token it cannot resolve rather than representing
+ * it. Two tokens in, one item out, and nothing in the payload says which
+ * request it answers except its own provenance. Correlating by array position
+ * would attach one artwork's artist and thumbnail to a different artwork —
+ * silently, inside a document that then gets signed. Everything below
+ * correlates by coordinate instead.
  */
 export interface IndexerItem {
   provenance?: Dp1Provenance;
   inlineManifest?: Dp1Manifest;
+  /** The title the indexer resolved, when the item is asked for one. */
+  title?: string;
   /** The source the indexer chose, which need not be the curator's. */
   source?: string;
+  /**
+   * The token's still image as the indexer identifies it (`display.image_url`),
+   * carried beside the item by the lookup adapter. Absent from the DP-1 item
+   * itself whenever it equals the indexer's chosen source; see stillFor.
+   */
+  still?: string;
   [key: string]: unknown;
 }
 
@@ -223,7 +238,49 @@ function coordinateKeyOf(provenance: Dp1Provenance | undefined): string | null {
   if (token.length === 0) {
     return null;
   }
-  return `${canonicalChain(chain)}:${address.trim().toLowerCase()}:${token}`;
+  const canonical = canonicalChain(chain);
+  const standard = effectiveStandard(canonical, address, contract.standard);
+  return `${canonical}:${standard}:${address.trim().toLowerCase()}:${token}`;
+}
+
+/**
+ * Standards the indexer keys CIDs on. Mirrors CID_STANDARDS in nft-indexer.js.
+ */
+const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
+
+/**
+ * effectiveStandard names the standard a coordinate is looked up under, so the
+ * correlation key separates what the indexer separates.
+ *
+ * The indexer keys ERC-721 and ERC-1155 tokens at one address under different
+ * CIDs, so a hybrid contract can hold both standards at one token id. Two
+ * playlist items asserting different standards for one coordinate are two
+ * lookups, and each answer must reach only the item that asked for it.
+ *
+ * When the playlist asserts nothing the client detects, and this mirrors that
+ * detection (resolveTokenStandard in nft-indexer.js) so the request key and
+ * the key read off the response agree. The mirror is deliberate rather than
+ * an import: this module takes its lookup by injection and stays free of the
+ * indexer client. If the two ever drift, correlation fails closed — the item
+ * reports not-indexed — rather than attributing one token's metadata to
+ * another.
+ */
+function effectiveStandard(
+  canonicalChainName: string,
+  address: string,
+  asserted: string | undefined
+): string {
+  const normalized = typeof asserted === 'string' ? asserted.trim().toLowerCase() : '';
+  if (CID_STANDARDS.has(normalized)) {
+    return normalized;
+  }
+  if (canonicalChainName === 'tezos' || address.trim().startsWith('KT')) {
+    return 'fa2';
+  }
+  if (canonicalChainName === 'evm') {
+    return 'erc721';
+  }
+  return 'other';
 }
 
 /**
@@ -256,15 +313,23 @@ function coordinateFor(item: Dp1Item): TokenCoordinate | null {
     return null;
   }
   const normalized = chain.trim().toLowerCase();
-  return {
+  const coordinate: TokenCoordinate = {
     chain: CHAIN_ALIASES[normalized] ?? normalized,
     contractAddress: address,
     tokenId: token,
   };
+  // Carried as written. The indexer client accepts the standards its CIDs
+  // are keyed on and falls back to detection for anything else, so an
+  // unexpected value costs nothing beyond the lookup it would have lost anyway.
+  const standard = contract.standard;
+  if (typeof standard === 'string' && standard.trim().length > 0) {
+    coordinate.standard = standard.trim().toLowerCase();
+  }
+  return coordinate;
 }
 
 /**
- * stillFromIndexerSource recovers a thumbnail the manifest builder suppressed.
+ * stillFor recovers a thumbnail the manifest builder suppressed.
  *
  * `resolveStillUri` blanks a still that equals the source it was given, on the
  * reasonable ground that pointing a thumbnail at the artwork itself adds
@@ -276,65 +341,26 @@ function coordinateFor(item: Dp1Item): TokenCoordinate | null {
  * exists to repair: a live work the app cannot rasterize, whose grid tile
  * stays empty.
  *
- * Recovering it is the inverse of the suppression. When the indexer's source
- * differs from the item's and is an http(s) URL, that source IS the still that
- * was elided, so it becomes the thumbnail relative to the item's own source.
+ * Recovery is the same rule applied against the curator's source instead of
+ * the indexer's: the still the indexer names for the token (`resolved.still`,
+ * its `display.image_url`) is used whenever it differs from the item's own
+ * source. It is the same field `find` and `build` write into
+ * `thumbnails.default`, and it is taken on the indexer's word, as they take
+ * it. No guess is made from a URL's shape — the indexer's source is often a
+ * live rendition and its stills are often extensionless CDN URLs, so a
+ * suffix check gets both cases wrong — and a lookup that names no still
+ * leaves the item without one.
  */
-function stillFromIndexerSource(item: Dp1Item, resolved: IndexerItem): string {
-  const indexerSource = typeof resolved.source === 'string' ? resolved.source.trim() : '';
+function stillFor(item: Dp1Item, resolved: IndexerItem): string {
+  const still = typeof resolved.still === 'string' ? resolved.still.trim() : '';
   const itemSource = typeof item.source === 'string' ? item.source.trim() : '';
-  if (!indexerSource || indexerSource === itemSource) {
+  if (!still || still === itemSource) {
     return '';
   }
-  if (!indexerSource.startsWith('http://') && !indexerSource.startsWith('https://')) {
+  if (!still.startsWith('http://') && !still.startsWith('https://')) {
     return '';
   }
-  // The indexer's source is not necessarily a still. getBestMediaUrl prefers
-  // display.animation_url and media assets over display.image_url, so it is
-  // frequently a live HTML rendition — and writing one into the thumbnail slot
-  // is worse than leaving the slot empty: the grid still cannot rasterize it,
-  // and the item now claims a still it does not have.
-  //
-  // Only a URL that is demonstrably an image is used. The indexer exposes no
-  // separately identified still on the item this command receives, so the file
-  // extension is the evidence available; carrying a real image field through
-  // the batch result would be the better fix and belongs upstream.
-  return looksLikeImage(indexerSource) ? indexerSource : '';
-}
-
-/**
- * Media the app can draw a grid tile from, matching the types
- * playlist-builder.js already recognizes. SVG and video belong here: the app
- * rasterizes both, and excluding them left works with the empty tile this
- * command exists to remove. HTML is deliberately absent — an unrasterizable
- * page in the thumbnail slot is worse than an empty slot, because the item
- * then claims a still it does not have.
- */
-const RASTERIZABLE_EXTENSIONS = [
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.avif',
-  '.bmp',
-  '.svg',
-  '.mp4',
-  '.webm',
-];
-
-/**
- * looksLikeImage tests a URL's path extension, ignoring query and fragment.
- */
-function looksLikeImage(url: string): boolean {
-  let pathname = url;
-  try {
-    pathname = new URL(url).pathname;
-  } catch {
-    pathname = url.split('?')[0].split('#')[0];
-  }
-  const lower = pathname.toLowerCase();
-  return RASTERIZABLE_EXTENSIONS.some((extension) => lower.endsWith(extension));
+  return still;
 }
 
 /**
@@ -358,9 +384,10 @@ function hasThumbnail(manifest: Dp1Manifest): boolean {
  * thumbnails) is what enrichment exists to fetch and is taken as given.
  */
 function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefined {
-  const still = stillFromIndexerSource(item, resolved);
+  const still = stillFor(item, resolved);
+  const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
+  const resolvedTitle = typeof resolved.title === 'string' ? resolved.title.trim() : '';
   let manifest = resolved.inlineManifest;
-  let rekey = false;
 
   if (manifest && still && !hasThumbnail(manifest)) {
     manifest = {
@@ -370,23 +397,30 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
         thumbnails: { default: { uri: still } },
       },
     };
-    rekey = true;
-  } else if (!manifest && still) {
-    // Nothing was emitted because the still was the only content the token
-    // had, and it had been suppressed. A thumbnail-only manifest is worth its
-    // payload in a way a title-only one is not: it is the difference between
-    // a grid tile and an empty square.
-    const synthesizedTitle = typeof item.title === 'string' ? item.title.trim() : '';
-    manifest = {
-      refVersion: '1.1.0',
-      id: derivedManifestId('', `${synthesizedTitle}\n${still}`),
-      created: MANIFEST_CREATED,
-      locale: 'en',
-      metadata: {
-        ...(synthesizedTitle ? { title: synthesizedTitle } : {}),
-        thumbnails: { default: { uri: still } },
-      },
-    };
+  } else if (!manifest) {
+    // Nothing was emitted because the token had only a title, or only a still
+    // that was suppressed against the indexer's source. Either can still be
+    // worth a manifest here, for a reason `find` and `build` never meet: their
+    // items always carry the token's title, so a title-only manifest would
+    // repeat what the item already says. A curator's item may carry no title
+    // at all, and the tombstone then shows nothing — so a substantiated title
+    // is written when the item lacks one, and a still is written whenever
+    // there is one, because it is the difference between a grid tile and an
+    // empty square.
+    const synthesizedTitle = curatorTitle || resolvedTitle;
+    const titleWorthCarrying = !curatorTitle && resolvedTitle.length > 0;
+    if (still || titleWorthCarrying) {
+      manifest = {
+        refVersion: '1.1.0',
+        id: derivedManifestId('', `${synthesizedTitle}\n${still}`),
+        created: MANIFEST_CREATED,
+        locale: 'en',
+        metadata: {
+          ...(synthesizedTitle ? { title: synthesizedTitle } : {}),
+          ...(still ? { thumbnails: { default: { uri: still } } } : {}),
+        },
+      };
+    }
   }
 
   if (!manifest) {
@@ -394,7 +428,6 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
   }
 
   const metadata = manifest.metadata ?? {};
-  const curatorTitle = typeof item.title === 'string' ? item.title.trim() : '';
   const overrideTitle = curatorTitle.length > 0 && metadata.title !== curatorTitle;
 
   // The id is derived from the finished payload every time, not only when this
@@ -407,10 +440,6 @@ function manifestFor(item: Dp1Item, resolved: IndexerItem): Dp1Manifest | undefi
   //
   // The original id is folded in, so the result stays anchored to the token
   // rather than floating free of it, and stays deterministic across runs.
-  //
-  // `rekey` is read only to record that a thumbnail was recovered; the
-  // derivation below covers it either way.
-  void rekey;
   const finalMetadata = overrideTitle ? { ...metadata, title: curatorTitle } : metadata;
   return {
     ...manifest,
