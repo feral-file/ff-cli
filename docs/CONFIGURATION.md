@@ -63,7 +63,7 @@ Used for signing DP‑1 playlists.
   `PLAYLIST_PRIVATE_KEY` even when no config file exists yet, and `ff-cli status --key <privateKey>`
   reports it for an explicit key — the one `sign --key` would use.
 
-- `playlist.role` (string): DP-1 signing role used by `ff-cli sign`. Defaults to `agent` if omitted. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`). It does **not** apply to `find` and `build`, which always sign as `curator` — see [Signing role and ownership](#signing-role-and-ownership).
+- `playlist.role` (string): DP-1 signing role used by `ff-cli sign`. The shipped `config.json.example` sets `curator`, because a document signed as `agent` is ownerless to a role-aware feed and `ff-cli publish` refuses it. The code default when the key is omitted entirely is still `agent`. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`). It does **not** apply to `find` and `build`, which always sign as `curator` — see [Signing role and ownership](#signing-role-and-ownership).
 
 ### Generate an Ed25519 private key
 
@@ -267,7 +267,7 @@ Minimal `config.json` example (selected fields):
   "defaultDuration": 10,
   "playlist": {
     "privateKey": "your_ed25519_private_key_hex_or_base64_here",
-    "role": "agent"
+    "role": "curator"
   },
   "feed": {
     "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"]
