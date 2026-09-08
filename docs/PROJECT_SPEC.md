@@ -190,11 +190,24 @@ accepts an API key. Both therefore carry a signed intent — `{ action, target: 
 created, signatures }`, with a `payloadHash` for replace — whose `created` must fall inside the feed's
 freshness window; the intent exists because a document's own signatures are public via `GET` and could
 otherwise be replayed to roll a resource back. The CLI proves ownership before it signs anything: it
-`GET`s the stored playlist, derives the configured key's `did:key`, and refuses locally when that key is
-absent from the stored `curators[]`, naming both the identity offered and the owners that would work —
-detail a `403` does not carry. This is also why `publish` refuses a document whose declared curator did
-not sign in the `curator` role: such a playlist would be created with no owner, and could then never be
-replaced or deleted. A delete tombstones the id, so the operation is final and the id is not reusable.
+`GET`s the stored playlist and requires the configured key to be both named in the stored `curators[]`
+and the signer of a cryptographically valid `curator`-role signature over that stored document. Being
+named is a claim; the owner-role signature is the proof, and checking only the claim is what would let a
+legacy `agent`-signed document pass preflight and come back as a `403` reported as a missing
+declaration — the one thing not wrong with it. The three local refusals are therefore distinct: no
+declared curators, declared but never proved (terminal, and the shape of anything published while the
+default role was `agent`), and proved by a key other than this one. A `403` that survives all three is
+reported as the feed's own judgement, not as a missing declaration. This is also why `publish` refuses to
+create a document whose declared curator did not sign in the `curator` role: that refusal is
+recoverable and the resulting stored playlist would not be. A delete tombstones the id, so the operation
+is final and the id is not reusable.
+
+Editing a published playlist therefore has a required shape: fetch the stored document, change it,
+re-sign with `sign --replace-signatures`, then `publish --replace`. Signing appends by default, which is
+correct only while the signed content is unchanged; an edit invalidates every entry the document
+carries, including the feed's own co-signature, and the envelope check refuses to persist a mix of stale
+and fresh. The fresh mode drops them all — the feed re-appends its signature after it verifies the
+replacement.
 
 ### Device operations
 

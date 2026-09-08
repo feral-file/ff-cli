@@ -354,6 +354,10 @@ npm run dev -- publish playlist.json --replace -s 0
 npm run dev -- publish --help
 ```
 
+A bare Enter at the interactive prompt selects nothing either, and fails with the list. The prompt has no
+default by design: it is being asked precisely because the CLI cannot tell which feed was meant, and
+`Number('')` is `0` — the first server, usually production.
+
 **With more than one server configured and no `-s`, a non-interactive session fails rather than
 choosing.** Under a pipe, a cron job, or a CI step there is no terminal to answer the prompt, and
 defaulting to the first server would write to production for a script that meant the other one:
@@ -550,11 +554,55 @@ owner-role signature: once such a playlist is created it can never be replaced o
 ### Replace
 
 ```bash
-# Edit the published document — not a rebuilt one — then re-sign and replace.
-#   `id`, `slug`, `created` and the curators[] owner set must all stay as published.
-ff-cli sign playlist.json -r curator
+# 1. Start from the PUBLISHED document, not a rebuilt one.
+curl -s https://feed.feralfile.com/api/v1/playlists/<id> -o playlist.json
+
+# 2. Edit it. `id`, `slug`, `created` and the curators[] owner set must all stay as published.
+
+# 3. Re-sign FRESH. This flag is required here — see below.
+ff-cli sign playlist.json -r curator --replace-signatures
+
+# 4. Replace.
 ff-cli publish playlist.json --replace -s 0
 ```
+
+**Step 3 needs `--replace-signatures`.** The document you fetched carries the curator's signature and
+the feed's own, both taken over the content as published. Editing it moves bytes those signatures cover,
+and `sign` **appends** rather than replaces — so a plain re-sign produces an envelope holding two stale
+entries and one good one, which `sign` then refuses to write:
+
+```
+$ ff-cli sign playlist.json -r curator
+
+Sign playlist
+
+Sign failed: Signed playlist verification failed: signed playlist is not verifiable
+
+If you edited this playlist after it was signed, the existing signatures no longer
+  cover it, and signing again cannot repair them — signing appends. Sign fresh instead:
+    ff-cli sign playlist.json -r curator --replace-signatures
+  That discards every existing entry, including any feed signature, and signs the
+  document as it stands now. It is the path a feed replace expects.
+```
+
+Signing fresh drops the feed's entry along with the curator's, which is correct: it covers the pre-edit
+content too, and the feed appends a new one of its own after it verifies the replacement.
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures
+
+Sign playlist
+
+✓ Playlist signed and saved to: /path/to/playlist.json
+
+Playlist signed
+  Replaced 2 existing signatures
+  Signatures: 1
+```
+
+Appending stays the default, because it is right whenever the content has not changed — a second curator
+co-signing an unedited playlist keeps the first endorsement, and the payload hash excludes `signatures`
+so the earlier entry stays valid.
 
 ```
 $ ff-cli publish playlist.json --replace -s 0
@@ -608,6 +656,35 @@ Unpublished
 Without `-y`, `unpublish` shows the title and the server and asks, defaulting to **no**. The delete
 tombstones the id: the playlist cannot be restored, and a later publish naming that id is refused. Build
 a new playlist instead of trying to recreate it.
+
+### When ownership cannot be proved
+
+A key counts as an owner only when the **stored** playlist names it in `curators[]` **and** carries its
+valid `curator`-role signature. Being named is a claim; signing in the owner role is the proof, and the
+CLI checks both against the stored document before it signs an intent.
+
+That distinction has one large real population: playlists published while the default signing role was
+`agent`. They declare a curator and carry only that key's `agent` signature, so nothing can ever
+authorize a write to them — not even the holder of the declared key, because adding the missing proof
+would itself be a replace:
+
+```
+Unpublish failed
+  No key has proved ownership of this playlist, so none can delete it.
+
+A key counts as an owner only when it is named in curators[] AND signed the document as
+  "curator". This playlist names a curator and carries no valid curator signature
+  from that key — the shape of a playlist published while the default signing role was
+  "agent".
+  Declared:
+    did:key:z6Mkv7qJ...
+  Nothing can repair it, including holding one of those keys: adding the missing signature
+  would be a replace, and a replace needs the very proof that is missing. Publish a corrected
+  playlist under a new id instead.
+```
+
+This is why `publish` refuses to create such a document in the first place: the refusal at publish time
+is recoverable, and this one is not.
 
 ### When the key is not an owner
 

@@ -97,7 +97,8 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `validate <file-or-url>` – Validate playlist structure only
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
-  - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`
+  - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`, `--replace-signatures`
+  - Signing **appends** by default, so repeated runs accumulate endorsements. That is only correct while the signed content is unchanged: editing a signed playlist moves bytes the earlier signatures cover, and the envelope check then refuses to write the result. `--replace-signatures` discards every existing entry — including a feed's own co-signature — and signs the document as it stands. It is the required step before `publish --replace`
 - `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
   - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification; not recommended)
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist
@@ -334,8 +335,10 @@ why `publish` refuses to create a playlist that carries no owner-role signature 
 neither replaced nor deleted, ever.
 
 ```bash
-# Edit a published playlist: change the file, re-sign it, then replace.
-ff-cli sign playlist.json -r curator
+# Edit a published playlist: fetch it, change the file, re-sign fresh, then replace.
+curl -s https://feed.example.com/api/v1/playlists/<id> -o playlist.json
+#   ...edit the title, items, or metadata...
+ff-cli sign playlist.json -r curator --replace-signatures
 ff-cli publish playlist.json --replace -s 0
 
 # Delete a published playlist (id, slug, or feed URL all work).
@@ -343,11 +346,22 @@ ff-cli unpublish 97595a2f-a790-477c-aa42-b4f2ec9f1e3b -s 0
 ff-cli unpublish https://feed.example.com/api/v1/playlists/97595a2f-a790-477c-aa42-b4f2ec9f1e3b
 ```
 
+`--replace-signatures` is not optional on that path. The document you fetched carries the curator's
+signature and the feed's, both taken over the pre-edit content; a plain `ff-cli sign` appends to them and
+the envelope check then refuses to write a file with stale entries in it. Signing fresh drops both — the
+feed re-appends its own after it verifies the replacement.
+
 `--replace` keeps identity fixed: `id`, `slug`, and `created` must equal the stored document's, and the
 `curators[]` owner set may not change. Editing a published playlist therefore means editing the document
 you published — re-running `find` or `build` mints a fresh id, slug, and `created`, which is a new
 playlist rather than a replacement. A `publish` without `--replace` is never silently upgraded to a
 replace; an id the feed already holds fails with a conflict, as before.
+
+Both verbs prove ownership locally before signing anything. A key counts as an owner only when the
+**stored** playlist names it in `curators[]` **and** carries its valid `curator`-role signature — being
+named is a claim, signing in the owner role is the proof. A playlist that declares a curator but was
+signed under another role (the shape of anything published while the default role was `agent`) can never
+be replaced or deleted by anyone, and the CLI says so rather than sending a request the feed will refuse.
 
 `unpublish` asks for confirmation first, showing the title and the server. `-y` skips it for scripts.
 Deletion is final in a way worth knowing before you run it: the feed **tombstones** the id, so the
