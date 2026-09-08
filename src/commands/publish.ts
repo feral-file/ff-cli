@@ -10,8 +10,29 @@ export const publishCommand = new Command('publish')
     '--replace',
     'Replace the playlist already stored under this document id, instead of creating a new one'
   )
-  .action(async (file: string, options: { server?: string; replace?: boolean }) => {
+  .option(
+    '-k, --key <privateKey>',
+    'Ed25519 private key that signs the replace authorization (overrides config; --replace only)'
+  )
+  .action(async (file: string, options: { server?: string; replace?: boolean; key?: string }) => {
     try {
+      // A plain publish signs nothing at request time — it uploads the signatures[] envelope the
+      // document already carries — so --key would do nothing here. Refusing beats accepting it
+      // silently: someone passing a key believes it is being used, and a no-op flag on a command
+      // that writes to a feed is the kind of quiet lie this CLI has been removing.
+      if (options.key && !options.replace) {
+        console.error(chalk.red('\n--key has no effect on a plain publish'));
+        console.log(
+          chalk.yellow(
+            '  A publish is authorized by the signatures already inside the document; the command\n' +
+              '  signs nothing. Sign the file first, with the key you meant:\n' +
+              '    ff-cli sign <file> -r curator --key <private key>\n' +
+              '  --key applies to "publish --replace", which signs an authorization intent.\n'
+          )
+        );
+        process.exit(1);
+      }
+
       console.log(chalk.blue(options.replace ? '\nReplace playlist\n' : '\nPublish playlist\n'));
 
       const { getFeedConfig } = await import('../config.js');
@@ -34,7 +55,7 @@ export const publishCommand = new Command('publish')
       // loudly on a duplicate id, a replace overwrites a published document — and an operator who typed
       // neither flag meant the safe one.
       const result = options.replace
-        ? await replacePlaylist(file, selection.url)
+        ? await replacePlaylist(file, selection.url, { privateKey: options.key })
         : await publishPlaylist(file, selection.url);
 
       if (result.success) {

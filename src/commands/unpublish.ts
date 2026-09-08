@@ -16,7 +16,11 @@ export const unpublishCommand = new Command('unpublish')
   .argument('<id-or-url>', 'Playlist id, slug, or feed URL')
   .option('-s, --server <index>', 'Feed server index (use this if multiple servers configured)')
   .option('-y, --yes', 'Skip the confirmation prompt')
-  .action(async (idOrUrl: string, options: { server?: string; yes?: boolean }) => {
+  .option(
+    '-k, --key <privateKey>',
+    'Ed25519 private key that signs the delete authorization (overrides config)'
+  )
+  .action(async (idOrUrl: string, options: { server?: string; yes?: boolean; key?: string }) => {
     try {
       console.log(chalk.blue('\nUnpublish playlist\n'));
 
@@ -78,7 +82,7 @@ export const unpublishCommand = new Command('unpublish')
         }
       }
 
-      const result = await unpublishPlaylist(idOrUrl, selection.url);
+      const result = await unpublishPlaylist(idOrUrl, selection.url, { privateKey: options.key });
 
       if (result.success) {
         console.log(chalk.green('Unpublished'));
