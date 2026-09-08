@@ -249,64 +249,74 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('a source replaced while the command runs is not overwritten', async () => {
-    // The document, its signatures and the decision about what may be discarded all describe the file
-    // that was READ. A replacement by rename leaves the path pointing at a new inode, so applying that
-    // reasoning would truncate a document nothing here has looked at.
-    //
-    // The playlist has only the signer's own signature, so an in-place run would ordinarily proceed —
-    // isolating the freshness check as the thing that stops it.
-    const dir = makeTempDir();
-    const own = makeKey();
-    try {
-      const input = join(dir, 'playlist.json');
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
-      const signature = await signPlaylist(document, own, 'curator');
-      writeFileSync(
-        input,
-        JSON.stringify({ ...document, signatures: [signature] }, null, 2),
-        'utf-8'
-      );
+  test(
+    'a source replaced while the command runs is not overwritten',
+    { skip: isWindows },
+    async () => {
+      // The document, its signatures and the decision about what may be discarded all describe the file
+      // that was READ. A replacement by rename leaves the path pointing at a new inode, so applying that
+      // reasoning would truncate a document nothing here has looked at.
+      //
+      // The playlist has only the signer's own signature, so an in-place run would ordinarily proceed —
+      // isolating the freshness check as the thing that stops it.
+      //
+      // Skipped on Windows, where the scenario cannot arise: renaming over a file with an open handle
+      // fails with EPERM, and this command holds the source open for exactly that span. The protection
+      // the test asserts is enforced by the operating system there rather than by the check below, so
+      // the setup fails before the assertion is reached. The in-place-rewrite variant that follows does
+      // run everywhere — Windows permits that one, and it is the failure the descriptor itself catches.
+      const dir = makeTempDir();
+      const own = makeKey();
+      try {
+        const input = join(dir, 'playlist.json');
+        const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+        const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+        const signature = await signPlaylist(document, own, 'curator');
+        writeFileSync(
+          input,
+          JSON.stringify({ ...document, signatures: [signature] }, null, 2),
+          'utf-8'
+        );
 
-      // Swap the file after it has been read, before the write.
-      const replacement = '{"dpVersion":"1.1.0","title":"someone else\'s document"}';
-      let swapped = false;
-      const replacing = {
-        ...fs,
-        ftruncateSync: (fd: number, len: number) => fs.ftruncateSync(fd, len),
-        fstatSync: (fd: number) => {
-          const stat = fs.fstatSync(fd);
-          if (!swapped) {
-            swapped = true;
+        // Swap the file after it has been read, before the write.
+        const replacement = '{"dpVersion":"1.1.0","title":"someone else\'s document"}';
+        let swapped = false;
+        const replacing = {
+          ...fs,
+          ftruncateSync: (fd: number, len: number) => fs.ftruncateSync(fd, len),
+          fstatSync: (fd: number) => {
+            const stat = fs.fstatSync(fd);
+            if (!swapped) {
+              swapped = true;
+              return stat;
+            }
+            if (!existsSync(join(dir, 'done'))) {
+              writeFileSync(join(dir, 'done'), '', 'utf-8');
+              const staging = join(dir, 'staging.json');
+              writeFileSync(staging, replacement, 'utf-8');
+              fs.renameSync(staging, input);
+            }
             return stat;
-          }
-          if (!existsSync(join(dir, 'done'))) {
-            writeFileSync(join(dir, 'done'), '', 'utf-8');
-            const staging = join(dir, 'staging.json');
-            writeFileSync(staging, replacement, 'utf-8');
-            fs.renameSync(staging, input);
-          }
-          return stat;
-        },
-      };
+          },
+        };
 
-      const result = await quietly(() =>
-        signPlaylistFile(input, own, undefined, 'curator', {
-          replaceSignatures: true,
-          fs: replacing,
-        })
-      );
+        const result = await quietly(() =>
+          signPlaylistFile(input, own, undefined, 'curator', {
+            replaceSignatures: true,
+            fs: replacing,
+          })
+        );
 
-      assert.equal(result.success, false, 'the replacement must not be overwritten');
-      assert.match(String(result.error), /changed while this ran/);
-      assert.match(String(result.error), /Nothing was written/);
-      // The document that arrived is untouched: it was never what this run reasoned about.
-      assert.equal(readFileSync(input, 'utf-8'), replacement);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
+        assert.equal(result.success, false, 'the replacement must not be overwritten');
+        assert.match(String(result.error), /changed while this ran/);
+        assert.match(String(result.error), /Nothing was written/);
+        // The document that arrived is untouched: it was never what this run reasoned about.
+        assert.equal(readFileSync(input, 'utf-8'), replacement);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     }
-  });
+  );
 
   test('a source rewritten in place while the command runs is not overwritten', async () => {
     // The other shape: same inode, different bytes. The held descriptor cannot see a rename, and it is
