@@ -15,6 +15,8 @@
 
 import axios, { AxiosError } from 'axios';
 import type { Playlist } from '../types';
+import { getPlaylistConfig } from '../config';
+import { playlistSigningDidKey } from './signing-identity';
 
 // playlist-signer is still CommonJS; require keeps the interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -189,6 +191,66 @@ export async function fetchStoredPlaylist(
     throw new Error('Feed returned no playlist document');
   }
   return stored;
+}
+
+/**
+ * Resolve the key that signs an owner-bound intent, honouring an explicit `--key`.
+ *
+ * **Presence, never truthiness.** `--key ""` — the shape an unset shell variable takes,
+ * `--key "$SIGNING_KEY"` with nothing in it — is an override that FAILED, not an absent one. Treating it
+ * as absent silently fell back to the configured key, so a delete meant to be authorized by one identity
+ * was authorized by another and tombstoned the playlist under it. There is no recovering from that: the
+ * id is retired. So anything the caller actually passed goes through validation and is rejected there;
+ * only `undefined` means "use the configured key".
+ *
+ * @param override - Value of `--key` exactly as the command received it
+ * @param action - Which mutation is being authorized, for the no-key-configured message
+ * @returns Key material for signing
+ * @throws Error when the override is empty, or when nothing is configured and none was given
+ */
+export function resolveMutationSigningKey(
+  override: string | undefined,
+  action: 'delete' | 'replace'
+): string {
+  if (override !== undefined) {
+    if (override.trim().length === 0) {
+      throw new Error(
+        'The --key value is empty. This usually means a shell variable did not expand ' +
+          '(for example --key "$SIGNING_KEY" with SIGNING_KEY unset). Refusing rather than falling ' +
+          'back to the configured key: a signature made by the wrong identity is not something a ' +
+          `${action} can be taken back from.`
+      );
+    }
+    return override;
+  }
+
+  const configured = getPlaylistConfig().privateKey;
+  if (!configured) {
+    throw new Error(
+      `No playlist signing key is configured. A ${action} is authorized by a signature, so one is ` +
+        'required: run "ff-cli setup", set playlist.privateKey in config.json, or pass --key.'
+    );
+  }
+  return configured;
+}
+
+/**
+ * Identity a mutation will sign under, resolved and validated together.
+ *
+ * Commands call this before doing anything else so a bad credential fails before any request — and, for
+ * `unpublish`, before the operator is asked to confirm a delete they could not have completed. The key
+ * material never appears in what comes back: only the `did:key` it derives to.
+ *
+ * @param override - Value of `--key` exactly as the command received it
+ * @param action - Which mutation is being authorized
+ * @returns The key material and the `did:key` it asserts
+ */
+export function mutationSignerIdentity(
+  override: string | undefined,
+  action: 'delete' | 'replace'
+): { privateKey: string; didKey: string } {
+  const privateKey = resolveMutationSigningKey(override, action);
+  return { privateKey, didKey: playlistSigningDidKey(privateKey) };
 }
 
 /** Owner `did:key`s the stored playlist declares, in declaration order. */

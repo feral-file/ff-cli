@@ -239,6 +239,110 @@ describe('unpublish --key', () => {
   });
 });
 
+describe('an empty --key is a failed override, not an absent one', () => {
+  // The critical case. `--key "$SIGNING_KEY"` with the variable unset expands to `--key ""`, which is
+  // falsy — so the override was skipped and the CONFIGURED key signed instead. On `unpublish` that
+  // tombstones the id under an identity the operator did not choose, and a tombstone is permanent.
+  // Presence, not truthiness: anything actually passed must be validated and rejected.
+  for (const [label, value] of [
+    ['empty', ''],
+    ['whitespace', '   '],
+  ] as const) {
+    test(`unpublish refuses an ${label} --key and sends nothing`, async () => {
+      const ownerKey = makePrivateKeyBase64();
+      const stored = await storedPlaylist(ownerKey);
+      const feed = await startFeed(stored);
+      // The configured key IS the owner here, so a fallback would have succeeded — which is exactly
+      // the danger: the command would have worked, on the wrong authority, and destroyed the playlist.
+      const run = await runCli(feed.baseUrl, ownerKey, [
+        'unpublish',
+        String(stored.id),
+        '-y',
+        '--key',
+        value,
+      ]);
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, /--key value is empty/);
+        assert.match(run.output, /did not expand/);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be sent');
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+
+    test(`publish --replace refuses an ${label} --key and sends nothing`, async () => {
+      const ownerKey = makePrivateKeyBase64();
+      const stored = await storedPlaylist(ownerKey);
+      const feed = await startFeed(stored);
+      const run = await runCli(
+        feed.baseUrl,
+        ownerKey,
+        ['publish', 'playlist.json', '--replace', '--key', value],
+        { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` }
+      );
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, /--key value is empty/);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be written');
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+
+    test(`a plain publish still refuses an ${label} --key`, async () => {
+      // The refusal has to test presence too, or an empty value skipped the guard and published while
+      // the user believed a key had been checked.
+      const ownerKey = makePrivateKeyBase64();
+      const stored = await storedPlaylist(ownerKey);
+      const feed = await startFeed(stored);
+      const run = await runCli(
+        feed.baseUrl,
+        ownerKey,
+        ['publish', 'playlist.json', '--key', value],
+        { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` }
+      );
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, /--key has no effect on a plain publish/);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be uploaded');
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+});
+
+describe('unpublish validates the key before it asks anything', () => {
+  test('a malformed key fails before the playlist is even looked up', async () => {
+    // Without -y the command fetches the playlist and prompts. Deriving the key afterwards meant the
+    // operator was shown a playlist, asked to approve destroying it, and only then told their
+    // credential was unusable.
+    const ownerKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored);
+    const run = await runCli(feed.baseUrl, ownerKey, [
+      'unpublish',
+      String(stored.id),
+      '--key',
+      'not-a-key',
+    ]);
+    try {
+      assert.notEqual(run.status, 0);
+      assert.match(run.output, /Cannot sign the delete/);
+      // No confirmation was reached, and no lookup was made.
+      assert.doesNotMatch(run.output, /Delete this playlist\?/);
+      assert.equal(feed.recorded.method, undefined);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});
+
 describe('publish --replace --key', () => {
   test('an explicit owner key signs the authorization intent', async () => {
     const ownerKey = makePrivateKeyBase64();

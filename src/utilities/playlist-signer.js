@@ -130,7 +130,17 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     const playlistContent = fs.readFileSync(playlistPath, 'utf-8');
     const playlist = JSON.parse(playlistContent);
     const config = getPlaylistConfig();
-    const privateKey = privateKeyBase64 || config.privateKey;
+    // Presence, not truthiness. `--key ""` is what an unset shell variable expands to; treating it as
+    // absent signs with the configured key while the user believes they supplied another one. The same
+    // hazard the feed mutations were just fixed for, and the signature it produces is just as wrong.
+    if (privateKeyBase64 !== undefined && String(privateKeyBase64).trim().length === 0) {
+      throw new Error(
+        'The --key value is empty. This usually means a shell variable did not expand ' +
+          '(for example --key "$SIGNING_KEY" with SIGNING_KEY unset). Refusing rather than falling ' +
+          'back to the configured key, which would sign under an identity you did not choose.'
+      );
+    }
+    const privateKey = privateKeyBase64 !== undefined ? privateKeyBase64 : config.privateKey;
     const role = resolvePlaylistSigningRole(roleOverride || config.role);
 
     const validation = await validatePlaylistForSigning(playlist);
@@ -153,7 +163,9 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // Classify against the signature just produced: its `kid` is this key's identity, so no separate
     // derivation is needed to tell the signer's own entries from everyone else's.
     const signingKid = signedPlaylist.signatures[signedPlaylist.signatures.length - 1]?.kid;
-    const dropped = replaceSignatures ? describeDroppedSignatures(playlist, signingKid) : [];
+    const dropped = replaceSignatures
+      ? await describeDroppedSignatures(playlist, signingKid, dp1)
+      : [];
     const verification = await verifySignedPlaylistEnvelope(signedPlaylist, dp1);
     if (!verification.valid) {
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
@@ -181,24 +193,37 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
 /**
  * Describe the signatures `--replace-signatures` discards, so the output can name them.
  *
- * A count alone is not actionable on a co-curated playlist. Dropping your own earlier signature costs
- * nothing — you are replacing it in the same command. Dropping the feed's costs nothing either; it
- * co-signs again after verifying the replacement. Dropping *another key's* endorsement is the one that
- * cannot be recovered without asking that person to sign again, and the owner has to know which ones
- * those were before they publish the replacement.
+ * A count alone is not actionable on a co-curated playlist: the owner has to know whose signatures are
+ * gone before they publish the replacement, not after someone notices their name missing.
  *
- * They are void either way. Their payload hash covers content that has changed, so nothing here tries
- * to carry them forward — the point is to report the loss, not to soften it.
+ * Two things this deliberately does NOT do.
  *
- * `kid` is reported as its last 8 characters: enough to match against a curators[] entry at a glance,
- * and the full value is already in the file for anyone who needs it.
+ * It does not assume a discarded entry is void. The DP-1 signing payload excludes `signature` and
+ * `signatures`, so re-signing an UNCHANGED document leaves every existing entry perfectly valid over
+ * the same bytes — dropping them there is a removal, not an invalidation, and telling that user their
+ * co-curators must sign again would send them asking for signatures they still have in the old file.
+ * So each entry is verified against the document as it now stands, and only the ones that no longer
+ * verify are reported as lost.
+ *
+ * It does not treat a `feed` role as "the feed's, so it comes back". Any key can emit a signature
+ * carrying `role: "feed"`, and this CLI holds no feed identity to check a `kid` against, so that
+ * reading would be a claim the code cannot support. Every non-self entry is reported as another key's,
+ * with its own role carried through — a document may legitimately hold `agent`, `institution`, or
+ * `licensor` entries, and telling their holders to come back as `curator` would be wrong. That a feed
+ * re-appends its own signature after verifying a replacement is stated separately, as the general fact
+ * it is, rather than as a classification of any particular entry.
+ *
+ * `kid` is reported as its last 8 characters: enough to match a curators[] row at a glance, with the
+ * full value still in the file.
  *
  * @param {Object} playlist - The playlist as read, before signing
  * @param {string} [signingKid] - `did:key` of the key that just signed
- * @returns {Array<{kind: string, role: string|null, kid: string|null, label: string}>} One per entry
+ * @param {Object} dp1 - Loaded dp1-js module
+ * @returns {Promise<Array<{kind: string, role: string|null, kid: string|null, valid: boolean, label: string}>>}
  */
-function describeDroppedSignatures(playlist, signingKid) {
+async function describeDroppedSignatures(playlist, signingKid, dp1) {
   const dropped = [];
+  const raw = Buffer.from(JSON.stringify(playlist));
 
   for (const entry of Array.isArray(playlist.signatures) ? playlist.signatures : []) {
     if (!entry) {
@@ -207,29 +232,40 @@ function describeDroppedSignatures(playlist, signingKid) {
     const kid = typeof entry.kid === 'string' && entry.kid ? entry.kid : null;
     const role = typeof entry.role === 'string' && entry.role ? entry.role : null;
     const short = kid ? kid.slice(-8) : 'unknown';
+    const descriptor = role ? `${role}, ...${short}` : `no role, ...${short}`;
 
-    let kind;
-    let label;
-    if (kid && signingKid && kid === signingKid) {
-      kind = 'self';
-      label = `your own earlier signature (${role || 'no role'}, ...${short})`;
-    } else if (role === 'feed') {
-      kind = 'feed';
-      label = `the feed's signature (feed, ...${short})`;
-    } else {
-      kind = 'other';
-      label = `another key's endorsement (${role || 'no role'}, ...${short})`;
+    // Verified against the document as it stands now, which is what decides whether this is a loss.
+    let valid = false;
+    try {
+      dp1.VerifyMultiSignature(raw, entry);
+      valid = true;
+    } catch {
+      valid = false;
     }
-    dropped.push({ kind, role, kid, label });
+
+    const own = Boolean(kid && signingKid && kid === signingKid);
+    dropped.push({
+      kind: own ? 'self' : 'other',
+      role,
+      kid,
+      valid,
+      label: own
+        ? `your own earlier signature (${descriptor}) — replaced by this signing`
+        : valid
+          ? `another key's signature (${descriptor}) — removed, still valid over this content`
+          : `another key's signature (${descriptor}) — void, the content changed`,
+    });
   }
 
   if (typeof playlist.signature === 'string' && playlist.signature.trim()) {
-    // A legacy flat signature carries neither kid nor role, so it can only be reported as what it is.
+    // A legacy flat signature carries neither kid nor role, and the multi-signature verifier has
+    // nothing to check it with, so it can only be reported as what it is.
     dropped.push({
-      kind: 'legacy',
+      kind: 'other',
       role: null,
       kid: null,
-      label: 'a legacy flat signature (no kid, no role)',
+      valid: false,
+      label: 'a legacy flat signature (no kid, no role) — dropped',
     });
   }
 

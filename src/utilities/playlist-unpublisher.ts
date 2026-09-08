@@ -16,14 +16,13 @@ import {
   describeFeedMutationError,
   fetchStoredPlaylist,
   intentTimestamp,
+  mutationSignerIdentity,
   ownershipPreflight,
   resolvePlaylistIdentifier,
   signIntent,
   storedOwnerKeys,
   type StoredPlaylist,
 } from './feed-mutation';
-import { playlistSigningDidKey } from './signing-identity';
-import { getPlaylistConfig } from '../config';
 
 export interface UnpublishResult {
   success: boolean;
@@ -82,16 +81,12 @@ export async function unpublishPlaylist(
     return { success: false, error: 'No playlist id or URL was given' };
   }
 
+  // Resolve and validate together: `--key ""` is a failed override, not an absent one, and must never
+  // fall through to the configured key on an operation that tombstones an id.
   let privateKey: string;
-  try {
-    privateKey = resolveSigningKey(options.privateKey);
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
-  }
-
   let signerDidKey: string;
   try {
-    signerDidKey = playlistSigningDidKey(privateKey);
+    ({ privateKey, didKey: signerDidKey } = mutationSignerIdentity(options.privateKey, 'delete'));
   } catch (error) {
     return { success: false, error: (error as Error).message };
   }
@@ -174,23 +169,3 @@ export async function unpublishPlaylist(
 
 /** Owner keys the stored playlist declares, re-exported so the command layer can show them. */
 export { storedOwnerKeys };
-
-/**
- * Resolve the signing key the same way every other signing path does.
- *
- * `getPlaylistConfig` already layers config.json over `PLAYLIST_PRIVATE_KEY` and screens out the sample
- * placeholder, so going through it keeps `unpublish` signing as the identity `ff-cli status` reports.
- */
-function resolveSigningKey(override?: string): string {
-  if (override && override.trim().length > 0) {
-    return override;
-  }
-  const configured = getPlaylistConfig().privateKey;
-  if (!configured) {
-    throw new Error(
-      'No playlist signing key is configured. A delete is authorized by a signature, so one is ' +
-        'required: run "ff-cli setup" or set playlist.privateKey in config.json.'
-    );
-  }
-  return configured;
-}

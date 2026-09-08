@@ -20,7 +20,11 @@ export const publishCommand = new Command('publish')
       // document already carries — so --key would do nothing here. Refusing beats accepting it
       // silently: someone passing a key believes it is being used, and a no-op flag on a command
       // that writes to a feed is the kind of quiet lie this CLI has been removing.
-      if (options.key && !options.replace) {
+      //
+      // Tested for PRESENCE, not truthiness. `--key ""` is what an unset shell variable expands to,
+      // and it is still a key the user meant to supply; skipping the refusal for it published the
+      // document while leaving them believing a key had been checked.
+      if (options.key !== undefined && !options.replace) {
         console.error(chalk.red('\n--key has no effect on a plain publish'));
         console.log(
           chalk.yellow(

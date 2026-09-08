@@ -2,7 +2,6 @@ import axios, { AxiosError } from 'axios';
 import fs from 'fs';
 import type { Playlist } from '../types';
 import { verifyPlaylist } from './playlist-verifier';
-import { getPlaylistConfig } from '../config';
 import {
   OWNER_ROLE,
   buildReplaceIntent,
@@ -10,12 +9,12 @@ import {
   documentPayloadHash,
   fetchStoredPlaylist,
   intentTimestamp,
+  mutationSignerIdentity,
   ownershipPreflight,
   signIntent,
   storedOwnerKeys,
   type StoredPlaylist,
 } from './feed-mutation';
-import { playlistSigningDidKey } from './signing-identity';
 
 interface PublishResult {
   success: boolean;
@@ -162,11 +161,12 @@ export async function replacePlaylist(
     };
   }
 
+  // Presence, not truthiness: `--key ""` is an override that failed to expand, and falling back to the
+  // configured key would sign someone else's replacement into place.
   let privateKey: string;
   let signerDidKey: string;
   try {
-    privateKey = resolveIntentSigningKey(options.privateKey);
-    signerDidKey = playlistSigningDidKey(privateKey);
+    ({ privateKey, didKey: signerDidKey } = mutationSignerIdentity(options.privateKey, 'replace'));
   } catch (error) {
     return { success: false, error: (error as Error).message };
   }
@@ -311,27 +311,6 @@ function sameInstant(left: string, right: string): boolean {
   const a = Date.parse(left);
   const b = Date.parse(right);
   return Number.isFinite(a) && Number.isFinite(b) && a === b;
-}
-
-/**
- * resolveIntentSigningKey resolves the key that signs the authorization intent.
- *
- * The intent is signed separately from the document, and by whoever is running the command: the document
- * may legitimately carry several curators' signatures, while the intent proves that *this* operator holds
- * one of those keys right now.
- */
-function resolveIntentSigningKey(override?: string): string {
-  if (override && override.trim().length > 0) {
-    return override;
-  }
-  const configured = getPlaylistConfig().privateKey;
-  if (!configured) {
-    throw new Error(
-      'No playlist signing key is configured. A replace is authorized by a signed intent, so one is ' +
-        'required: run "ff-cli setup" or set playlist.privateKey in config.json.'
-    );
-  }
-  return configured;
 }
 
 /**
