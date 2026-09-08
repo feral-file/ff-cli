@@ -204,13 +204,17 @@ create a document whose declared curator did not sign in the `curator` role: tha
 recoverable and the resulting stored playlist would not be. A delete tombstones the id, so the operation
 is final and the id is not reusable.
 
-A `--replace-signatures` run that would discard another key's still-valid signature preserves the
-original first, at `<file>.before-resign.json` beside the real file. That copy is owner-only and does
-not reproduce the source's access: Node has no portable ACL API, so a copy cannot be made to carry a
-document's sharing policy, and an earlier attempt to mirror mode and ownership let an inherited ACL
-widen it past the original. The backup is a recovery file for the operator, not a second copy of the
-document's sharing — and on Windows, where mode bits do not constrain ACL inheritance, the in-place run
-refuses rather than making a guarantee it cannot keep.
+A `--replace-signatures` run writing over its own input refuses when it would discard a still-valid
+signature from another key. Only that key's holder could produce it again, so overwriting the one file
+that carries it destroys something the command cannot restore; `--output` writes the result elsewhere
+and leaves the original in place. The refusal is scoped to what is unrecoverable — an in-place run still
+proceeds when the entries dropped are the signer's own, or no longer verify.
+
+Refusal rather than a preserved copy is deliberate. A copy has to reproduce the source's access, and no
+portable means of doing so exists: POSIX ACLs grant what the mode bits do not describe, macOS extended
+ACLs are not constrained by the mask, and Windows mode bits constrain nothing at all. Every version of
+that copy was a way to disclose the document. The refusal assumes nothing about the filesystem, so the
+invariant — a still-valid endorsement is never overwritten in place — holds identically everywhere.
 
 Editing a published playlist therefore has a required shape: `fetch` the stored document, change it,
 re-sign with `sign --replace-signatures`, then `publish --replace`. `fetch` exists because every other

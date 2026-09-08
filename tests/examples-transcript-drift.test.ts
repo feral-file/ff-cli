@@ -29,7 +29,6 @@ const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
 const examplesPath = join(projectRoot, 'docs/EXAMPLES.md');
-const isWindows = process.platform === 'win32';
 
 function makeKey(): string {
   return generateKeyPairSync('ed25519')
@@ -105,10 +104,21 @@ async function writeSigned(
 }
 
 /** Invoked with a bare filename from the file's own directory, as the documented examples are. */
-function runSign(dir: string, file: string, key: string): string {
+function runSign(dir: string, file: string, key: string, output?: string): string {
   const result = spawnSync(
     process.execPath,
-    [tsxCli, cliEntry, 'sign', file, '-r', 'curator', '-k', key, '--replace-signatures'],
+    [
+      tsxCli,
+      cliEntry,
+      'sign',
+      file,
+      '-r',
+      'curator',
+      '-k',
+      key,
+      '--replace-signatures',
+      ...(output ? ['-o', output] : []),
+    ],
     { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
   );
   assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
@@ -132,16 +142,16 @@ describe('EXAMPLES transcripts match the command', () => {
     }
   });
 
-  test('the unchanged-document report is what the docs show', { skip: isWindows }, async () => {
-    // Skipped on Windows: that scenario writes an owner-only backup, which cannot be promised there, so
-    // the command refuses instead. The documented transcript is the POSIX one, and the docs say so.
+  test('the unchanged-document report is what the docs show', async () => {
+    // Run with --output, as the documented example is: an in-place run on this document would refuse,
+    // because a co-curator's signature still verifies over it and only they could make another.
     const dir = mkdtempSync(join(tmpdir(), 'ff1-doc-drift-'));
     try {
       const own = makeKey();
       const file = join(dir, 'unchanged.json');
       await writeSigned(file, { own, other: makeKey() }, false);
 
-      const actual = normalize(runSign(dir, 'unchanged.json', own));
+      const actual = normalize(runSign(dir, 'unchanged.json', own, 'out.json'));
       const documented = normalize(documentedBlock('still valid over this content'));
 
       assert.deepEqual(actual, documented);

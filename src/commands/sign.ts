@@ -68,25 +68,19 @@ export const signCommand = new Command('sign')
             if (stillValid.length > 0) {
               const noun = stillValid.length === 1 ? 'signature' : 'signatures';
               const it = stillValid.length === 1 ? 'it' : 'them';
-              // Name the file that actually holds them. "Keep a copy of the previous file" was advice
-              // the command had already made impossible on an in-place run: the only copy was gone by
-              // the time it was printed. The backup is written before the overwrite now, so this can
-              // point at something that exists.
-              //
-              // And it says who can read it. The backup does not reproduce the source's sharing — no
-              // portable ACL API exists, and mirroring was the wrong goal — so anyone who could read
-              // the original through a group or an ACL cannot read this copy. Someone handing it on as
-              // "the previous version" needs to know that before they do.
-              const where = result.backupPath
-                ? `  Backup written to ${result.backupPath} (owner-only; readable by you, not by the\n` +
-                  `  original's other readers). ${it.charAt(0).toUpperCase()}${it.slice(1)} ${
-                    stillValid.length === 1 ? 'is' : 'are'
-                  } still valid there.`
-                : result.inPlace
-                  ? `  Nothing invalidated ${it}; recover ${it} from your own copy of the previous file.`
-                  : `  Your input file is untouched, so ${it} ${
-                      stillValid.length === 1 ? 'remains' : 'remain'
-                    } valid there.`;
+              // Say where they still exist. Only two cases reach here: an --output run, where the
+              // input is untouched and holds them; or an in-place run whose still-valid entries are
+              // all this key's own in another role, which nobody else has to be asked for. An
+              // in-place run that would drop another key's still-valid signature never gets this far
+              // — it is refused, because that file is the only copy and its holder is the only one
+              // who could make another.
+              const where = result.inPlace
+                ? `  ${it.charAt(0).toUpperCase()}${it.slice(1)} ${
+                    stillValid.length === 1 ? 'was' : 'were'
+                  } made by your own key in another role; sign again to add back any you still want.`
+                : `  Your input file is untouched, so ${it} ${
+                    stillValid.length === 1 ? 'remains' : 'remain'
+                  } valid there.`;
               console.log(
                 chalk.yellow(
                   `  ${stillValid.length} other ${noun} still verified over this content and ` +

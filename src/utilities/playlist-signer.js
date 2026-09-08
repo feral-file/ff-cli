@@ -118,7 +118,6 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @returns {Object} [returns.playlist] - Signed playlist object
  * @returns {Array<Object>} [returns.dropped] - The stale entries that were discarded, classified
  * @returns {boolean} [returns.inPlace] - Whether the input file itself was overwritten
- * @returns {string|null} [returns.backupPath] - Where the pre-re-sign original was preserved, if it was
  * @returns {string} [returns.error] - Error message if failed
  */
 async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride, options) {
@@ -180,26 +179,32 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
 
     const output = outputPath || playlistPath;
     // Filesystem identity, not path equality: an --output pointing at a symlink or a hard link of the
-    // input is the same inode, and a string comparison calls it a different file — so no backup was
-    // written and the report claimed the input was untouched while the write went straight through it.
+    // input is the same inode, and a string comparison would call it a different file — letting the
+    // refusal below be sidestepped by a name while the write went straight through to the input.
     const inPlace = isSameFileForDirectWrite(output, playlistPath);
 
-    // Preserve the original BEFORE overwriting it, when overwriting is what destroys the only copy of
-    // a signature this run cannot reproduce.
+    // Refuse rather than overwrite a signature only its holder could reproduce.
     //
-    // The report tells the owner that a still-valid third-party signature was removed and that the
-    // previous file is the way to get it back. On an in-place run that advice arrived after the file
-    // was gone — the one case where the remedy was destroyed by the command giving it. Writing the
-    // backup first makes the sentence true.
+    // The invariant is simply that a still-valid endorsement from another key is never destroyed by an
+    // in-place run. An earlier version kept a copy instead, which sounds kinder and is much harder to
+    // get right: a copy has to reproduce the source's access, and it cannot — POSIX ACLs grant what
+    // mode bits do not describe, macOS extended ACLs ignore the mask entirely, and Windows mode bits
+    // constrain nothing. Every one of those is a way for the copy to disclose the document. Refusing
+    // makes the guarantee hold on every platform, assumes nothing about the filesystem, and leaves the
+    // operator with the file they already had.
     //
-    // Only for that case: a self signature is replaced by this run, an unverified one is not restorable
-    // from the old file either, and an --output run leaves the input untouched. A backup in those cases
-    // would be litter, and litter trains people to ignore the file that matters.
-    let backupPath = null;
-    if (inPlace && dropped.some((entry) => entry.kind !== 'replaced' && entry.verified)) {
-      // The bytes as read, not a re-serialization: the signatures cover the exact document, so a
-      // reformatted copy would not verify and would be a backup in name only.
-      backupPath = writeBackup(fs, playlistPath, playlistContent);
+    // Only for another key's signature. Your own entry is replaced by this run, an unverified one is
+    // not recoverable from the input either, and --output leaves the input where it is.
+    const unrecoverable = dropped.filter(
+      (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
+    );
+    if (inPlace && unrecoverable.length > 0) {
+      const count = unrecoverable.length;
+      throw new Error(
+        `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from other keys. ` +
+          'Write the result elsewhere so the original stays:\n' +
+          `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+      );
     }
 
     fs.writeFileSync(output, JSON.stringify(signedPlaylist, null, 2), 'utf-8');
@@ -211,7 +216,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       playlist: signedPlaylist,
       dropped,
       inPlace,
-      backupPath,
     };
   } catch (error) {
     return {
@@ -342,158 +346,6 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
   return dropped;
 }
 
-/**
- * Write the pre-re-sign backup: owner-only, durable, and never overwriting an existing one.
- *
- * The backup exists because `--replace-signatures` discards signatures this command cannot reproduce —
- * only their holders could — so the operator who ran it needs a copy to recover from.
- *
- * **It does not mirror the source's access, deliberately.** An earlier version reproduced mode and
- * ownership, which is close enough to look right and is not the same thing: a POSIX ACL can grant
- * access the mode bits do not describe, `open` can inherit a directory's default ACL, and widening to
- * the source's mode enables named ACL entries through the mask. The result was a copy readable by a
- * principal the original denied. Node exposes no portable ACL API, so reproducing sharing policy is not
- * something this can promise — and it was the wrong goal anyway. The backup is a recovery file for one
- * person, not a second copy of the document's sharing policy.
- *
- * So it fails closed: created 0600 and left there, owned by whoever ran the command. With no group or
- * other bits the POSIX ACL mask grants nothing, so an inherited default ACL cannot widen it either.
- * The operator gets their copy; nobody else gets a copy they did not have before.
- *
- * **Windows is a refusal rather than a weaker promise.** Mode bits do not constrain ACL inheritance
- * there, so a 0600 create is not a guarantee of anything — and the one thing worse than not writing the
- * backup is writing one that discloses the document while reporting that it is owner-only. `--output`
- * is the way through: it leaves the input untouched, so no backup is needed at all.
- *
- * **It never overwrites.** An existing `.before-resign.json` is somebody's only copy too — quite
- * possibly from the previous run of this command. `'wx'` claims the name atomically, so a collision
- * costs a retry rather than a file, and `existsSync`-then-write cannot lose one to a concurrent
- * creator.
- *
- * **It is durable before the source is touched.** Data and directory entry are both synced here, so a
- * crash between the two writes cannot leave the backup unwritten and the source already overwritten.
- *
- * The path is resolved with `realpath` first, so the copy lands beside the file the bytes live in
- * rather than beside a symlink used to reach it — otherwise the backup can sit in a directory other
- * people can write to, where it can be removed before it has served its purpose.
- *
- * @param {Object} fs - Node fs module (injectable for tests)
- * @param {string} playlistPath - Path of the file about to be overwritten
- * @param {string} contents - Exact bytes to preserve
- * @param {{platform?: string}} [options] - Platform override, for tests
- * @returns {string} The path written
- * @throws {Error} On Windows, or when the source path cannot be resolved
- */
-function writeBackup(fs, playlistPath, contents, options) {
-  const path = require('path');
-  const platform = (options && options.platform) || process.platform;
-
-  if (platform === 'win32') {
-    throw new Error(
-      'Replacing signatures in place would discard a signature from another key that is still valid, ' +
-        'and the copy this would keep cannot be made owner-only on Windows — mode bits do not ' +
-        'constrain ACL inheritance there, so the backup could be readable by principals the original ' +
-        'is not. Refusing rather than writing a copy that discloses the document. Use --output to ' +
-        'write the signed playlist elsewhere, which leaves the input — and the signatures on it — ' +
-        'untouched.'
-    );
-  }
-
-  // Put the backup beside the file the bytes actually live in, not beside the name used to reach it.
-  //
-  // An in-place sign through a symlink writes to the target, so deriving the backup path from the link
-  // leaves the copy in the link's directory — which may be writable by people the target's directory is
-  // not. Anyone with write access there could delete or swap the finished backup in the window before
-  // the source is overwritten, defeating it precisely when it is the only remaining copy.
-  let target;
-  try {
-    target = fs.realpathSync(playlistPath);
-  } catch (error) {
-    throw new Error(
-      `Cannot resolve ${playlistPath} (${error.message}), so this re-sign cannot tell where to keep a ` +
-        'copy of the signatures it would discard. Refusing to replace it in place. Use --output to ' +
-        'write the signed playlist elsewhere, which leaves the input — and the signatures on it — ' +
-        'untouched.'
-    );
-  }
-
-  for (let attempt = 1; attempt < 1000; attempt += 1) {
-    const candidate =
-      attempt === 1 ? `${target}.before-resign.json` : `${target}.before-resign.${attempt}.json`;
-
-    let fd;
-    try {
-      // 0600, and it stays there. Nothing widens it afterwards: the mode is the whole access promise,
-      // and it also keeps the ACL mask empty so an inherited default ACL grants nobody anything.
-      fd = fs.openSync(candidate, 'wx', 0o600);
-    } catch (error) {
-      if (error && error.code === 'EEXIST') {
-        continue;
-      }
-      throw error;
-    }
-
-    let settled = false;
-    try {
-      fs.writeFileSync(fd, contents, 'utf-8');
-      // Durability before the source is truncated, not after. Without this a crash in the window
-      // between the two writes loses the backup AND the original — the one outcome the backup exists
-      // to make impossible.
-      fs.fsyncSync(fd);
-      settled = true;
-    } finally {
-      fs.closeSync(fd);
-      if (!settled) {
-        // A partial backup is worse than none: it looks like a safe copy.
-        try {
-          fs.rmSync(candidate, { force: true });
-        } catch {
-          // Nothing further to try; the error being thrown is the one that matters.
-        }
-      }
-    }
-
-    syncDirectoryEntry(fs, path.dirname(candidate));
-    return candidate;
-  }
-
-  throw new Error(
-    `Could not reserve a backup path next to ${target}: too many .before-resign files already ` +
-      'exist. Move or delete some, or sign with --output to leave the input untouched.'
-  );
-}
-
-/**
- * syncDirectoryEntry flushes a directory so a newly created name survives power loss.
- *
- * Best-effort by design, as in `enrich`: directory fsync is not portable — Windows rejects it outright
- * — and a durability barrier that cannot be raised is not a reason to fail a write that has already
- * succeeded. The data itself was synced first, so the worst case is the name missing after a crash,
- * not a truncated backup.
- *
- * @param {Object} fs - Node fs module
- * @param {string} directory - Directory holding the new entry
- */
-function syncDirectoryEntry(fs, directory) {
-  let fd;
-  try {
-    fd = fs.openSync(directory, 'r');
-  } catch {
-    return;
-  }
-  try {
-    fs.fsyncSync(fd);
-  } catch {
-    // Not portable; see above.
-  } finally {
-    try {
-      fs.closeSync(fd);
-    } catch {
-      // Nothing to do.
-    }
-  }
-}
-
 module.exports = {
   signPlaylist,
   verifyPlaylist,
@@ -502,9 +354,6 @@ module.exports = {
   // material as a playlist, so it must accept the same encodings and raise the same guidance when the
   // key is malformed. Duplicating the normalizer there would let the two paths drift.
   normalizeSigningKeyToBase64Pkcs8,
-  // Exported for tests: the backup's guarantees (never overwrite, exclusive create, source mode) are
-  // the point of it, and they are far easier to pin directly than through a signing run.
-  writeBackup,
 };
 
 function resolvePlaylistSigningRole(role) {

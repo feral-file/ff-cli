@@ -14,16 +14,11 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import {
-  chmodSync,
-  existsSync,
-  linkSync,
   mkdtempSync,
   readFileSync,
-  rmSync,
-  statSync,
-  mkdirSync,
+  readdirSync,
   realpathSync,
-  symlinkSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,13 +37,6 @@ const projectRoot = resolve(__dirname, '..');
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim limitations in spawnSync.
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
-const isWindows = process.platform === 'win32';
-
-/** Escape a filesystem path for use inside a RegExp; Windows separators and dots are metacharacters. */
-function escapeForRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 /**
  * A temp directory, resolved.
  *
@@ -135,33 +123,6 @@ async function startFeed(stored: Record<string, unknown>): Promise<{
     recorded,
     close: () => server.close(),
   };
-}
-
-/**
- * On Windows an in-place `--replace-signatures` that would discard a still-valid third-party signature
- * refuses by design: mode bits do not constrain ACL inheritance there, so the backup cannot be promised
- * owner-only, and writing one anyway would disclose the document while reporting that it is private.
- *
- * These tests assert the POSIX behaviour everywhere it exists and the refusal where it does not, rather
- * than skipping — the refusal is a designed outcome and deserves coverage of its own.
- *
- * @param result - The spawned command's result
- * @param backupPath - Where a backup would have gone
- * @param sourcePath - The input, which must be left alone
- * @param originalBytes - What the input held before the run
- */
-function assertWindowsRefusal(
-  result: { status: number | null; stdout?: string | null; stderr?: string | null },
-  backupPath: string,
-  sourcePath: string,
-  originalBytes: string
-): void {
-  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-  assert.notEqual(result.status, 0, `the in-place run must refuse on Windows:\n${output}`);
-  assert.match(output, /owner-only on Windows/);
-  assert.match(output, /--output/);
-  assert.equal(existsSync(backupPath), false, 'no backup may be written when the run refuses');
-  assert.equal(readFileSync(sourcePath, 'utf-8'), originalBytes, 'the input must be untouched');
 }
 
 describe('edit a published playlist, re-sign, replace', () => {
@@ -397,11 +358,14 @@ describe('edit a published playlist, re-sign, replace', () => {
     }
   });
 
-  test('an unchanged document reports removal, not loss', async () => {
-    // The DP-1 signing payload excludes `signature`/`signatures`, so re-signing a document nobody
-    // edited leaves every existing entry perfectly valid over the same bytes. Reporting those as void
-    // and telling the owner to go ask their co-curators again would send them chasing signatures that
-    // are still sitting in the previous file.
+  test("an in-place run refuses to discard another key's still-valid signature", async () => {
+    // The invariant: a still-valid endorsement from another key is never destroyed by an in-place run.
+    // Only its holder could make another, so overwriting it costs something the command cannot restore.
+    //
+    // An earlier version kept a copy of the input instead. That sounds kinder and is much harder to get
+    // right — a copy has to reproduce the source's access and cannot, because POSIX ACLs grant what
+    // mode bits do not describe, macOS extended ACLs ignore the mask, and Windows mode bits constrain
+    // nothing. Refusing needs no filesystem assumptions at all, so it holds everywhere.
     const dir = makeTempDir();
     const keyA = makePrivateKeyBase64();
     const keyB = makePrivateKeyBase64();
@@ -417,10 +381,11 @@ describe('edit a published playlist, re-sign, replace', () => {
       };
       const sigA = await signPlaylist(document, keyA, 'curator');
       const sigB = await signPlaylist(document, keyB, 'curator');
-      const path = join(dir, 'unchanged.json');
-      // Written exactly as signed: no edit at all.
+      const path = join(dir, 'co-signed.json');
+      // Written exactly as signed: B's signature still verifies over this content.
       const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
       writeFileSync(path, originalBytes, 'utf-8');
+      const before = readdirSync(dir).sort();
 
       const result = spawnSync(
         process.execPath,
@@ -428,10 +393,144 @@ describe('edit a published playlist, re-sign, replace', () => {
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
 
-      if (isWindows) {
-        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
-        return;
-      }
+      assert.notEqual(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+      assert.match(output, /would discard 1 still-valid signature from other keys/);
+      // The remedy has to be a command that works, not a description of the problem.
+      assert.match(output, /--replace-signatures --output <new file>/);
+
+      // Nothing moved: the input is byte-identical and no file was created beside it.
+      assert.equal(readFileSync(path, 'utf-8'), originalBytes);
+      assert.deepEqual(readdirSync(dir).sort(), before);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an in-place run proceeds when only your own signature would go', async () => {
+    // The refusal is about what cannot be restored. Your own entry can be: sign again. So a role change
+    // on your own key — a still-valid entry, dropped, and nobody else to ask — proceeds in place.
+    // Refusing here would make the rule about signature counts rather than about recoverability.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }] };
+      const curatorSig = await signPlaylist(document, keyA, 'curator');
+      const path = join(dir, 'role-change.json');
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, signatures: [curatorSig] }, null, 2),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'agent', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(
+        out,
+        /your signature in another role \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed/
+      );
+      // The report says who can restore it, and it is the person reading.
+      assert.match(out, /made by your own key in another role; sign again/);
+      assert.doesNotMatch(out, /would discard/);
+
+      // The written document really did lose its curator entry — the state that fails a publish.
+      const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as {
+        signatures: Array<{ role: string }>;
+      };
+      assert.deepEqual(
+        onDisk.signatures.map((entry) => entry.role),
+        ['agent']
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an in-place run proceeds when the entries that would go do not verify', async () => {
+    // Nothing recoverable is lost: an entry that does not verify against this document cannot be put
+    // back from the input either, so the input is worth no more than the result.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'edited.json');
+      // Edited after signing, so neither entry verifies any more.
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, title: 'Edited', signatures: [sigA, sigB] }, null, 2),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      assert.doesNotMatch(`${result.stdout ?? ''}`, /would discard/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--output to a different file proceeds and leaves the input alone', async () => {
+    // The way through. The discard report is unchanged; only the input's fate differs.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'co-signed.json');
+      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
+      writeFileSync(path, originalBytes, 'utf-8');
+
+      const result = spawnSync(
+        process.execPath,
+        [
+          tsxCli,
+          cliEntry,
+          'sign',
+          path,
+          '-r',
+          'curator',
+          '-k',
+          keyA,
+          '--replace-signatures',
+          '-o',
+          join(dir, 'out.json'),
+        ],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
@@ -439,13 +538,14 @@ describe('edit a published playlist, re-sign, replace', () => {
         out,
         /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; still valid/
       );
-      assert.match(out, /still verified over this content and was removed anyway/);
-      // The previous document is preserved before the overwrite, so the report names a real file
-      // rather than advising a copy the command has already destroyed.
-      assert.match(out, /Backup written to .*before-resign\.json \(owner-only/);
-      // Nothing was invalidated, so no one may be told to sign again.
-      assert.doesNotMatch(out, /void/i);
-      assert.doesNotMatch(out, /could not be verified/);
+      assert.match(out, /Your input file is untouched/);
+
+      // The input still holds both signatures; the new file holds one.
+      assert.equal(readFileSync(path, 'utf-8'), originalBytes);
+      const written = JSON.parse(readFileSync(join(dir, 'out.json'), 'utf-8')) as {
+        signatures: unknown[];
+      };
+      assert.equal(written.signatures.length, 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -618,418 +718,6 @@ describe('edit a published playlist, re-sign, replace', () => {
       // It carries no key, so it must not be counted among entries that failed verification.
       assert.doesNotMatch(out, /could not be verified against this document/);
       assert.doesNotMatch(out, /void/i);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('an in-place re-sign preserves the original before overwriting it', async () => {
-    // The report says a still-valid third-party signature was removed and the previous file is how to
-    // get it back. On an in-place run that file was already gone by the time the sentence printed —
-    // the command destroyed the remedy it was recommending. The backup is written first now.
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-    const keyB = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = {
-        ...base,
-        curators: [
-          { name: 'A', key: playlistSigningDidKey(keyA) },
-          { name: 'B', key: playlistSigningDidKey(keyB) },
-        ],
-      };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const sigB = await signPlaylist(document, keyB, 'curator');
-      const path = join(dir, 'unchanged.json');
-      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
-      writeFileSync(path, originalBytes, 'utf-8');
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-      if (isWindows) {
-        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
-        return;
-      }
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-
-      const backup = `${path}.before-resign.json`;
-      // Byte-for-byte: the signatures cover the exact document, so a reformatted copy would be a
-      // backup in name only — B's signature would not verify against it.
-      assert.equal(readFileSync(backup, 'utf-8'), originalBytes);
-      // And the report points at the file that exists, not at a copy the operator was meant to have.
-      assert.match(
-        `${result.stdout ?? ''}`,
-        new RegExp(`Backup written to ${backup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
-      );
-      assert.doesNotMatch(`${result.stdout ?? ''}`, /Keep a copy of the previous file/);
-
-      // A second run must not clobber the first backup — that is somebody's only copy too.
-      const second = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-      // The second run drops only the signer's own entry, so it needs no backup at all.
-      assert.equal(second.status, 0, `${second.stdout ?? ''}${second.stderr ?? ''}`);
-      assert.equal(readFileSync(backup, 'utf-8'), originalBytes, 'the first backup must survive');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('numbers the backup rather than overwriting an existing one', async () => {
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-    const keyB = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = {
-        ...base,
-        curators: [
-          { name: 'A', key: playlistSigningDidKey(keyA) },
-          { name: 'B', key: playlistSigningDidKey(keyB) },
-        ],
-      };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const sigB = await signPlaylist(document, keyB, 'curator');
-      const path = join(dir, 'p.json');
-      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
-      writeFileSync(path, originalBytes, 'utf-8');
-      // Something already occupies the first backup name — quite possibly an earlier run's only copy.
-      writeFileSync(`${path}.before-resign.json`, 'PRECIOUS', 'utf-8');
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      if (isWindows) {
-        // The refusal must leave the pre-existing backup alone too, and add nothing beside it.
-        const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
-        assert.notEqual(result.status, 0, output);
-        assert.match(output, /owner-only on Windows/);
-        assert.match(output, /--output/);
-        assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), 'PRECIOUS');
-        assert.equal(existsSync(`${path}.before-resign.2.json`), false);
-        assert.equal(readFileSync(path, 'utf-8'), originalBytes);
-        return;
-      }
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), 'PRECIOUS');
-      assert.equal(readFileSync(`${path}.before-resign.2.json`, 'utf-8'), originalBytes);
-      assert.match(`${result.stdout ?? ''}`, /before-resign\.2\.json/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('writes no backup when nothing restorable is discarded', async () => {
-    // Only the signer's own entry goes. It is replaced by this very run, so a backup would be litter —
-    // and litter trains people to ignore the file that matters.
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = { ...base, curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }] };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const path = join(dir, 'self-only.json');
-      writeFileSync(path, JSON.stringify({ ...document, signatures: [sigA] }, null, 2), 'utf-8');
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      assert.equal(existsSync(`${path}.before-resign.json`), false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  for (const linkKind of ['symlink', 'hard link'] as const) {
-    test(`treats an --output that is a ${linkKind} of the input as in place`, async () => {
-      // The write follows the link to the input's inode either way. Deciding by path string called it
-      // a different file, so no backup was written AND the report said the input was untouched — the
-      // one combination that loses the signature silently while claiming it did not.
-      const dir = makeTempDir();
-      const keyA = makePrivateKeyBase64();
-      const keyB = makePrivateKeyBase64();
-
-      try {
-        const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-        const document = {
-          ...base,
-          curators: [
-            { name: 'A', key: playlistSigningDidKey(keyA) },
-            { name: 'B', key: playlistSigningDidKey(keyB) },
-          ],
-        };
-        const sigA = await signPlaylist(document, keyA, 'curator');
-        const sigB = await signPlaylist(document, keyB, 'curator');
-        const path = join(dir, 'input.json');
-        const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
-        writeFileSync(path, originalBytes, 'utf-8');
-
-        const alias = join(dir, 'alias.json');
-        if (linkKind === 'symlink') {
-          symlinkSync(path, alias);
-        } else {
-          linkSync(path, alias);
-        }
-
-        const result = spawnSync(
-          process.execPath,
-          [
-            tsxCli,
-            cliEntry,
-            'sign',
-            path,
-            '-r',
-            'curator',
-            '-k',
-            keyA,
-            '--replace-signatures',
-            '-o',
-            alias,
-          ],
-          { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-        );
-
-        if (isWindows) {
-          assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
-          return;
-        }
-
-        assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-        const out = `${result.stdout ?? ''}`;
-        // The original must have been preserved before the write went through the link.
-        assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), originalBytes);
-        assert.match(out, /Backup written to .*before-resign\.json \(owner-only/);
-        // And it must not claim the input survived, because it did not.
-        assert.doesNotMatch(out, /input file is untouched/);
-        // The input really was overwritten through the alias.
-        assert.notEqual(readFileSync(path, 'utf-8'), originalBytes);
-      } finally {
-        rmSync(dir, { recursive: true, force: true });
-      }
-    });
-  }
-
-  test('writes no backup when --output leaves the input untouched', async () => {
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-    const keyB = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = {
-        ...base,
-        curators: [
-          { name: 'A', key: playlistSigningDidKey(keyA) },
-          { name: 'B', key: playlistSigningDidKey(keyB) },
-        ],
-      };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const sigB = await signPlaylist(document, keyB, 'curator');
-      const path = join(dir, 'input.json');
-      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
-      writeFileSync(path, originalBytes, 'utf-8');
-
-      const result = spawnSync(
-        process.execPath,
-        [
-          tsxCli,
-          cliEntry,
-          'sign',
-          path,
-          '-r',
-          'curator',
-          '-k',
-          keyA,
-          '--replace-signatures',
-          '-o',
-          join(dir, 'out.json'),
-        ],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      assert.equal(existsSync(`${path}.before-resign.json`), false, 'no backup is needed');
-      // The input is the backup, so the report says so rather than naming a file it did not write.
-      assert.equal(readFileSync(path, 'utf-8'), originalBytes);
-      assert.match(`${result.stdout ?? ''}`, /input file is untouched/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('a role change on the signing key is a loss, not a replacement', async () => {
-    // Matching on the key alone quietly produced unpublishable documents: re-signing as `agent` with a
-    // key that had signed as `curator` dropped the curator entry, called it "replaced", and left it out
-    // of the backup — and the result then fails the publisher's declared-curator preflight with nothing
-    // on disk to recover from. Ownership lives in the role as much as in the key.
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = { ...base, curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }] };
-      const curatorSig = await signPlaylist(document, keyA, 'curator');
-      const path = join(dir, 'role-change.json');
-      const originalBytes = JSON.stringify({ ...document, signatures: [curatorSig] }, null, 2);
-      writeFileSync(path, originalBytes, 'utf-8');
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'agent', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      if (isWindows) {
-        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
-        return;
-      }
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      const out = `${result.stdout ?? ''}`;
-      // Reported as removed, and as this key's own — not as another key's, and not as replaced.
-      assert.match(
-        out,
-        /your signature in another role \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed/
-      );
-      assert.doesNotMatch(out, /replaced by this signing/);
-
-      // It counts toward the backup trigger like any other loss, so the curator signature survives.
-      const backup = `${path}.before-resign.json`;
-      assert.equal(readFileSync(backup, 'utf-8'), originalBytes);
-
-      // And the written document really has lost its curator entry — the state that fails a publish.
-      const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as {
-        signatures: Array<{ role: string }>;
-      };
-      assert.deepEqual(
-        onDisk.signatures.map((entry) => entry.role),
-        ['agent']
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('the backup carries the source file permissions', { skip: isWindows }, async () => {
-    // Skipped on Windows, where POSIX mode bits are not meaningful and chmod only moves the write bit.
-    //
-    // A playlist at 0600 is restricted deliberately. A backup of it at 0644 under the usual umask
-    // publishes the document, and its signing history, to every local user — a disclosure created by
-    // the command that was trying to protect them.
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-    const keyB = makePrivateKeyBase64();
-
-    try {
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = {
-        ...base,
-        curators: [
-          { name: 'A', key: playlistSigningDidKey(keyA) },
-          { name: 'B', key: playlistSigningDidKey(keyB) },
-        ],
-      };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const sigB = await signPlaylist(document, keyB, 'curator');
-      const path = join(dir, 'private.json');
-      writeFileSync(
-        path,
-        JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2),
-        'utf-8'
-      );
-      chmodSync(path, 0o600);
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      const mode = statSync(`${path}.before-resign.json`).mode & 0o777;
-      assert.equal(
-        mode,
-        0o600,
-        `backup must not widen access; got 0${mode.toString(8)} (umask would give 0644)`
-      );
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('signing through an input symlink backs up beside the target, not the link', async () => {
-    // The command follows the link and writes to the target, so the backup has to live where the bytes
-    // do. Beside the link it can sit in a directory other people may write to, and the only remaining
-    // copy of a discarded signature can be removed there before the source is even overwritten.
-    const dir = makeTempDir();
-    const keyA = makePrivateKeyBase64();
-    const keyB = makePrivateKeyBase64();
-
-    try {
-      const targetDir = join(dir, 'private');
-      const linkDir = join(dir, 'shared');
-      mkdirSync(targetDir);
-      mkdirSync(linkDir);
-
-      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
-      const document = {
-        ...base,
-        curators: [
-          { name: 'A', key: playlistSigningDidKey(keyA) },
-          { name: 'B', key: playlistSigningDidKey(keyB) },
-        ],
-      };
-      const sigA = await signPlaylist(document, keyA, 'curator');
-      const sigB = await signPlaylist(document, keyB, 'curator');
-      const target = join(targetDir, 'playlist.json');
-      const link = join(linkDir, 'playlist.json');
-      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
-      writeFileSync(target, originalBytes, 'utf-8');
-      symlinkSync(target, link);
-
-      const result = spawnSync(
-        process.execPath,
-        [tsxCli, cliEntry, 'sign', link, '-r', 'curator', '-k', keyA, '--replace-signatures'],
-        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
-      );
-
-      if (isWindows) {
-        assertWindowsRefusal(result, `${target}.before-resign.json`, target, originalBytes);
-        return;
-      }
-
-      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
-      const out = `${result.stdout ?? ''}`;
-
-      // The copy is beside the real file...
-      assert.equal(readFileSync(`${target}.before-resign.json`, 'utf-8'), originalBytes);
-      // ...and nothing was left in the link's directory.
-      assert.equal(existsSync(`${link}.before-resign.json`), false);
-      // The report names the path that actually holds it, or the advice sends people to an empty dir.
-      assert.match(
-        out,
-        new RegExp(`Backup written to ${escapeForRegExp(`${target}.before-resign.json`)}`)
-      );
-      // The signing really did write through the link to the target.
-      assert.notEqual(readFileSync(target, 'utf-8'), originalBytes);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

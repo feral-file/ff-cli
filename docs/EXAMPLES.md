@@ -653,48 +653,48 @@ multi-signature verifier has nothing to check it with:
   A legacy flat signature carries no kid or role, so nothing here can judge it.
 ```
 
-Running the flag on a document you have **not** edited is a different report, because nothing was
+Running the flag on a document you have **not** edited is a different situation, because nothing was
 invalidated — the signing payload excludes `signatures`, so the discarded entries still cover the
-content:
+content. **If any of them belongs to another key, an in-place run refuses:**
 
 ```
+$ ff-cli sign playlist.json -r curator --replace-signatures
+
+Sign playlist
+
+Sign failed: This would discard 1 still-valid signature from other keys. Write the result elsewhere so the original stays:
+    ff-cli sign playlist.json -r curator --replace-signatures --output <new file>
+```
+
+Only its holder could make that signature again, so overwriting the one file that carries it costs
+something this command cannot restore. Writing elsewhere keeps the original exactly where it is:
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures -o out.json
+
+Sign playlist
+
+✓ Playlist signed and saved to: /path/to/out.json
+
 Playlist signed
   Replaced 2 existing signatures:
-    - your own earlier signature (curator, ...WtZqrYoR) — replaced by this signing
-    - another key's signature (curator, ...Bmdh71FR) — removed; still valid over this content
+    - your own earlier signature (curator, ...XppfYVjB) — replaced by this signing
+    - another key's signature (curator, ...UNFmeU8D) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
-  Backup written to /path/to/playlist.json.before-resign.json (owner-only; readable by you, not by the
-  original's other readers). It is still valid there.
+  Your input file is untouched, so it remains valid there.
   A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
 
-**When a run would drop another key's still-valid signature and `sign` is writing over its own input,
-the original is preserved first**, at `<file>.before-resign.json` — beside the file the bytes actually
-live in, so signing through a symlink puts the copy next to the target rather than next to the link. The
-report prints the full path for that reason: it may not be the directory you named.
+The refusal is narrow: it is about what cannot be recovered, not about how many signatures go. An
+in-place run still proceeds when the only entries dropped are **your own** — sign again to add any of
+them back — or ones that **no longer verify**, which the input could not restore either.
 
-**That backup is owner-only, and does not reproduce who could read the original.** It is created `0600`
-and stays there. Node exposes no portable ACL API, so a copy cannot be made to carry the source's
-sharing policy — and an earlier version that reproduced mode and ownership produced exactly the failure
-that sounds impossible: a POSIX ACL grants access the mode bits do not describe, and widening a new file
-to the source's mode enables named ACL entries through the mask, so the copy became readable by a
-principal the original denied. Mirroring is also the wrong goal. The backup is a recovery file for the
-person who ran the command, not a second copy of the document's sharing. If someone else could read the
-original through a group or an ACL, they cannot read this, so do not hand it on as "the previous
-version" without checking that.
-
-On **Windows** the same run refuses rather than making a promise it cannot keep: mode bits do not
-constrain ACL inheritance there, so a `0600` create guarantees nothing. Use `-o, --output`, which leaves
-the input untouched and needs no backup at all. The transcript below is therefore the POSIX one; on
-Windows that command exits non-zero with the refusal instead. That signature cannot be reproduced
-by this command — only its holder could — so the file that still carries it has to outlive the run.
-An existing `.before-resign.json` is never overwritten (it is somebody's only copy too); later runs are
-numbered `.before-resign.2.json` and so on.
-
-No backup is written when there is nothing to preserve: when the only entries dropped are your own or
-ones that no longer verify, and when `-o, --output` writes elsewhere — there the input file is untouched
-and is itself the copy, which the report says instead of naming a file it did not write.
+The rule holds on every platform and assumes nothing about the filesystem. An earlier version kept a
+copy of the input instead; that requires reproducing the source's access, which is not portable — POSIX
+ACLs grant what mode bits do not describe, macOS extended ACLs are not constrained by the mask, and
+Windows mode bits constrain nothing — so every implementation of it was a way for the copy to disclose
+the document. Refusing needs none of that.
 
 Appending stays the default, because it is right whenever the content has not changed — a second curator
 co-signing an unedited playlist keeps the first endorsement, and the payload hash excludes `signatures`
