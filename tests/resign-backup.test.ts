@@ -13,7 +13,17 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import fs from 'node:fs';
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -260,17 +270,152 @@ describe('writeBackup', () => {
     }
   });
 
-  test('refuses when the source cannot be stat-ed, rather than writing a default-mode copy', () => {
-    // With no mode and no ownership to reproduce, the only alternative is a world-readable copy of a
-    // document that may have been deliberately restricted — the exact disclosure this guards against.
-    // Refusing costs the operator a flag; the fallback would cost them the restriction.
+  test('creates the backup private, fixes ownership, then widens to the source mode', () => {
+    // Order is the whole protection. Creating at a group-readable mode makes the file reachable by that
+    // group BEFORE its ownership is corrected, and a descriptor opened in that window still reads the
+    // bytes once they arrive — so the permissions must widen only after the owner is right, and before
+    // anything is written.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+      chmodSync(file, 0o640);
+      const source = statSync(file);
+
+      const events: string[] = [];
+      let openMode: number | undefined;
+      const recording = {
+        ...fs,
+        openSync: (p: string, flags: string, mode?: number) => {
+          if (String(p).includes('before-resign')) {
+            openMode = mode;
+            events.push('open');
+          }
+          return fs.openSync(p, flags as never, mode);
+        },
+        fchownSync: (fd: number, uid: number, gid: number) => {
+          events.push('fchown');
+          return fs.fchownSync(fd, uid, gid);
+        },
+        fchmodSync: (fd: number, mode: number) => {
+          events.push(`fchmod:${mode.toString(8)}`);
+          return fs.fchmodSync(fd, mode);
+        },
+        writeFileSync: (target: unknown, contents: string, encoding?: unknown) => {
+          if (typeof target === 'number') {
+            events.push('write');
+          }
+          return fs.writeFileSync(target as never, contents, encoding as never);
+        },
+      };
+
+      // An identity that differs from the file's owner, so the chown step is taken on any platform.
+      const written = writeBackup(recording, file, '{}', {
+        uid: source.uid + 1,
+        gid: source.gid + 1,
+      });
+
+      // The window between create and chown must never be wider than the owner.
+      assert.equal(
+        openMode,
+        0o600,
+        `backup must be created private, not at the source mode; got 0${(openMode ?? 0).toString(8)}`
+      );
+      assert.deepEqual(events, ['open', 'fchown', 'fchmod:640', 'write']);
+      // And the finished file still carries the source's permissions.
+      assert.equal(statSync(written).mode & 0o777, 0o640);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('opens at 0600 whatever the source mode is', () => {
+    // The create mode is a constant, not a function of the source: a 0666 source must not produce a
+    // world-writable file for the length of the write either.
+    for (const sourceMode of [0o600, 0o640, 0o644, 0o666]) {
+      const dir = makeTempDir();
+      try {
+        const file = join(dir, 'playlist.json');
+        writeFileSync(file, '{}', 'utf-8');
+        chmodSync(file, sourceMode);
+
+        let openMode: number | undefined;
+        const recording = {
+          ...fs,
+          openSync: (p: string, flags: string, mode?: number) => {
+            if (String(p).includes('before-resign')) {
+              openMode = mode;
+            }
+            return fs.openSync(p, flags as never, mode);
+          },
+        };
+
+        const written = writeBackup(recording, file, '{}');
+
+        assert.equal(openMode, 0o600, `source 0${sourceMode.toString(8)} must still open at 0600`);
+        assert.equal(statSync(written).mode & 0o777, sourceMode);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  test('puts the backup beside the real file, not beside a symlink used to reach it', () => {
+    // An in-place sign through a symlink writes to the target. Deriving the backup path from the link
+    // leaves the only remaining copy in the link's directory — which may be writable by people the
+    // target's directory is not, and they can remove or replace it in the window before the source is
+    // overwritten.
+    const dir = makeTempDir();
+    try {
+      const targetDir = join(dir, 'private');
+      const linkDir = join(dir, 'shared');
+      mkdirSync(targetDir);
+      mkdirSync(linkDir);
+      const target = join(targetDir, 'playlist.json');
+      const link = join(linkDir, 'playlist.json');
+      writeFileSync(target, '{}', 'utf-8');
+      symlinkSync(target, link);
+
+      const written = writeBackup(fs, link, '{}');
+
+      assert.equal(written, `${target}.before-resign.json`);
+      assert.equal(existsSync(`${link}.before-resign.json`), false, 'nothing beside the link');
+      assert.equal(readFileSync(written, 'utf-8'), '{}');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses when the source cannot be resolved', () => {
+    // No path, nowhere to put the copy, and nothing to reproduce. Refusing costs the operator a flag;
+    // guessing would cost them the restriction on their document.
     const dir = makeTempDir();
     try {
       const file = join(dir, 'gone.json');
+      assert.throws(() => writeBackup(fs, file, 'CONTENT'), /Cannot resolve[\s\S]*--output/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses when the source cannot be stat-ed, rather than writing a default-mode copy', () => {
+    // With no mode and no ownership to reproduce, the only alternative is a world-readable copy of a
+    // document that may have been deliberately restricted — the exact disclosure this guards against.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+      const unstattable = {
+        ...fs,
+        statSync: () => {
+          throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
+        },
+      };
       assert.throws(
-        () => writeBackup(fs, file, 'CONTENT'),
+        () => writeBackup(unstattable, file, '{}'),
         /Cannot read the permissions[\s\S]*--output/
       );
+      assert.equal(existsSync(`${file}.before-resign.json`), false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

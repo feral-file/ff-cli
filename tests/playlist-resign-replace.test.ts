@@ -21,6 +21,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  mkdirSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -41,6 +42,11 @@ const projectRoot = resolve(__dirname, '..');
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
 const isWindows = process.platform === 'win32';
+
+/** Escape a filesystem path for use inside a RegExp; Windows separators and dots are metacharacters. */
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'ff1-resign-'));
@@ -899,6 +905,58 @@ describe('edit a published playlist, re-sign, replace', () => {
         0o600,
         `backup must not widen access; got 0${mode.toString(8)} (umask would give 0644)`
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('signing through an input symlink backs up beside the target, not the link', async () => {
+    // The command follows the link and writes to the target, so the backup has to live where the bytes
+    // do. Beside the link it can sit in a directory other people may write to, and the only remaining
+    // copy of a discarded signature can be removed there before the source is even overwritten.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const targetDir = join(dir, 'private');
+      const linkDir = join(dir, 'shared');
+      mkdirSync(targetDir);
+      mkdirSync(linkDir);
+
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const target = join(targetDir, 'playlist.json');
+      const link = join(linkDir, 'playlist.json');
+      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
+      writeFileSync(target, originalBytes, 'utf-8');
+      symlinkSync(target, link);
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', link, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+
+      // The copy is beside the real file...
+      assert.equal(readFileSync(`${target}.before-resign.json`, 'utf-8'), originalBytes);
+      // ...and nothing was left in the link's directory.
+      assert.equal(existsSync(`${link}.before-resign.json`), false);
+      // The report names the path that actually holds it, or the advice sends people to an empty dir.
+      assert.match(out, new RegExp(`saved at ${escapeForRegExp(`${target}.before-resign.json`)}`));
+      // The signing really did write through the link to the target.
+      assert.notEqual(readFileSync(target, 'utf-8'), originalBytes);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

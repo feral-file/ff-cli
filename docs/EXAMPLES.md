@@ -663,13 +663,15 @@ Playlist signed
     - your own earlier signature (curator, ...WtZqrYoR) — replaced by this signing
     - another key's signature (curator, ...Bmdh71FR) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
-  The document as it was is saved at unchanged.json.before-resign.json — it is still valid there.
+  The document as it was is saved at /path/to/playlist.json.before-resign.json — it is still valid there.
   A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
 
 **When a run would drop another key's still-valid signature and `sign` is writing over its own input,
-the original is preserved first**, at `<file>.before-resign.json`. That signature cannot be reproduced
+the original is preserved first**, at `<file>.before-resign.json` — beside the file the bytes actually
+live in, so signing through a symlink puts the copy next to the target rather than next to the link. The
+report prints the full path for that reason: it may not be the directory you named. That signature cannot be reproduced
 by this command — only its holder could — so the file that still carries it has to outlive the run.
 An existing `.before-resign.json` is never overwritten (it is somebody's only copy too); later runs are
 numbered `.before-resign.2.json` and so on.

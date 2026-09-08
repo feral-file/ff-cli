@@ -355,9 +355,11 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
  * costs a retry rather than a file, and `existsSync`-then-write cannot lose one to a concurrent
  * creator.
  *
- * **It carries the source's mode**, applied at create time rather than chmod'ed afterwards so no window
- * exists where the bytes sit at wider permissions. `fchmod` follows because `open` filters the mode
- * through umask and `fchmod` does not.
+ * **It carries the source's mode**, but only once the file is private and correctly owned. It is
+ * created at 0600 — never at the source's mode — then chowned, then chmoded, and only then written. A
+ * file created directly at a group-readable mode is reachable by that group before its ownership is
+ * fixed, and a descriptor opened in that window still reads the bytes once they arrive. `fchmod` rather
+ * than the open mode does the widening because `open` filters through umask and `fchmod` does not.
  *
  * **It carries the source's ownership.** A new file takes this process's uid and gid, so a
  * `0640 alice:curators` playlist re-signed by someone whose primary group differs becomes
@@ -368,7 +370,11 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
  * **It is durable before the source is touched.** Data and directory entry are both synced here, so a
  * crash between the two writes cannot leave the backup unwritten and the source already overwritten.
  *
- * A source that cannot be stat-ed is a refusal for the same reason: with no mode and no ownership to
+ * The path is resolved with `realpath` first, so the copy lands beside the file the bytes live in
+ * rather than beside a symlink used to reach it — otherwise the backup can sit in a directory other
+ * people can write to, where it can be removed before it has served its purpose.
+ *
+ * A source that cannot be resolved or stat-ed is a refusal for the same reason: with no mode and no ownership to
  * copy, the only alternative is a default-mode backup, which is precisely the disclosure this guards
  * against. `--output` is the way through in every refusal — it leaves the input untouched, so no backup
  * is needed at all.
@@ -384,14 +390,32 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
 function writeBackup(fs, playlistPath, contents, identity) {
   const path = require('path');
 
+  // Put the backup beside the file the bytes actually live in, not beside the name used to reach it.
+  //
+  // An in-place sign through a symlink writes to the target, so deriving the backup path from the link
+  // leaves the copy in the link's directory — which may be writable by people the target's directory is
+  // not. Anyone with write access there could delete or swap the finished backup in the window before
+  // the source is overwritten, defeating it precisely when it is the only remaining copy.
+  let target;
+  try {
+    target = fs.realpathSync(playlistPath);
+  } catch (error) {
+    throw new Error(
+      `Cannot resolve ${playlistPath} (${error.message}), so this re-sign cannot tell where to keep a ` +
+        'copy of the signatures it would discard. Refusing to replace it in place. Use --output to ' +
+        'write the signed playlist elsewhere, which leaves the input — and the signatures on it — ' +
+        'untouched.'
+    );
+  }
+
   // Read mode and ownership before the file is replaced. Without them there is nothing to reproduce,
   // and a default-mode copy of a restricted document is worse than not running.
   let source;
   try {
-    source = fs.statSync(playlistPath);
+    source = fs.statSync(target);
   } catch (error) {
     throw new Error(
-      `Cannot read the permissions of ${playlistPath} (${error.message}), so the copy this re-sign ` +
+      `Cannot read the permissions of ${target} (${error.message}), so the copy this re-sign ` +
         'would leave behind could be readable by users the original was not. Refusing to replace it ' +
         'in place. Use --output to write the signed playlist elsewhere, which leaves the input — and ' +
         'the signatures on it — untouched.'
@@ -414,13 +438,14 @@ function writeBackup(fs, playlistPath, contents, identity) {
 
   for (let attempt = 1; attempt < 1000; attempt += 1) {
     const candidate =
-      attempt === 1
-        ? `${playlistPath}.before-resign.json`
-        : `${playlistPath}.before-resign.${attempt}.json`;
+      attempt === 1 ? `${target}.before-resign.json` : `${target}.before-resign.${attempt}.json`;
 
     let fd;
     try {
-      fd = fs.openSync(candidate, 'wx', mode);
+      // 0600, never the source's mode: the file must not be reachable by anyone else between its
+      // creation and the moment its ownership and permissions are both correct. 0600 also survives any
+      // umask, so the window is owner-only regardless of how the process is configured.
+      fd = fs.openSync(candidate, 'wx', 0o600);
     } catch (error) {
       if (error && error.code === 'EEXIST') {
         continue;
@@ -430,24 +455,33 @@ function writeBackup(fs, playlistPath, contents, identity) {
 
     let settled = false;
     try {
-      try {
-        fs.fchmodSync(fd, mode);
-      } catch {
-        // Windows supports only the write bit here. A backup that exists with approximate permissions
-        // beats refusing to preserve the document at all.
-      }
-
+      // Ownership first, while the file is still private, and only then the source's mode.
+      //
+      // Creating at the source's mode looks equivalent and is not. A 0640 alice:curators playlist
+      // re-signed by alice, whose primary group is `users`, produces a file that is briefly
+      // alice:users AND group-readable — long enough for any `users` member to open it and hold the
+      // descriptor until the contents arrive. The bytes are what matter, so the widening has to happen
+      // after the ownership is right, not before.
       if (mustChown) {
         try {
           fs.fchownSync(fd, source.uid, source.gid);
         } catch (error) {
           throw new Error(
-            `Cannot give ${candidate} the same owner as ${playlistPath} (${error.message}). The copy ` +
+            `Cannot give ${candidate} the same owner as ${target} (${error.message}). The copy ` +
               'would belong to you instead, which can widen who is able to read it. Refusing to ' +
               'replace the playlist in place. Use --output to write the signed playlist elsewhere, ' +
               'which leaves the input — and the signatures on it — untouched.'
           );
         }
+      }
+
+      try {
+        // Not subject to umask, unlike the mode passed to open(), so this is what actually reproduces
+        // the source's permissions — and it runs before a single byte exists in the file.
+        fs.fchmodSync(fd, mode);
+      } catch {
+        // Windows supports only the write bit here. A backup that exists with approximate permissions
+        // beats refusing to preserve the document at all.
       }
 
       fs.writeFileSync(fd, contents, 'utf-8');
