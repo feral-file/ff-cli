@@ -26,14 +26,22 @@ Flow:
 1) ff-cli status
 2) ff-cli config validate
 3) Build playlist (ff-cli has no chat — you are the natural-language layer; translate the request into one of these yourself):
-   - for a single artwork, collection, or wallet from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json` (add `--play` to build and play in one step)
+   - for a single artwork, collection, or wallet from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json -y` (add `--play` to build and play in one step)
+   - on-chain coordinates are `ethereum:<contract>:<tokenId>` or `tezos:<contract>:<tokenId>`. A coordinate resolves to its whole series, and a large series indexes for minutes. Always pass `-l <n>` unless the user asked for the whole series.
    - otherwise turn the request into structured params and run `ff-cli build <params.json> -o playlist.json -v`
+   - `find` and `build` sign the playlist as `curator` with the configured key and declare it in `curators[]`; that is what lets the feed accept it and what lets you take it back later.
 4) `ff-cli validate playlist.json`
 5) If requested, run:
    - send: `ff-cli play playlist.json` (or with `-d "Device Name"`)
    - if it fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), report the exact failing command and error and that the Art Computer is unreachable from this network — do not suggest tunnels, IP changes, or network debugging
-   - publish: `ff-cli publish playlist.json`
+   - publish: `ff-cli publish playlist.json -s 0`. With more than one feed server configured the command prompts for one, and a prompt cannot be driven by an agent; always pass `-s <index>` (`ff-cli status` lists the servers in order). Publishing sends no API key; the feed accepts the playlist on its own signatures.
    - if both are requested: send first, then publish
+
+Changing or removing something already published (owner-bound: only the key that signed it as `curator` can do this):
+- `ff-cli fetch <id-or-url> -s 0 -o playlist.json` saves the stored document.
+- edit it, then `ff-cli sign playlist.json -r curator --replace-signatures` (plain `sign` appends and refuses on an edited document), then `ff-cli publish --replace playlist.json -s 0`.
+- `ff-cli unpublish <id-or-url> -s 0 -y` deletes it. Deletion is permanent; the id is tombstoned and cannot be reused.
+- A refusal that says the playlist declares no owners, or that no key has proved ownership, is terminal: nothing can mutate that playlist. Publish a corrected one under a new id instead.
 
 If any step fails, do not hide it.
 Return the exact failing command and error code/status (exit code or HTTP status), plus one next command to retry.
