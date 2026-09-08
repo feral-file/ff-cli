@@ -713,11 +713,15 @@ carries this, and nothing in userspace removes it portably. A fresh `--output` n
 cannot collide, because nothing is there to lose.
 
 If the destination turns out to hold the **same** document as the input — a copy taken with `cp`, say —
-the run is refused for the reason above, because without file identity a copy and a second name for the
-input are the same thing. `--force` deliberately does **not** override that: it is for replacing a
-different document, never for destroying a signature only its holder could make again. Delete the copy
-and re-run, or pick another `--output` name; a name that does not exist is written with no check at
-all.
+it is treated exactly as an in-place run, because without file identity a copy and a second name for the
+input are the same thing. So the same narrow rule decides it: the run is refused **only when it would
+discard a still-valid signature from another key**. That is the whole of what the refusal protects, and
+a copy carrying only your own signatures, or only ones that no longer verify, is simply written — the
+input is a different file and is not touched either way.
+
+When it does refuse, `--force` deliberately does **not** override it: force is for replacing a different
+document, never for destroying a signature only its holder could make again. Delete the copy and re-run,
+or pick another `--output` name; a name that does not exist is written with no check at all.
 
 The rule holds on every platform and assumes nothing about the filesystem. An earlier version kept a
 copy of the input instead; that requires reproducing the source's access, which is not portable — POSIX

@@ -225,10 +225,13 @@ race and does not close it: the read and the overwrite are two operations, and a
 same instant can still lose its change, as with any tool that edits in place. A `--output` name that
 does not yet exist is the write that cannot collide.
 
-A destination holding the *same* document as the input is refused on the same grounds as an in-place
-run, since without identity a copy and a second name for the input are indistinguishable. `--force`
-does not reach that branch by design: it authorizes replacing a different document, never destroying a
-signature only its holder could reproduce.
+A destination holding the *same* document as the input is treated as an in-place run, since without
+identity a copy and a second name for the input are indistinguishable — and so the same narrow rule
+applies: it is refused only when the run would discard a still-valid signature from another key. A copy
+carrying only the signer's own entries, or only unverifiable ones, is written like any other
+destination; the input is a separate file and is untouched. Where the refusal does fire, `--force` does
+not reach it by design: force authorizes replacing a different document, never destroying a signature
+only its holder could reproduce.
 
 Editing a published playlist therefore has a required shape: `fetch` the stored document, change it,
 re-sign with `sign --replace-signatures`, then `publish --replace`. `fetch` exists because every other

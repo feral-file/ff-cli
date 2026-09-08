@@ -723,6 +723,87 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
+  test('a copy holding only your own signature is written, not refused', async () => {
+    // The refusal protects signatures only their holder could remake. Nothing here is in that
+    // position, so there is nothing to protect and the copy is simply written — and the input, being a
+    // separate file, is not touched either way.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const copy = join(dir, 'out.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      const originalBytes = JSON.stringify({ ...document, signatures: [signature] }, null, 2);
+      writeFileSync(input, originalBytes, 'utf-8');
+      writeFileSync(copy, originalBytes, 'utf-8');
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, copy, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, true, result.error);
+      // No --force was needed, and nothing claims a foreign document was replaced.
+      assert.equal(result.overwroteAnother, false);
+      // Only the copy moved.
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(
+        (JSON.parse(readFileSync(copy, 'utf-8')) as { signatures: unknown[] }).signatures.length,
+        1
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a copy whose other signature no longer verifies is written, not refused', async () => {
+    // The second half of the same rule. A co-curator's entry is there, but the document was edited
+    // after it was made, so it does not verify — and an entry that cannot be checked could not have
+    // been restored from this file either. Nothing recoverable is at stake.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const copy = join(dir, 'out.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const other = makeKey();
+      const document = {
+        ...base,
+        curators: [
+          { name: 'You', key: playlistSigningDidKey(own) },
+          { name: 'Co-curator', key: playlistSigningDidKey(other) },
+        ],
+      };
+      const signatures = [
+        await signPlaylist(document, own, 'curator'),
+        await signPlaylist(document, other, 'curator'),
+      ];
+      // Edited after signing: neither entry verifies against these bytes any more.
+      const originalBytes = JSON.stringify(
+        { ...document, title: 'Edited after signing', signatures },
+        null,
+        2
+      );
+      writeFileSync(input, originalBytes, 'utf-8');
+      writeFileSync(copy, originalBytes, 'utf-8');
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, copy, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.overwroteAnother, false);
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(
+        (JSON.parse(readFileSync(copy, 'utf-8')) as { signatures: unknown[] }).signatures.length,
+        1
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('--force does not override the same-document refusal', async () => {
     // The line between the two refusals. --force replaces a document the operator has decided to
     // discard; it is not a way to destroy a signature only its holder could make again, and a flag
