@@ -29,13 +29,25 @@ export const signCommand = new Command('sign')
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));
-          // Name every discarded entry, not just the count. Dropping your own earlier signature costs
-          // nothing — this command replaces it. Dropping the feed's costs nothing either; it co-signs
-          // again after verifying the replacement. Dropping another key's endorsement is the one that
-          // cannot be recovered without asking that person to sign again, and the owner of a co-curated
-          // playlist has to see which ones those were BEFORE they publish the replacement, not after
-          // someone notices their name is missing.
-          const dropped: Array<{ kind: string; label: string }> = result.dropped ?? [];
+          // Name every discarded entry, not just the count, and separate the ones that cost
+          // something from the ones that do not.
+          //
+          // Your own earlier signature is free: this command replaces it. Another key's entry that
+          // still verifies is free too — the payload excludes signatures, so re-signing an unchanged
+          // document invalidates nothing, and that entry is merely removed from this file. Only an
+          // entry that no longer verifies is a real loss, and only its holder can restore it.
+          //
+          // Roles are carried through rather than assumed. A document may hold `agent`,
+          // `institution`, or `licensor` entries, and asking their holders to come back as `curator`
+          // would be wrong. A `feed` role is not special-cased either: any key can emit one and this
+          // CLI has no feed identity to check a kid against.
+          const dropped: Array<{
+            kind: string;
+            role: string | null;
+            kid: string | null;
+            valid: boolean;
+            label: string;
+          }> = result.dropped ?? [];
           if (dropped.length > 0) {
             const plural = dropped.length === 1 ? '' : 's';
             console.log(chalk.dim(`  Replaced ${dropped.length} existing signature${plural}:`));
@@ -43,19 +55,47 @@ export const signCommand = new Command('sign')
               console.log(chalk.dim(`    - ${entry.label}`));
             }
 
-            const endorsements = dropped.filter((entry) => entry.kind === 'other').length;
-            if (endorsements > 0) {
-              // Only this class needs an action, so only this class gets a line about one.
-              const noun = endorsements === 1 ? 'endorsement is' : 'endorsements are';
+            const lost = dropped.filter((entry) => entry.kind === 'other' && !entry.valid);
+            const removedStillValid = dropped.filter(
+              (entry) => entry.kind === 'other' && entry.valid
+            );
+
+            if (lost.length > 0) {
+              const noun = lost.length === 1 ? 'signature is' : 'signatures are';
               console.log(
                 chalk.yellow(
-                  `  ${endorsements} ${noun} now void — a signature covers the content, and the content changed.\n` +
-                    `  Ask those curators to sign the edited document if you want them back:\n` +
-                    `    ff-cli sign <file> -r curator --key <their key>\n` +
-                    `  Signing appends, so they can add to this file without disturbing your signature.`
+                  `  ${lost.length} other ${noun} now void — a signature covers the content, and the content changed.\n` +
+                    `  Only their holders can restore them, by signing the edited document:`
+                )
+              );
+              for (const entry of lost) {
+                const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'the holder';
+                const role = entry.role ?? 'their role';
+                console.log(chalk.yellow(`    ask ${who} to sign again as ${role}`));
+              }
+              console.log(
+                chalk.yellow(
+                  `  Signing appends, so they can add to this file without disturbing your signature.`
                 )
               );
             }
+
+            if (removedStillValid.length > 0) {
+              const noun = removedStillValid.length === 1 ? 'signature' : 'signatures';
+              console.log(
+                chalk.yellow(
+                  `  ${removedStillValid.length} other ${noun} still verified over this content and ` +
+                    `was removed anyway.\n` +
+                    `  Keep a copy of the previous file if you want ${removedStillValid.length === 1 ? 'it' : 'them'} back — nothing invalidated ${removedStillValid.length === 1 ? 'it' : 'them'}.`
+                )
+              );
+            }
+
+            // Stated as the general fact it is, not as a claim about any entry above: this CLI cannot
+            // tell which key a feed actually signs with.
+            console.log(
+              chalk.dim(`  A feed appends its own signature again after it verifies a replacement.`)
+            );
           }
           if (Array.isArray(result.playlist?.signatures)) {
             console.log(chalk.dim(`  Signatures: ${result.playlist.signatures.length}`));

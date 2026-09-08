@@ -136,11 +136,17 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.equal(signed.success, true, signed.error);
       assert.equal(signed.dropped.length, 2, 'both the curator and feed entries must be dropped');
       // The classification is what the owner acts on, so it is pinned here rather than only in the
-      // command's output: the signer's own entry costs nothing, and neither does the feed's.
+      // command's output. A `feed` role gets no special treatment: any key can emit one, and the CLI
+      // holds no feed identity to check a kid against, so it is another key's signature like any other.
       assert.deepEqual(signed.dropped.map((entry: { kind: string }) => entry.kind).sort(), [
-        'feed',
+        'other',
         'self',
       ]);
+      // The document was edited, so nothing that was on it still covers it.
+      assert.deepEqual(
+        signed.dropped.map((entry: { valid: boolean }) => entry.valid),
+        [false, false]
+      );
 
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as {
         title: string;
@@ -245,7 +251,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.match(freshOut, /Replaced 2 existing signatures:/);
       // Each entry has to be named, with enough of the kid to match a curators[] row at a glance.
       assert.match(freshOut, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
-      assert.match(freshOut, /the feed's signature \(feed, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(freshOut, /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — void/);
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as { signatures: unknown[] };
       assert.equal(onDisk.signatures.length, 1);
     } finally {
@@ -253,7 +259,7 @@ describe('edit a published playlist, re-sign, replace', () => {
     }
   });
 
-  test('names a co-curator endorsement as lost, and says how to get it back', async () => {
+  test('names each lost signature with its own role, and who has to restore it', async () => {
     // The case the classification exists for. Dropping your own signature or the feed's costs nothing;
     // dropping someone else's endorsement cannot be undone without asking them to sign again, and the
     // owner has to learn that before they publish the replacement, not after someone notices.
@@ -295,18 +301,120 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
       assert.match(out, /Replaced 3 existing signatures:/);
-      assert.match(out, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
-      assert.match(out, /the feed's signature \(feed, \.\.\.[A-Za-z0-9]{8}\)/);
-      assert.match(out, /another key's endorsement \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(out, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — replaced/);
+      assert.match(out, /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — void/);
+      assert.match(out, /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — void/);
       // B's kid must be identifiable, or "another key" names nobody.
       assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
 
-      // Exactly one entry needs an action, and only that one gets the warning.
-      assert.match(out, /1 endorsement is now void/);
-      assert.match(out, /ff-cli sign <file> -r curator --key <their key>/);
-      // The lost count must not include the signer's own entry or the feed's.
-      assert.doesNotMatch(out, /3 endorsements are now void/);
-      assert.doesNotMatch(out, /2 endorsements are now void/);
+      // Both non-self entries are losses; the signer's own is not. A `feed` role is not assumed to
+      // return on its own — any key can emit one, and the CLI has no feed identity to verify against.
+      assert.match(out, /2 other signatures are now void/);
+      // Each loss is addressed to its holder IN ITS OWN ROLE: `agent`, `institution` and `licensor`
+      // are valid, so a blanket "sign again as curator" would be wrong.
+      assert.match(
+        out,
+        new RegExp(`ask \\.\\.\\.${playlistSigningDidKey(keyB).slice(-8)} to sign again as curator`)
+      );
+      assert.match(out, /ask \.\.\.[A-Za-z0-9]{8} to sign again as feed/);
+      // The feed's behaviour is stated generally, never as a claim about a specific entry.
+      assert.match(out, /A feed appends its own signature again after it verifies a replacement/);
+      assert.doesNotMatch(out, /3 other signatures are now void/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an unchanged document reports removal, not loss', async () => {
+    // The DP-1 signing payload excludes `signature`/`signatures`, so re-signing a document nobody
+    // edited leaves every existing entry perfectly valid over the same bytes. Reporting those as void
+    // and telling the owner to go ask their co-curators again would send them chasing signatures that
+    // are still sitting in the previous file.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'unchanged.json');
+      // Written exactly as signed: no edit at all.
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(
+        out,
+        /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed, still valid/
+      );
+      assert.match(out, /still verified over this content and was removed anyway/);
+      assert.match(out, /Keep a copy of the previous file/);
+      // Nothing was invalidated, so no one may be told to sign again.
+      assert.doesNotMatch(out, /now void/);
+      assert.doesNotMatch(out, /to sign again as/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the same document edited reports the same entry as void', async () => {
+    // Non-vacuity pair for the test above: one byte of content decides which branch is right, so both
+    // have to be pinned or the verification could silently stop happening.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'changed.json');
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, title: 'Edited', signatures: [sigA, sigB] }, null, 2),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(out, /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — void/);
+      assert.match(out, /1 other signature is now void/);
+      assert.match(
+        out,
+        new RegExp(`ask \\.\\.\\.${playlistSigningDidKey(keyB).slice(-8)} to sign again as curator`)
+      );
+      assert.doesNotMatch(out, /still valid over this content/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
