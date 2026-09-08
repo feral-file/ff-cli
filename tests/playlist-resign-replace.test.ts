@@ -149,9 +149,11 @@ describe('edit a published playlist, re-sign, replace', () => {
       // The classification is what the owner acts on, so it is pinned here rather than only in the
       // command's output. A `feed` role gets no special treatment: any key can emit one, and the CLI
       // holds no feed identity to check a kid against, so it is another key's signature like any other.
+      // Neither survives the edit, so neither is credited to anybody: an entry that does not verify
+      // has not established whose it is, including the signer's own.
       assert.deepEqual(signed.dropped.map((entry: { kind: string }) => entry.kind).sort(), [
         'other',
-        'replaced',
+        'other',
       ]);
       // The document was edited, so nothing that was on it verifies against it now. The verdict is
       // exactly that — not "void", which would assert they verified against the PREVIOUS content, a
@@ -263,7 +265,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       const freshOut = `${fresh.stdout ?? ''}`;
       assert.match(freshOut, /Replaced 2 existing signatures:/);
       // Each entry has to be named, with enough of the kid to match a curators[] row at a glance.
-      assert.match(freshOut, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(freshOut, /a signature claiming your key \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
       assert.match(
         freshOut,
         /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
@@ -317,7 +319,13 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
       assert.match(out, /Replaced 3 existing signatures:/);
-      assert.match(out, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — replaced/);
+      // The signer's own prior entry does not verify against the edited document either, so it is
+      // reported as a claim rather than credited — the same rule that stops a forgery hiding as
+      // "replaced".
+      assert.match(
+        out,
+        /a signature claiming your key \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
+      );
       assert.match(
         out,
         /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
@@ -327,10 +335,11 @@ describe('edit a published playlist, re-sign, replace', () => {
         /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
       );
 
-      // Both non-self entries failed to verify; the signer's own is not counted at all. A `feed` role
-      // is not assumed to return on its own — any key can emit one, and the CLI has no feed identity
-      // to check a kid against.
-      assert.match(out, /2 other signatures could not be verified against this document/);
+      // All three failed to verify against the edited document, including the signer's own — an entry
+      // that does not verify has not established whose it is, so none is credited or excluded. A
+      // `feed` role gets no special treatment either: any key can emit one, and the CLI holds no feed
+      // identity to check a kid against.
+      assert.match(out, /3 other signatures could not be verified against this document/);
       // Each one is named, with its role, so the owner can see whose signatures are missing.
       assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
       assert.match(out, /\.\.\.[A-Za-z0-9]{8} \(curator\)/);
@@ -435,7 +444,7 @@ describe('edit a published playlist, re-sign, replace', () => {
         out,
         /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
       );
-      assert.match(out, /1 other signature could not be verified against this document/);
+      assert.match(out, /2 other signatures could not be verified against this document/);
       assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
       assert.doesNotMatch(out, /still valid over this content/);
       assert.doesNotMatch(out, /void/i);
@@ -482,6 +491,54 @@ describe('edit a published playlist, re-sign, replace', () => {
       // The content did NOT change here, so nothing may claim it did as the explanation.
       assert.doesNotMatch(out, /void/i);
       assert.match(out, /equally with their never having been valid/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a forged entry carrying the signing key\'s kid and role is never "replaced"', async () => {
+    // `kid` and `role` are claims the entry makes about itself. Trusting them meant a tampered entry
+    // that copied the signer's identity was labelled "your own earlier signature, replaced" and
+    // dropped out of the unverified summary — hiding, from the operator, exactly the signature most
+    // worth showing them. Only a signature that verifies has established whose it is.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }] };
+      // Signed by B, then relabelled with A's kid and the role A is about to sign under. The document
+      // is otherwise UNCHANGED, so a genuine entry of A's would verify — only this one cannot.
+      const forged = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'forged.json');
+      writeFileSync(
+        path,
+        JSON.stringify(
+          {
+            ...document,
+            signatures: [{ ...forged, kid: playlistSigningDidKey(keyA), role: 'curator' }],
+          },
+          null,
+          2
+        ),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.doesNotMatch(out, /replaced by this signing/);
+      assert.doesNotMatch(out, /your own earlier signature/);
+      // Reported as the claim it is, and surfaced in the unverified summary rather than hidden.
+      assert.match(out, /a signature claiming your key \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(out, /1 other signature could not be verified against this document/);
+      assert.match(out, /claims your key, unverified/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

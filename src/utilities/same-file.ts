@@ -1,72 +1,159 @@
 /**
- * Decide whether two paths name the same file, by filesystem identity rather than by string.
+ * "Am I about to destroy my own input?" — answered separately for the two ways this CLI writes files.
  *
- * Every "am I about to overwrite my own input?" check in this repo is really a question about inodes,
- * and answering it with paths gets two cases wrong in the same direction — the dangerous one.
+ * There is no single correct answer, and merging these two predicates is the mistake this file exists
+ * to prevent. What counts as "the same file" depends entirely on how the write lands.
  *
- * A resolved-path comparison misses a **hard link**: two directory entries, one inode, and no amount of
- * normalizing either name reveals it. A `realpath` comparison additionally handles symlinks but still
- * misses hard links, because `realpath` resolves symbolic indirection only. In both cases the code
- * concludes "different files", skips whatever protection it owed the input, and then writes through to
- * the very inode it believed it was leaving alone.
+ * **A direct write** (`sign`, writing to `--output`) opens the path and writes through it. It follows
+ * symlinks, and a hard link is the same inode by definition, so both aliases carry the bytes back to
+ * the input. The right question is inode identity.
  *
- * `dev` + `ino` is the identity the filesystem itself uses, and `stat` follows symlinks, so one
- * comparison covers both cases.
+ * **A rename** (`enrich`, writing a temp file and renaming it over the destination) replaces a
+ * *directory entry*. `rename()` does not follow the final component, so renaming onto a hard link
+ * repoints that one name and leaves the input's own name pointing at the untouched original inode — a
+ * hard-link destination is a genuinely distinct output there. The right question is which name the
+ * caller will read back from, which is `realpath` equality.
  *
- * Windows is why this is not simply `dev`/`ino`. Node exposes `ino` there from the file index, but it
- * can be `0` when the underlying volume does not supply one — and two zeros would make every pair of
- * files look identical, which is this same bug with the sign flipped and no way to notice. So an inode
- * match counts only when the inode is real, and the path comparison stays as an independent sufficient
- * condition rather than being replaced by it.
+ * Getting this backwards is harmful in both directions. Using the rename predicate for a direct write
+ * misses hard links and overwrites the input while reporting it untouched. Using the inode predicate
+ * for a rename flags a safe write as in-place, and enrich's stale-input guard then refuses it with
+ * "Nothing was written" — a refusal with nothing behind it.
+ *
+ * Windows is why the inode path has a fallback. Node exposes `ino` there from the file index, but it
+ * can be `0` when the volume supplies none, and two zeros would make every pair of files look
+ * identical. An inode match therefore counts only when the inode is real; when it is not, the question
+ * degrades to `realpath` equality — which still catches symlinks, and loses only hard links, on the one
+ * platform where hard links are rare and inode identity was unavailable anyway.
  */
 
-import fs from 'fs';
+import nodeFs from 'fs';
 import path from 'path';
 
-/** True when both stats carry a usable inode and name the same file. */
-function sameInode(left: fs.Stats, right: fs.Stats): boolean {
-  if (left.ino === 0 || right.ino === 0) {
-    return false;
-  }
+/**
+ * The filesystem operations these predicates need.
+ *
+ * Injectable because the interesting cases — a zero inode, a stat that fails — are properties of the
+ * filesystem rather than of this code, and cannot be produced on demand from a test otherwise.
+ */
+export interface SameFileFs {
+  statSync: (p: string) => { dev: number; ino: number };
+  realpathSync: (p: string) => string;
+  promises: {
+    stat: (p: string) => Promise<{ dev: number; ino: number }>;
+    realpath: (p: string) => Promise<string>;
+  };
+}
+
+/** True when both stats name the same file by inode. */
+function sameInode(
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number }
+): boolean {
   return left.dev === right.dev && left.ino === right.ino;
 }
 
+/** True when either stat lacks a real inode, so inode identity cannot be established. */
+function inodeUnavailable(
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number }
+): boolean {
+  return left.ino === 0 || right.ino === 0;
+}
+
+/** Cheap check both predicates share: the same name, however it is spelled. */
+function samePath(a: string, b: string): boolean {
+  return path.resolve(a) === path.resolve(b);
+}
+
 /**
- * isSameFileSync reports whether `a` and `b` are the same file on disk.
+ * isSameFileForDirectWrite reports whether writing to `a` would modify the bytes of `b`.
  *
- * A path that does not exist is not the same file as anything: an `--output` naming a file yet to be
- * created is the ordinary "write somewhere else" case, and must not be mistaken for the in-place one.
+ * Use this before an `open`/`write` that targets a path the caller also read from. It is true for the
+ * same path, for a symlink alias, and for a hard link, because a direct write reaches the inode through
+ * all three.
  *
- * @param a - First path
- * @param b - Second path
- * @returns True when the two names resolve to one file
+ * A path that cannot be stat-ed is not the same file as anything: an `--output` naming a file yet to be
+ * created is the ordinary write-elsewhere case, and must not be mistaken for the in-place one.
+ *
+ * @param a - Path about to be written
+ * @param b - Path whose contents matter
+ * @param fsLike - Filesystem operations, for tests
+ * @returns True when a direct write to `a` lands on `b`
  */
-export function isSameFileSync(a: string, b: string): boolean {
-  if (path.resolve(a) === path.resolve(b)) {
+export function isSameFileForDirectWrite(
+  a: string,
+  b: string,
+  fsLike: SameFileFs = nodeFs as unknown as SameFileFs
+): boolean {
+  if (samePath(a, b)) {
     return true;
   }
   try {
-    return sameInode(fs.statSync(a), fs.statSync(b));
+    const left = fsLike.statSync(a);
+    const right = fsLike.statSync(b);
+    if (inodeUnavailable(left, right)) {
+      // No usable inode. Fall back to realpath, which still resolves symlinks — otherwise a symlinked
+      // --output on such a volume reads as a separate file while the write follows the link straight
+      // through to the input.
+      return fsLike.realpathSync(a) === fsLike.realpathSync(b);
+    }
+    return sameInode(left, right);
   } catch {
-    // One of them does not exist, or cannot be stat'ed. Either way there is no identity to establish.
+    return false;
+  }
+}
+
+/** {@link isSameFileForDirectWrite}, for callers already working asynchronously. */
+export async function isSameFileForDirectWriteAsync(
+  a: string,
+  b: string,
+  fsLike: SameFileFs = nodeFs as unknown as SameFileFs
+): Promise<boolean> {
+  if (samePath(a, b)) {
+    return true;
+  }
+  try {
+    const [left, right] = await Promise.all([fsLike.promises.stat(a), fsLike.promises.stat(b)]);
+    if (inodeUnavailable(left, right)) {
+      const [leftReal, rightReal] = await Promise.all([
+        fsLike.promises.realpath(a),
+        fsLike.promises.realpath(b),
+      ]);
+      return leftReal === rightReal;
+    }
+    return sameInode(left, right);
+  } catch {
     return false;
   }
 }
 
 /**
- * isSameFile is {@link isSameFileSync} for callers already working asynchronously.
+ * isSameEntryForRename reports whether renaming onto `a` would replace the name `b` is read from.
  *
- * @param a - First path
- * @param b - Second path
- * @returns True when the two names resolve to one file
+ * Use this before a temp-file-plus-rename write. It is true for the same path and for a symlink alias —
+ * both cases where the caller reads back changed content at the name they gave — and deliberately
+ * **false** for a hard link, because a rename repoints one directory entry and leaves the other name on
+ * the original inode.
+ *
+ * @param a - Destination of the rename
+ * @param b - Path whose contents matter
+ * @param fsLike - Filesystem operations, for tests
+ * @returns True when the rename would replace what `b` names
  */
-export async function isSameFile(a: string, b: string): Promise<boolean> {
-  if (path.resolve(a) === path.resolve(b)) {
+export async function isSameEntryForRename(
+  a: string,
+  b: string,
+  fsLike: SameFileFs = nodeFs as unknown as SameFileFs
+): Promise<boolean> {
+  if (samePath(a, b)) {
     return true;
   }
   try {
-    const [left, right] = await Promise.all([fs.promises.stat(a), fs.promises.stat(b)]);
-    return sameInode(left, right);
+    const [left, right] = await Promise.all([
+      fsLike.promises.realpath(a),
+      fsLike.promises.realpath(b),
+    ]);
+    return left === right;
   } catch {
     return false;
   }

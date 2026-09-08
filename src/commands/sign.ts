@@ -44,6 +44,7 @@ export const signCommand = new Command('sign')
           const dropped: Array<{
             kind: string;
             sameKey: boolean;
+            claimsSigningKey: boolean;
             role: string | null;
             kid: string | null;
             verified: boolean;
@@ -100,7 +101,13 @@ export const signCommand = new Command('sign')
               );
               for (const entry of unverified) {
                 const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'unknown key';
-                const mine = entry.sameKey ? ' — your own key' : '';
+                // "claims" is not decoration: an unverified entry carrying this key's kid has not
+                // established whose it is, and reading it as yours is how a forgery would hide.
+                const mine = entry.sameKey
+                  ? ' — your own key'
+                  : entry.claimsSigningKey
+                    ? ' — claims your key, unverified'
+                    : '';
                 console.log(
                   chalk.yellow(`    ${who}${entry.role ? ` (${entry.role})` : ''}${mine}`)
                 );

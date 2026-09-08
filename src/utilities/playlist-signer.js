@@ -6,7 +6,7 @@
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
 const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
-const { isSameFileSync } = require('./same-file');
+const { isSameFileForDirectWrite } = require('./same-file');
 
 /**
  * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
@@ -178,7 +178,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // Filesystem identity, not path equality: an --output pointing at a symlink or a hard link of the
     // input is the same inode, and a string comparison calls it a different file — so no backup was
     // written and the report claimed the input was untouched while the write went straight through it.
-    const inPlace = isSameFileSync(output, playlistPath);
+    const inPlace = isSameFileForDirectWrite(output, playlistPath);
 
     // Preserve the original BEFORE overwriting it, when overwriting is what destroys the only copy of
     // a signature this run cannot reproduce.
@@ -254,7 +254,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  * @param {string} [signingKid] - `did:key` of the key that just signed
  * @param {string} [signingRole] - DP-1 role the fresh signature asserts
  * @param {Object} dp1 - Loaded dp1-js module
- * @returns {Promise<Array<{kind: string, sameKey: boolean, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
+ * @returns {Promise<Array<{kind: string, sameKey: boolean, claimsSigningKey: boolean, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
  */
 async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1) {
   const dropped = [];
@@ -277,8 +277,16 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
       verified = false;
     }
 
-    const sameKey = Boolean(kid && signingKid && kid === signingKid);
+    // A `kid` and a `role` are claims the entry makes about itself, and nothing in a document stops an
+    // attacker — or a corrupted file — from copying the signer's own. Only a signature that verifies
+    // has established whose it is, so an unverified entry is never credited as this key's, and never
+    // reported as replaced. Otherwise a forged entry carrying the signing key's kid and role would be
+    // labelled "your own earlier signature, replaced" and vanish from the unverified summary, which is
+    // precisely where a tampered signature most needs to appear.
+    const claimsSigningKey = Boolean(kid && signingKid && kid === signingKid);
+    const sameKey = verified && claimsSigningKey;
     const replaced = sameKey && role === signingRole;
+
     const outcome = verified
       ? 'removed; still valid over this content'
       : 'removed; could not be verified against this document';
@@ -290,6 +298,11 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
       // Same key, different role. Naming it as another key's would be wrong, and naming it as replaced
       // would be worse: this run asserts a different role, so the entry is gone and not reinstated.
       label = `your signature in another role (${descriptor}) — ${outcome}`;
+    } else if (claimsSigningKey) {
+      // Carries this key's kid but does not verify, so whose it is was never established. Said as the
+      // claim it is: asserting it IS yours would credit a possible forgery, and asserting it is
+      // someone else's would misdescribe the ordinary case where you edited the document after signing.
+      label = `a signature claiming your key (${descriptor}) — ${outcome}`;
     } else {
       label = `another key's signature (${descriptor}) — ${outcome}`;
     }
@@ -297,6 +310,7 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
     dropped.push({
       kind: replaced ? 'replaced' : 'other',
       sameKey,
+      claimsSigningKey,
       role,
       kid,
       verified,
@@ -312,6 +326,7 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
     dropped.push({
       kind: 'other',
       sameKey: false,
+      claimsSigningKey: false,
       role: null,
       kid: null,
       verified: false,
