@@ -413,7 +413,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.match(out, /still verified over this content and was removed anyway/);
       // The previous document is preserved before the overwrite, so the report names a real file
       // rather than advising a copy the command has already destroyed.
-      assert.match(out, /The document as it was is saved at .*before-resign\.json/);
+      assert.match(out, /Backup written to .*before-resign\.json \(owner-only/);
       // Nothing was invalidated, so no one may be told to sign again.
       assert.doesNotMatch(out, /void/i);
       assert.doesNotMatch(out, /could not be verified/);
@@ -631,7 +631,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       // And the report points at the file that exists, not at a copy the operator was meant to have.
       assert.match(
         `${result.stdout ?? ''}`,
-        new RegExp(`saved at ${backup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
+        new RegExp(`Backup written to ${backup.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`)
       );
       assert.doesNotMatch(`${result.stdout ?? ''}`, /Keep a copy of the previous file/);
 
@@ -765,7 +765,7 @@ describe('edit a published playlist, re-sign, replace', () => {
         const out = `${result.stdout ?? ''}`;
         // The original must have been preserved before the write went through the link.
         assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), originalBytes);
-        assert.match(out, /The document as it was is saved at .*before-resign\.json/);
+        assert.match(out, /Backup written to .*before-resign\.json \(owner-only/);
         // And it must not claim the input survived, because it did not.
         assert.doesNotMatch(out, /input file is untouched/);
         // The input really was overwritten through the alias.
@@ -963,7 +963,10 @@ describe('edit a published playlist, re-sign, replace', () => {
       // ...and nothing was left in the link's directory.
       assert.equal(existsSync(`${link}.before-resign.json`), false);
       // The report names the path that actually holds it, or the advice sends people to an empty dir.
-      assert.match(out, new RegExp(`saved at ${escapeForRegExp(`${target}.before-resign.json`)}`));
+      assert.match(
+        out,
+        new RegExp(`Backup written to ${escapeForRegExp(`${target}.before-resign.json`)}`)
+      );
       // The signing really did write through the link to the target.
       assert.notEqual(readFileSync(target, 'utf-8'), originalBytes);
     } finally {

@@ -663,7 +663,8 @@ Playlist signed
     - your own earlier signature (curator, ...WtZqrYoR) — replaced by this signing
     - another key's signature (curator, ...Bmdh71FR) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
-  The document as it was is saved at /path/to/playlist.json.before-resign.json — it is still valid there.
+  Backup written to /path/to/playlist.json.before-resign.json (owner-only; readable by you, not by the
+  original's other readers). It is still valid there.
   A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
@@ -671,7 +672,21 @@ Playlist signed
 **When a run would drop another key's still-valid signature and `sign` is writing over its own input,
 the original is preserved first**, at `<file>.before-resign.json` — beside the file the bytes actually
 live in, so signing through a symlink puts the copy next to the target rather than next to the link. The
-report prints the full path for that reason: it may not be the directory you named. That signature cannot be reproduced
+report prints the full path for that reason: it may not be the directory you named.
+
+**That backup is owner-only, and does not reproduce who could read the original.** It is created `0600`
+and stays there. Node exposes no portable ACL API, so a copy cannot be made to carry the source's
+sharing policy — and an earlier version that reproduced mode and ownership produced exactly the failure
+that sounds impossible: a POSIX ACL grants access the mode bits do not describe, and widening a new file
+to the source's mode enables named ACL entries through the mask, so the copy became readable by a
+principal the original denied. Mirroring is also the wrong goal. The backup is a recovery file for the
+person who ran the command, not a second copy of the document's sharing. If someone else could read the
+original through a group or an ACL, they cannot read this, so do not hand it on as "the previous
+version" without checking that.
+
+On **Windows** the same run refuses rather than making a promise it cannot keep: mode bits do not
+constrain ACL inheritance there, so a `0600` create guarantees nothing. Use `-o, --output`, which leaves
+the input untouched and needs no backup at all. That signature cannot be reproduced
 by this command — only its holder could — so the file that still carries it has to outlive the run.
 An existing `.before-resign.json` is never overwritten (it is somebody's only copy too); later runs are
 numbered `.before-resign.2.json` and so on.

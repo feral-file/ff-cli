@@ -261,103 +261,11 @@ describe('writeBackup', () => {
     }
   });
 
-  test('carries the source mode, defeating umask', { skip: isWindows }, () => {
-    // Skipped on Windows: mode bits are not meaningful there and chmod only moves the write bit.
-    //
-    // `open(mode)` filters through umask, so a 0600 source under the usual 022 would land at 0600
-    // anyway — but a 0666 source would land at 0644. The fchmod after the open is what makes the
-    // backup match the source rather than match the umask.
-    const dir = makeTempDir();
-    const previousUmask = process.umask(0o022);
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-      fs.chmodSync(file, 0o640);
-
-      const written = writeBackup(fs, file, '{}');
-
-      assert.equal(statSync(written).mode & 0o777, 0o640);
-    } finally {
-      process.umask(previousUmask);
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('creates the backup private, fixes ownership, then widens to the source mode', () => {
-    // Order is the whole protection. Creating at a group-readable mode makes the file reachable by that
-    // group BEFORE its ownership is corrected, and a descriptor opened in that window still reads the
-    // bytes once they arrive — so the permissions must widen only after the owner is right, and before
-    // anything is written.
-    const dir = makeTempDir();
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-      chmodSync(file, 0o640);
-      const source = statSync(file);
-
-      const events: string[] = [];
-      let openMode: number | undefined;
-      const recording = {
-        ...fs,
-        openSync: (p: string, flags: string, mode?: number) => {
-          if (String(p).includes('before-resign')) {
-            openMode = mode;
-            events.push('open');
-          }
-          return fs.openSync(p, flags as never, mode);
-        },
-        fchownSync: (fd: number, uid: number, gid: number) => {
-          events.push('fchown');
-          return fs.fchownSync(fd, uid, gid);
-        },
-        fchmodSync: (fd: number, mode: number) => {
-          events.push(`fchmod:${mode.toString(8)}`);
-          return fs.fchmodSync(fd, mode);
-        },
-        writeFileSync: (target: unknown, contents: string, encoding?: unknown) => {
-          if (typeof target === 'number') {
-            events.push('write');
-          }
-          return fs.writeFileSync(target as never, contents, encoding as never);
-        },
-      };
-
-      // An identity that differs from the file's owner, so the chown step is taken on any platform.
-      const written = writeBackup(recording, file, '{}', {
-        uid: source.uid + 1,
-        gid: source.gid + 1,
-      });
-
-      // The window between create and chown must never be wider than the owner. True on every
-      // platform: this is the mode the implementation passes, not the mode the filesystem records.
-      assert.equal(
-        openMode,
-        0o600,
-        `backup must be created private, not at the source mode; got 0${(openMode ?? 0).toString(8)}`
-      );
-      // The ordering is the property under test, and it is platform-independent. The chmod argument is
-      // derived from the source rather than hardcoded, so this reads the same where chmod is a no-op.
-      const sourceMode = source.mode & 0o7777;
-      assert.deepEqual(events, ['open', 'fchown', `fchmod:${sourceMode.toString(8)}`, 'write']);
-      // The finished file carries whatever the source carries.
-      assert.equal(statSync(written).mode & 0o777, source.mode & 0o777);
-      // Non-vacuity for the line above, where the platform honours mode bits at all: on Windows both
-      // sides read 0o666 and the comparison proves nothing, so say that rather than imply coverage.
-      if (!isWindows) {
-        assert.equal(
-          source.mode & 0o777,
-          0o640,
-          'chmod must have taken effect for this to mean anything'
-        );
-      }
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('opens at 0600 whatever the source mode is', () => {
-    // The create mode is a constant, not a function of the source: a 0666 source must not produce a
-    // world-writable file for the length of the write either.
+  test('is created 0600 whatever the source mode is, and stays there', () => {
+    // The backup does not mirror the source's access, deliberately: a POSIX ACL can grant what the
+    // mode bits do not describe, and widening to the source's mode enables named ACL entries through
+    // the mask — which produced a copy readable by a principal the original denied. The create mode is
+    // the whole promise now, so it is a constant, and nothing widens it afterwards.
     for (const sourceMode of [0o600, 0o640, 0o644, 0o666]) {
       const dir = makeTempDir();
       try {
@@ -378,17 +286,79 @@ describe('writeBackup', () => {
 
         const written = writeBackup(recording, file, '{}');
 
-        // The create mode is a constant, and that holds everywhere — it is what the implementation
-        // passes, not what the filesystem stores.
         assert.equal(openMode, 0o600, `source 0${sourceMode.toString(8)} must still open at 0600`);
-        // The backup ends up matching the source, whatever the platform actually recorded for it.
-        assert.equal(statSync(written).mode & 0o777, statSync(file).mode & 0o777);
         if (!isWindows) {
-          assert.equal(statSync(file).mode & 0o777, sourceMode, 'chmod must have taken effect');
+          // Skipped on Windows, where mode bits are not meaningful and every file reads 0o666 — which
+          // is also why an in-place run refuses there rather than promising owner-only access.
+          assert.equal(
+            statSync(written).mode & 0o777,
+            0o600,
+            `a 0${sourceMode.toString(8)} source must not widen its backup`
+          );
         }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
+    }
+  });
+
+  test('never changes the backup mode or owner after creating it', () => {
+    // The absence is the guarantee. A later fchmod would re-enable ACL entries through the mask, and a
+    // chown would hand the file to someone other than the operator who needs it — so neither call may
+    // appear at all, which an assertion about the final mode alone would not catch.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+      chmodSync(file, 0o640);
+
+      const calls: string[] = [];
+      const recording = {
+        ...fs,
+        fchmodSync: () => {
+          calls.push('fchmod');
+          throw new Error('must not be called');
+        },
+        fchownSync: () => {
+          calls.push('fchown');
+          throw new Error('must not be called');
+        },
+        chmodSync: (...args: unknown[]) => {
+          calls.push('chmod');
+          return (fs.chmodSync as (...a: unknown[]) => unknown)(...args);
+        },
+        chownSync: () => {
+          calls.push('chown');
+          throw new Error('must not be called');
+        },
+      };
+
+      const written = writeBackup(recording, file, '{}');
+
+      assert.deepEqual(calls, [], 'the backup mode and owner are set once, at create time');
+      assert.equal(readFileSync(written, 'utf-8'), '{}');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses on Windows, where a 0600 create promises nothing', () => {
+    // Mode bits do not constrain ACL inheritance on Windows, so the owner-only claim cannot be made
+    // there. Writing a copy anyway and reporting it as owner-only would be the disclosure this whole
+    // narrowing exists to avoid, so the in-place run is refused and --output is the way through.
+    // Platform is injected so this runs everywhere, not only on the platform it describes.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+
+      assert.throws(
+        () => writeBackup(fs, file, '{}', { platform: 'win32' }),
+        /cannot be made owner-only on Windows[\s\S]*--output/
+      );
+      assert.equal(existsSync(`${file}.before-resign.json`), false, 'nothing may be written');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 
@@ -425,119 +395,6 @@ describe('writeBackup', () => {
     try {
       const file = join(dir, 'gone.json');
       assert.throws(() => writeBackup(fs, file, 'CONTENT'), /Cannot resolve[\s\S]*--output/);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('refuses when the source cannot be stat-ed, rather than writing a default-mode copy', () => {
-    // With no mode and no ownership to reproduce, the only alternative is a world-readable copy of a
-    // document that may have been deliberately restricted — the exact disclosure this guards against.
-    const dir = makeTempDir();
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-      const unstattable = {
-        ...fs,
-        statSync: () => {
-          throw Object.assign(new Error('permission denied'), { code: 'EACCES' });
-        },
-      };
-      assert.throws(
-        () => writeBackup(unstattable, file, '{}'),
-        /Cannot read the permissions[\s\S]*--output/
-      );
-      assert.equal(existsSync(`${file}.before-resign.json`), false);
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('refuses, and leaves nothing behind, when ownership cannot be reproduced', () => {
-    // A 0640 alice:curators playlist re-signed by someone in another primary group yields a
-    // 0640 bob:users copy: the mode is preserved and the access is still wider. That is the failure a
-    // mode-only copy hides, so a chown that cannot be performed is a refusal, not a warning.
-    //
-    // The process identity is injected rather than read from `process`, so this runs everywhere. The
-    // production gate on `process.getuid` existing is right — Windows has no POSIX identity to compare
-    // — but reading it directly made this branch unreachable there, and a test that asserts nothing on
-    // one platform is worse than no test, because the suite still reports green.
-    const dir = makeTempDir();
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-      const source = statSync(file);
-
-      const refusesChown = {
-        ...fs,
-        fchownSync: () => {
-          throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
-        },
-      };
-      // A process identity that differs from the file's owner, so the chown branch is taken.
-      const otherUser = { uid: source.uid + 1, gid: source.gid + 1 };
-
-      assert.throws(
-        () => writeBackup(refusesChown, file, '{}', otherUser),
-        /same owner[\s\S]*--output/
-      );
-      // No half-made backup may survive: a copy that exists looks like a safe one.
-      assert.equal(existsSync(`${file}.before-resign.json`), false);
-      // And the source is untouched.
-      assert.equal(readFileSync(file, 'utf-8'), '{}');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('does not chown when the process already owns the source', () => {
-    // Non-vacuity for the branch above, and the reason the gate exists: an identity that matches must
-    // not trigger a chown at all, on any platform.
-    const dir = makeTempDir();
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-      const source = statSync(file);
-
-      let chowned = false;
-      const recording = {
-        ...fs,
-        fchownSync: () => {
-          chowned = true;
-          throw new Error('must not be called');
-        },
-      };
-
-      const written = writeBackup(recording, file, '{}', { uid: source.uid, gid: source.gid });
-
-      assert.equal(chowned, false, 'ownership already matches; nothing to reproduce');
-      assert.equal(readFileSync(written, 'utf-8'), '{}');
-    } finally {
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-
-  test('skips the ownership step entirely without a POSIX identity', () => {
-    // What Windows sees. `undefined` uid/gid means there is nothing to compare, so no chown is
-    // attempted and the backup is still written — the platform has no POSIX ownership to preserve.
-    const dir = makeTempDir();
-    try {
-      const file = join(dir, 'playlist.json');
-      writeFileSync(file, '{}', 'utf-8');
-
-      let chowned = false;
-      const recording = {
-        ...fs,
-        fchownSync: () => {
-          chowned = true;
-          throw new Error('must not be called');
-        },
-      };
-
-      const written = writeBackup(recording, file, '{}', { uid: undefined, gid: undefined });
-
-      assert.equal(chowned, false);
-      assert.equal(readFileSync(written, 'utf-8'), '{}');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -55,7 +55,10 @@ function normalize(text: string): string[] {
         .replace(/\.\.\.[A-Za-z0-9]{8}/g, '...KID')
         // The backup path is absolute and resolved — it has to be, since it may not sit beside the
         // name the operator typed — so it differs per machine while its presence and wording do not.
-        .replace(/saved at \S+\.before-resign\.json/, 'saved at <PATH>.before-resign.json')
+        .replace(
+          /Backup written to \S+\.before-resign\.json/,
+          'Backup written to <PATH>.before-resign.json'
+        )
         .trimEnd()
     )
     .filter((line) => line.trim().length > 0);

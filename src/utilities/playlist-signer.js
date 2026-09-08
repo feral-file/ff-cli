@@ -343,29 +343,32 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
 }
 
 /**
- * Write the pre-re-sign backup, with the same care the file it copies already had.
+ * Write the pre-re-sign backup: owner-only, durable, and never overwriting an existing one.
  *
- * The backup exists because `--replace-signatures` discards signatures this command cannot reproduce,
- * so it has to be at least as safe as the document it preserves. Four properties, and the last three
- * are the same ones `enrich`'s atomic write establishes for its temporary file — this is that pattern,
- * applied to a direct write rather than a rename.
+ * The backup exists because `--replace-signatures` discards signatures this command cannot reproduce —
+ * only their holders could — so the operator who ran it needs a copy to recover from.
+ *
+ * **It does not mirror the source's access, deliberately.** An earlier version reproduced mode and
+ * ownership, which is close enough to look right and is not the same thing: a POSIX ACL can grant
+ * access the mode bits do not describe, `open` can inherit a directory's default ACL, and widening to
+ * the source's mode enables named ACL entries through the mask. The result was a copy readable by a
+ * principal the original denied. Node exposes no portable ACL API, so reproducing sharing policy is not
+ * something this can promise — and it was the wrong goal anyway. The backup is a recovery file for one
+ * person, not a second copy of the document's sharing policy.
+ *
+ * So it fails closed: created 0600 and left there, owned by whoever ran the command. With no group or
+ * other bits the POSIX ACL mask grants nothing, so an inherited default ACL cannot widen it either.
+ * The operator gets their copy; nobody else gets a copy they did not have before.
+ *
+ * **Windows is a refusal rather than a weaker promise.** Mode bits do not constrain ACL inheritance
+ * there, so a 0600 create is not a guarantee of anything — and the one thing worse than not writing the
+ * backup is writing one that discloses the document while reporting that it is owner-only. `--output`
+ * is the way through: it leaves the input untouched, so no backup is needed at all.
  *
  * **It never overwrites.** An existing `.before-resign.json` is somebody's only copy too — quite
  * possibly from the previous run of this command. `'wx'` claims the name atomically, so a collision
  * costs a retry rather than a file, and `existsSync`-then-write cannot lose one to a concurrent
  * creator.
- *
- * **It carries the source's mode**, but only once the file is private and correctly owned. It is
- * created at 0600 — never at the source's mode — then chowned, then chmoded, and only then written. A
- * file created directly at a group-readable mode is reachable by that group before its ownership is
- * fixed, and a descriptor opened in that window still reads the bytes once they arrive. `fchmod` rather
- * than the open mode does the widening because `open` filters through umask and `fchmod` does not.
- *
- * **It carries the source's ownership.** A new file takes this process's uid and gid, so a
- * `0640 alice:curators` playlist re-signed by someone whose primary group differs becomes
- * `0640 bob:users` — the mode is preserved and the access is still wider, which is the failure mode a
- * mode-only copy hides. When ownership cannot be reproduced the backup is removed and the in-place
- * re-sign is refused, rather than completed against a copy that leaks.
  *
  * **It is durable before the source is touched.** Data and directory entry are both synced here, so a
  * crash between the two writes cannot leave the backup unwritten and the source already overwritten.
@@ -374,21 +377,27 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
  * rather than beside a symlink used to reach it — otherwise the backup can sit in a directory other
  * people can write to, where it can be removed before it has served its purpose.
  *
- * A source that cannot be resolved or stat-ed is a refusal for the same reason: with no mode and no ownership to
- * copy, the only alternative is a default-mode backup, which is precisely the disclosure this guards
- * against. `--output` is the way through in every refusal — it leaves the input untouched, so no backup
- * is needed at all.
- *
  * @param {Object} fs - Node fs module (injectable for tests)
  * @param {string} playlistPath - Path of the file about to be overwritten
  * @param {string} contents - Exact bytes to preserve
- * @param {{uid: number|undefined, gid: number|undefined}} [identity] - POSIX identity of this process,
- *   for tests; defaults to `process.getuid()`/`getgid()`, which are undefined off POSIX
+ * @param {{platform?: string}} [options] - Platform override, for tests
  * @returns {string} The path written
- * @throws {Error} When the source cannot be stat-ed, or its ownership cannot be reproduced
+ * @throws {Error} On Windows, or when the source path cannot be resolved
  */
-function writeBackup(fs, playlistPath, contents, identity) {
+function writeBackup(fs, playlistPath, contents, options) {
   const path = require('path');
+  const platform = (options && options.platform) || process.platform;
+
+  if (platform === 'win32') {
+    throw new Error(
+      'Replacing signatures in place would discard a signature from another key that is still valid, ' +
+        'and the copy this would keep cannot be made owner-only on Windows — mode bits do not ' +
+        'constrain ACL inheritance there, so the backup could be readable by principals the original ' +
+        'is not. Refusing rather than writing a copy that discloses the document. Use --output to ' +
+        'write the signed playlist elsewhere, which leaves the input — and the signatures on it — ' +
+        'untouched.'
+    );
+  }
 
   // Put the backup beside the file the bytes actually live in, not beside the name used to reach it.
   //
@@ -408,43 +417,14 @@ function writeBackup(fs, playlistPath, contents, identity) {
     );
   }
 
-  // Read mode and ownership before the file is replaced. Without them there is nothing to reproduce,
-  // and a default-mode copy of a restricted document is worse than not running.
-  let source;
-  try {
-    source = fs.statSync(target);
-  } catch (error) {
-    throw new Error(
-      `Cannot read the permissions of ${target} (${error.message}), so the copy this re-sign ` +
-        'would leave behind could be readable by users the original was not. Refusing to replace it ' +
-        'in place. Use --output to write the signed playlist elsewhere, which leaves the input — and ' +
-        'the signatures on it — untouched.'
-    );
-  }
-  const mode = source.mode & 0o7777;
-
-  // Only where POSIX identity exists. Windows has no getuid/getgid and reports uid and gid as 0 on
-  // every stat, so the comparison there would always "differ" and chown a file whose ownership never
-  // moved. (libuv makes fchown a no-op on Windows, so nothing would break — but the branch would be
-  // asserting something it cannot know.)
-  //
-  // Injectable so the refusal path can be exercised wherever the tests run. Reading `process` directly
-  // made this branch unreachable on Windows, which is correct behaviour and a test that silently
-  // asserted nothing there — the coverage disappeared on exactly the platform least like the author's.
-  const uid = identity ? identity.uid : process.getuid?.();
-  const gid = identity ? identity.gid : process.getgid?.();
-  const mustChown =
-    uid !== undefined && gid !== undefined && (source.uid !== uid || source.gid !== gid);
-
   for (let attempt = 1; attempt < 1000; attempt += 1) {
     const candidate =
       attempt === 1 ? `${target}.before-resign.json` : `${target}.before-resign.${attempt}.json`;
 
     let fd;
     try {
-      // 0600, never the source's mode: the file must not be reachable by anyone else between its
-      // creation and the moment its ownership and permissions are both correct. 0600 also survives any
-      // umask, so the window is owner-only regardless of how the process is configured.
+      // 0600, and it stays there. Nothing widens it afterwards: the mode is the whole access promise,
+      // and it also keeps the ACL mask empty so an inherited default ACL grants nobody anything.
       fd = fs.openSync(candidate, 'wx', 0o600);
     } catch (error) {
       if (error && error.code === 'EEXIST') {
@@ -455,35 +435,6 @@ function writeBackup(fs, playlistPath, contents, identity) {
 
     let settled = false;
     try {
-      // Ownership first, while the file is still private, and only then the source's mode.
-      //
-      // Creating at the source's mode looks equivalent and is not. A 0640 alice:curators playlist
-      // re-signed by alice, whose primary group is `users`, produces a file that is briefly
-      // alice:users AND group-readable — long enough for any `users` member to open it and hold the
-      // descriptor until the contents arrive. The bytes are what matter, so the widening has to happen
-      // after the ownership is right, not before.
-      if (mustChown) {
-        try {
-          fs.fchownSync(fd, source.uid, source.gid);
-        } catch (error) {
-          throw new Error(
-            `Cannot give ${candidate} the same owner as ${target} (${error.message}). The copy ` +
-              'would belong to you instead, which can widen who is able to read it. Refusing to ' +
-              'replace the playlist in place. Use --output to write the signed playlist elsewhere, ' +
-              'which leaves the input — and the signatures on it — untouched.'
-          );
-        }
-      }
-
-      try {
-        // Not subject to umask, unlike the mode passed to open(), so this is what actually reproduces
-        // the source's permissions — and it runs before a single byte exists in the file.
-        fs.fchmodSync(fd, mode);
-      } catch {
-        // Windows supports only the write bit here. A backup that exists with approximate permissions
-        // beats refusing to preserve the document at all.
-      }
-
       fs.writeFileSync(fd, contents, 'utf-8');
       // Durability before the source is truncated, not after. Without this a crash in the window
       // between the two writes loses the backup AND the original — the one outcome the backup exists
@@ -493,7 +444,7 @@ function writeBackup(fs, playlistPath, contents, identity) {
     } finally {
       fs.closeSync(fd);
       if (!settled) {
-        // A partial or wrongly-owned backup is worse than none: it looks like a safe copy.
+        // A partial backup is worse than none: it looks like a safe copy.
         try {
           fs.rmSync(candidate, { force: true });
         } catch {
@@ -507,7 +458,7 @@ function writeBackup(fs, playlistPath, contents, identity) {
   }
 
   throw new Error(
-    `Could not reserve a backup path next to ${playlistPath}: too many .before-resign files already ` +
+    `Could not reserve a backup path next to ${target}: too many .before-resign files already ` +
       'exist. Move or delete some, or sign with --output to leave the input untouched.'
   );
 }

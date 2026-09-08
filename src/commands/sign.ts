@@ -72,8 +72,14 @@ export const signCommand = new Command('sign')
               // the command had already made impossible on an in-place run: the only copy was gone by
               // the time it was printed. The backup is written before the overwrite now, so this can
               // point at something that exists.
+              //
+              // And it says who can read it. The backup does not reproduce the source's sharing — no
+              // portable ACL API exists, and mirroring was the wrong goal — so anyone who could read
+              // the original through a group or an ACL cannot read this copy. Someone handing it on as
+              // "the previous version" needs to know that before they do.
               const where = result.backupPath
-                ? `  The document as it was is saved at ${result.backupPath} — ${it} ${
+                ? `  Backup written to ${result.backupPath} (owner-only; readable by you, not by the\n` +
+                  `  original's other readers). ${it.charAt(0).toUpperCase()}${it.slice(1)} ${
                     stillValid.length === 1 ? 'is' : 'are'
                   } still valid there.`
                 : result.inPlace
