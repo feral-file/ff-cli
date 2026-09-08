@@ -64,11 +64,24 @@ export const signCommand = new Command('sign')
             if (stillValid.length > 0) {
               const noun = stillValid.length === 1 ? 'signature' : 'signatures';
               const it = stillValid.length === 1 ? 'it' : 'them';
+              // Name the file that actually holds them. "Keep a copy of the previous file" was advice
+              // the command had already made impossible on an in-place run: the only copy was gone by
+              // the time it was printed. The backup is written before the overwrite now, so this can
+              // point at something that exists.
+              const where = result.backupPath
+                ? `  The document as it was is saved at ${result.backupPath} — ${it} ${
+                    stillValid.length === 1 ? 'is' : 'are'
+                  } still valid there.`
+                : result.inPlace
+                  ? `  Nothing invalidated ${it}; recover ${it} from your own copy of the previous file.`
+                  : `  Your input file is untouched, so ${it} ${
+                      stillValid.length === 1 ? 'remains' : 'remain'
+                    } valid there.`;
               console.log(
                 chalk.yellow(
                   `  ${stillValid.length} other ${noun} still verified over this content and ` +
                     `${stillValid.length === 1 ? 'was' : 'were'} removed anyway.\n` +
-                    `  Keep a copy of the previous file if you want ${it} back — nothing invalidated ${it}.`
+                    where
                 )
               );
             }

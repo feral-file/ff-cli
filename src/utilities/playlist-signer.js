@@ -115,6 +115,8 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @returns {boolean} returns.success - Whether signing succeeded
  * @returns {Object} [returns.playlist] - Signed playlist object
  * @returns {Array<Object>} [returns.dropped] - The stale entries that were discarded, classified
+ * @returns {boolean} [returns.inPlace] - Whether the input file itself was overwritten
+ * @returns {string|null} [returns.backupPath] - Where the pre-re-sign original was preserved, if it was
  * @returns {string} [returns.error] - Error message if failed
  */
 async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride, options) {
@@ -171,8 +173,28 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
     }
 
-    // Write to output file
     const output = outputPath || playlistPath;
+    const inPlace = path.resolve(output) === path.resolve(playlistPath);
+
+    // Preserve the original BEFORE overwriting it, when overwriting is what destroys the only copy of
+    // a signature this run cannot reproduce.
+    //
+    // The report tells the owner that a still-valid third-party signature was removed and that the
+    // previous file is the way to get it back. On an in-place run that advice arrived after the file
+    // was gone — the one case where the remedy was destroyed by the command giving it. Writing the
+    // backup first makes the sentence true.
+    //
+    // Only for that case: a self signature is replaced by this run, an unverified one is not restorable
+    // from the old file either, and an --output run leaves the input untouched. A backup in those cases
+    // would be litter, and litter trains people to ignore the file that matters.
+    let backupPath = null;
+    if (inPlace && dropped.some((entry) => entry.kind === 'other' && entry.verified)) {
+      backupPath = reserveBackupPath(fs, playlistPath);
+      // The bytes as read, not a re-serialization: the signatures cover the exact document, so a
+      // reformatted copy would not verify and would be a backup in name only.
+      fs.writeFileSync(backupPath, playlistContent, 'utf-8');
+    }
+
     fs.writeFileSync(output, JSON.stringify(signedPlaylist, null, 2), 'utf-8');
 
     console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
@@ -181,6 +203,8 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       success: true,
       playlist: signedPlaylist,
       dropped,
+      inPlace,
+      backupPath,
     };
   } catch (error) {
     return {
@@ -272,6 +296,37 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
   }
 
   return dropped;
+}
+
+/**
+ * Choose a path for the pre-re-sign backup, never overwriting one that already exists.
+ *
+ * An existing `.before-resign.json` is somebody's only copy of an earlier document — quite possibly
+ * from the previous run of this same command — so clobbering it to preserve the current one would
+ * destroy exactly what the backup exists to protect. Later attempts are numbered instead.
+ *
+ * The suffix goes after the full filename rather than before the extension so it cannot collide with a
+ * real playlist, and so `playlist.json` and `playlist.backup.json` produce different names.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {string} playlistPath - Path of the file about to be overwritten
+ * @returns {string} A path that does not yet exist
+ */
+function reserveBackupPath(fs, playlistPath) {
+  const first = `${playlistPath}.before-resign.json`;
+  if (!fs.existsSync(first)) {
+    return first;
+  }
+  for (let n = 2; n < 1000; n += 1) {
+    const candidate = `${playlistPath}.before-resign.${n}.json`;
+    if (!fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `Could not reserve a backup path next to ${playlistPath}: too many .before-resign files already ` +
+      'exist. Move or delete some, or sign with --output to leave the input untouched.'
+  );
 }
 
 module.exports = {

@@ -653,9 +653,19 @@ Playlist signed
     - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
     - another key's signature (curator, ...7qJ2mVdW) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
-  Keep a copy of the previous file if you want it back — nothing invalidated it.
+  The document as it was is saved at playlist.json.before-resign.json — it is still valid there.
   Signatures: 1
 ```
+
+**When a run would drop another key's still-valid signature and `sign` is writing over its own input,
+the original is preserved first**, at `<file>.before-resign.json`. That signature cannot be reproduced
+by this command — only its holder could — so the file that still carries it has to outlive the run.
+An existing `.before-resign.json` is never overwritten (it is somebody's only copy too); later runs are
+numbered `.before-resign.2.json` and so on.
+
+No backup is written when there is nothing to preserve: when the only entries dropped are your own or
+ones that no longer verify, and when `-o, --output` writes elsewhere — there the input file is untouched
+and is itself the copy, which the report says instead of naming a file it did not write.
 
 Appending stays the default, because it is right whenever the content has not changed — a second curator
 co-signing an unedited playlist keeps the first endorsement, and the payload hash excludes `signatures`
