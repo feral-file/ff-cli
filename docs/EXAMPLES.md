@@ -546,8 +546,9 @@ documents you sign by hand, where `playlist.role` (default `agent`) decides the 
 ## Replace or Delete a Published Playlist
 
 A feed's `PUT` and `DELETE` are **owner-bound**, and neither accepts an API key. Both carry a short-lived
-signed **intent** — `ff-cli` builds it, signs it with the configured key in the `curator` role, and sends
-it alongside (replace) or as (delete) the request body. Only a key the **stored** playlist names in
+signed **intent** — `ff-cli` builds it, signs it in the `curator` role with the configured
+`playlist.privateKey` (or with `-k, --key` when you name one for that command), and sends it alongside
+(replace) or as (delete) the request body. Only a key the **stored** playlist names in
 `curators[]` can authorize either. This is the whole reason `publish` refuses a document with no
 owner-role signature: once such a playlist is created it can never be replaced or deleted.
 
@@ -715,9 +716,10 @@ a new playlist instead of trying to recreate it.
 
 ### Signing with a key other than the configured one
 
-`unpublish` and `publish --replace` take `-k, --key`, like `ff-cli sign` and `ff-cli status`. It
-overrides the configured key both for the intent signature and for the local ownership check, so holding
-a second owner key no longer means editing `config.json`:
+The configured `playlist.privateKey` is the default, not the only option. `unpublish` and
+`publish --replace` take `-k, --key`, like `ff-cli sign` and `ff-cli status`, and it overrides that
+default both for the intent signature and for the local ownership check — so holding a second owner key
+no longer means editing `config.json`:
 
 ```bash
 ff-cli unpublish <id> -s 0 --key <private key for a stored owner>
@@ -791,16 +793,22 @@ Unpublish playlist
 Unpublish failed
   The configured signing key is not an owner of this playlist, so it cannot delete it.
 
-Only a key the stored playlist names in curators[] can authorize a delete; the feed derives
-  ownership from the stored document, not from a local copy.
+Only a key the stored playlist names in curators[] AND that signed it as "curator" can
+  authorize a delete; the feed derives ownership from the stored document, not from a local copy.
   Your configured identity:
     did:key:z6MkoX8i2dynyvLh4hUHZt8b42q9uAwwCWxM4NSX4YDfMtaC
-  Stored owners:
+  Keys that have proved ownership:
     did:key:z6MkoDkq5YXsFGXPiD6HDUVfze5mvhU5QF4hTy59pVVPYg82
-  Point playlist.privateKey at a key listed above (confirm any key's identity with
-  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set
-  is immutable, so a playlist signed by the wrong key stays that way.
+  Point playlist.privateKey at the key listed above, or pass one for this run with --key (confirm
+  any key's identity with "ff-cli status --key <private key>").
+  Ownership cannot be granted after the fact: the owner set is immutable, so a playlist signed
+  by the wrong key stays that way.
 ```
+
+That run used the configured key, so the refusal names it as configured. Had it been given
+`--key`, the same refusal would name that key instead and the retry line would read
+`Run it again with an owner key: --key <private key for the key listed above>` — a refusal always
+points at the key the command actually used, never at a config file the run never read.
 
 Ownership cannot be granted after the fact — the owner set is immutable, and only an owner could change
 it — so the only fix is to hold a declared key. A playlist whose stored `curators[]` is **empty** is a

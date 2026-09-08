@@ -333,8 +333,8 @@ is configured. An `apiKey` left over in an existing config is ignored.
 ### Change or remove a published playlist
 
 A feed's `PUT` and `DELETE` are owner-bound. Neither takes an API key, and neither is authorized by the
-document alone: both carry a short-lived **intent** that ff-cli signs with the configured key in the
-`curator` role. Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
+document alone: both carry a short-lived **intent** that ff-cli signs in the `curator` role — with the
+configured `playlist.privateKey` by default, or with whatever `-k, --key` names for that one command. Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
 why `publish` refuses to create a playlist that carries no owner-role signature — such a document can be
 neither replaced nor deleted, ever.
 
@@ -361,14 +361,16 @@ you published — re-running `find` or `build` mints a fresh id, slug, and `crea
 playlist rather than a replacement. A `publish` without `--replace` is never silently upgraded to a
 replace; an id the feed already holds fails with a conflict, as before.
 
-`-k, --key` overrides the configured signing key on both — for the intent signature and for the local
-ownership check — the way `ff-cli sign --key` and `ff-cli status --key` already do. A `--key` that is
+The configured `playlist.privateKey` is only the default. `-k, --key` overrides it on both commands —
+for the intent signature and for the local ownership check alike — the way `ff-cli sign --key` and
+`ff-cli status --key` already do. A `--key` that is
 present but empty (what `--key "$SIGNING_KEY"` becomes when the variable is unset) is **rejected**, never
 treated as absent: falling back to the configured key would authorize the write under an identity you did
 not choose, and a delete cannot be taken back. `unpublish` derives the identity before it looks the
-playlist up, so a bad credential fails before you are asked to confirm anything. The configured key
-is one identity; the key that owns a given playlist may be another, and editing `config.json` to delete
-something you own is not a workflow.
+playlist up, so a bad credential fails before you are asked to confirm anything, and it prints
+`Signing as:` so the identity is visible in the record either way. The configured key is one identity;
+the key that owns a given playlist may be another, and editing `config.json` to delete something you own
+is not a workflow.
 
 Both verbs prove ownership locally before signing anything. A key counts as an owner only when the
 **stored** playlist names it in `curators[]` **and** carries its valid `curator`-role signature — being
