@@ -43,6 +43,23 @@ export const unpublishCommand = new Command('unpublish')
         process.exit(1);
       }
 
+      // Validate the signing credential before anything else touches the network or the operator.
+      //
+      // Deriving it here rather than inside unpublishPlaylist means a malformed or empty --key fails
+      // before the lookup and before the confirmation prompt — otherwise someone was shown a playlist,
+      // asked to approve destroying it, and only then told their key was unusable. Nothing but the
+      // did:key comes back, so the material cannot reach the output from this path.
+      const { mutationSignerIdentity } = await import('../utilities/feed-mutation.js');
+      let signerDidKey: string;
+      try {
+        signerDidKey = mutationSignerIdentity(options.key, 'delete').didKey;
+      } catch (error) {
+        console.error(chalk.red('\nCannot sign the delete'));
+        console.error(chalk.red(`  ${(error as Error).message}`));
+        console.log();
+        process.exit(1);
+      }
+
       if (!options.yes) {
         if (!process.stdin.isTTY) {
           console.error(chalk.red('\nRefusing to delete without confirmation'));
@@ -66,6 +83,7 @@ export const unpublishCommand = new Command('unpublish')
 
         console.log(chalk.yellow(`  ${label}`));
         console.log(chalk.dim(`  Server: ${selection.url}`));
+        console.log(chalk.dim(`  Signing as: ${signerDidKey}`));
         console.log(
           chalk.dim('  This cannot be undone; the id is tombstoned and cannot be reused.')
         );
