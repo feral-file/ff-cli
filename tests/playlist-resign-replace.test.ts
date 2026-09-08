@@ -134,11 +134,13 @@ describe('edit a published playlist, re-sign, replace', () => {
         signPlaylistFile(path, curatorKey, undefined, 'curator', { replaceSignatures: true })
       );
       assert.equal(signed.success, true, signed.error);
-      assert.equal(
-        signed.droppedSignatures,
-        2,
-        'both the curator and feed entries must be dropped'
-      );
+      assert.equal(signed.dropped.length, 2, 'both the curator and feed entries must be dropped');
+      // The classification is what the owner acts on, so it is pinned here rather than only in the
+      // command's output: the signer's own entry costs nothing, and neither does the feed's.
+      assert.deepEqual(signed.dropped.map((entry: { kind: string }) => entry.kind).sort(), [
+        'feed',
+        'self',
+      ]);
 
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as {
         title: string;
@@ -239,9 +241,72 @@ describe('edit a published playlist, re-sign, replace', () => {
       );
 
       assert.equal(fresh.status, 0, `${fresh.stdout ?? ''}${fresh.stderr ?? ''}`);
-      assert.match(`${fresh.stdout ?? ''}`, /Replaced 2 existing signatures/);
+      const freshOut = `${fresh.stdout ?? ''}`;
+      assert.match(freshOut, /Replaced 2 existing signatures:/);
+      // Each entry has to be named, with enough of the kid to match a curators[] row at a glance.
+      assert.match(freshOut, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(freshOut, /the feed's signature \(feed, \.\.\.[A-Za-z0-9]{8}\)/);
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as { signatures: unknown[] };
       assert.equal(onDisk.signatures.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('names a co-curator endorsement as lost, and says how to get it back', async () => {
+    // The case the classification exists for. Dropping your own signature or the feed's costs nothing;
+    // dropping someone else's endorsement cannot be undone without asking them to sign again, and the
+    // owner has to learn that before they publish the replacement, not after someone notices.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+    const feedKey = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const feedSig = await signPlaylist(document, feedKey, 'feed');
+      const path = join(dir, 'co-curated.json');
+      writeFileSync(
+        path,
+        JSON.stringify(
+          { ...document, title: 'Edited', signatures: [sigA, sigB, feedSig] },
+          null,
+          2
+        ),
+        'utf-8'
+      );
+
+      // A re-signs the edited document; B's endorsement and the feed's are void.
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(out, /Replaced 3 existing signatures:/);
+      assert.match(out, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(out, /the feed's signature \(feed, \.\.\.[A-Za-z0-9]{8}\)/);
+      assert.match(out, /another key's endorsement \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
+      // B's kid must be identifiable, or "another key" names nobody.
+      assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
+
+      // Exactly one entry needs an action, and only that one gets the warning.
+      assert.match(out, /1 endorsement is now void/);
+      assert.match(out, /ff-cli sign <file> -r curator --key <their key>/);
+      // The lost count must not include the signer's own entry or the feed's.
+      assert.doesNotMatch(out, /3 endorsements are now void/);
+      assert.doesNotMatch(out, /2 endorsements are now void/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -270,7 +335,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       const result = await quiet(() => signPlaylistFile(path, curatorB, undefined, 'curator'));
 
       assert.equal(result.success, true, result.error);
-      assert.equal(result.droppedSignatures, 0);
+      assert.deepEqual(result.dropped, []);
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as { signatures: unknown[] };
       assert.equal(onDisk.signatures.length, 2);
     } finally {

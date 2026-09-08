@@ -114,7 +114,7 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @returns {Promise<Object>} Result with signed playlist
  * @returns {boolean} returns.success - Whether signing succeeded
  * @returns {Object} [returns.playlist] - Signed playlist object
- * @returns {number} [returns.droppedSignatures] - How many stale entries were discarded
+ * @returns {Array<Object>} [returns.dropped] - The stale entries that were discarded, classified
  * @returns {string} [returns.error] - Error message if failed
  */
 async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride, options) {
@@ -143,10 +143,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       throw new Error('Private key is required for signing');
     }
     const replaceSignatures = Boolean(options && options.replaceSignatures);
-    const droppedSignatures = replaceSignatures
-      ? (Array.isArray(playlist.signatures) ? playlist.signatures.filter(Boolean).length : 0) +
-        (typeof playlist.signature === 'string' && playlist.signature.trim() ? 1 : 0)
-      : 0;
     const signedPlaylist = await buildSignedPlaylistEnvelope(
       playlist,
       privateKey,
@@ -154,6 +150,10 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       role,
       replaceSignatures
     );
+    // Classify against the signature just produced: its `kid` is this key's identity, so no separate
+    // derivation is needed to tell the signer's own entries from everyone else's.
+    const signingKid = signedPlaylist.signatures[signedPlaylist.signatures.length - 1]?.kid;
+    const dropped = replaceSignatures ? describeDroppedSignatures(playlist, signingKid) : [];
     const verification = await verifySignedPlaylistEnvelope(signedPlaylist, dp1);
     if (!verification.valid) {
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
@@ -168,7 +168,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     return {
       success: true,
       playlist: signedPlaylist,
-      droppedSignatures,
+      dropped,
     };
   } catch (error) {
     return {
@@ -176,6 +176,64 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       error: error.message,
     };
   }
+}
+
+/**
+ * Describe the signatures `--replace-signatures` discards, so the output can name them.
+ *
+ * A count alone is not actionable on a co-curated playlist. Dropping your own earlier signature costs
+ * nothing — you are replacing it in the same command. Dropping the feed's costs nothing either; it
+ * co-signs again after verifying the replacement. Dropping *another key's* endorsement is the one that
+ * cannot be recovered without asking that person to sign again, and the owner has to know which ones
+ * those were before they publish the replacement.
+ *
+ * They are void either way. Their payload hash covers content that has changed, so nothing here tries
+ * to carry them forward — the point is to report the loss, not to soften it.
+ *
+ * `kid` is reported as its last 8 characters: enough to match against a curators[] entry at a glance,
+ * and the full value is already in the file for anyone who needs it.
+ *
+ * @param {Object} playlist - The playlist as read, before signing
+ * @param {string} [signingKid] - `did:key` of the key that just signed
+ * @returns {Array<{kind: string, role: string|null, kid: string|null, label: string}>} One per entry
+ */
+function describeDroppedSignatures(playlist, signingKid) {
+  const dropped = [];
+
+  for (const entry of Array.isArray(playlist.signatures) ? playlist.signatures : []) {
+    if (!entry) {
+      continue;
+    }
+    const kid = typeof entry.kid === 'string' && entry.kid ? entry.kid : null;
+    const role = typeof entry.role === 'string' && entry.role ? entry.role : null;
+    const short = kid ? kid.slice(-8) : 'unknown';
+
+    let kind;
+    let label;
+    if (kid && signingKid && kid === signingKid) {
+      kind = 'self';
+      label = `your own earlier signature (${role || 'no role'}, ...${short})`;
+    } else if (role === 'feed') {
+      kind = 'feed';
+      label = `the feed's signature (feed, ...${short})`;
+    } else {
+      kind = 'other';
+      label = `another key's endorsement (${role || 'no role'}, ...${short})`;
+    }
+    dropped.push({ kind, role, kid, label });
+  }
+
+  if (typeof playlist.signature === 'string' && playlist.signature.trim()) {
+    // A legacy flat signature carries neither kid nor role, so it can only be reported as what it is.
+    dropped.push({
+      kind: 'legacy',
+      role: null,
+      kid: null,
+      label: 'a legacy flat signature (no kid, no role)',
+    });
+  }
+
+  return dropped;
 }
 
 module.exports = {

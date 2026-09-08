@@ -29,14 +29,33 @@ export const signCommand = new Command('sign')
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));
-          // Report the discard explicitly. Dropping an entry is a real change to the document —
-          // someone else's endorsement may have been in it — and staying silent would make a fresh
-          // sign indistinguishable from an appending one.
-          if (result.droppedSignatures > 0) {
-            const plural = result.droppedSignatures === 1 ? '' : 's';
-            console.log(
-              chalk.dim(`  Replaced ${result.droppedSignatures} existing signature${plural}`)
-            );
+          // Name every discarded entry, not just the count. Dropping your own earlier signature costs
+          // nothing — this command replaces it. Dropping the feed's costs nothing either; it co-signs
+          // again after verifying the replacement. Dropping another key's endorsement is the one that
+          // cannot be recovered without asking that person to sign again, and the owner of a co-curated
+          // playlist has to see which ones those were BEFORE they publish the replacement, not after
+          // someone notices their name is missing.
+          const dropped: Array<{ kind: string; label: string }> = result.dropped ?? [];
+          if (dropped.length > 0) {
+            const plural = dropped.length === 1 ? '' : 's';
+            console.log(chalk.dim(`  Replaced ${dropped.length} existing signature${plural}:`));
+            for (const entry of dropped) {
+              console.log(chalk.dim(`    - ${entry.label}`));
+            }
+
+            const endorsements = dropped.filter((entry) => entry.kind === 'other').length;
+            if (endorsements > 0) {
+              // Only this class needs an action, so only this class gets a line about one.
+              const noun = endorsements === 1 ? 'endorsement is' : 'endorsements are';
+              console.log(
+                chalk.yellow(
+                  `  ${endorsements} ${noun} now void — a signature covers the content, and the content changed.\n` +
+                    `  Ask those curators to sign the edited document if you want them back:\n` +
+                    `    ff-cli sign <file> -r curator --key <their key>\n` +
+                    `  Signing appends, so they can add to this file without disturbing your signature.`
+                )
+              );
+            }
           }
           if (Array.isArray(result.playlist?.signatures)) {
             console.log(chalk.dim(`  Signatures: ${result.playlist.signatures.length}`));
