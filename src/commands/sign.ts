@@ -15,20 +15,38 @@ export const signCommand = new Command('sign')
     '--replace-signatures',
     'Discard the existing signatures and sign fresh (use after editing a signed playlist)'
   )
+  .option(
+    '--force',
+    'Overwrite an output file that holds a different document (refused without this)'
+  )
   .action(
     async (
       file: string,
-      options: { key?: string; role?: string; output?: string; replaceSignatures?: boolean }
+      options: {
+        key?: string;
+        role?: string;
+        output?: string;
+        replaceSignatures?: boolean;
+        force?: boolean;
+      }
     ) => {
       try {
         console.log(chalk.blue('\nSign playlist\n'));
 
         const result = await signPlaylistFile(file, options.key, options.output, options.role, {
           replaceSignatures: !!options.replaceSignatures,
+          force: !!options.force,
         });
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));
+          // Name the casualty. --force overwrote a document this command never read, and the only
+          // record that it existed is now this line.
+          if (result.overwroteAnother) {
+            console.log(
+              chalk.yellow(`  Overwrote a different document at ${result.outputPath} (--force)`)
+            );
+          }
           // Name every discarded entry, and say only what was actually checked.
           //
           // Your own earlier signature is free: this command replaces it. For the rest the only

@@ -6,7 +6,6 @@
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
 const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
-const { sameFileVerdict, sameOpenFile } = require('./same-file');
 
 /**
  * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
@@ -112,6 +111,7 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @param {string} [roleOverride] - DP-1 signing role override
  * @param {Object} [options] - Signing options
  * @param {boolean} [options.replaceSignatures=false] - Drop every existing signature and sign fresh
+ * @param {boolean} [options.force=false] - Overwrite a destination holding a different document
  * @param {Object} [options.fs] - Filesystem module override, for tests
  * @returns {Promise<Object>} Result with signed playlist
  * @returns {boolean} returns.success - Whether signing succeeded
@@ -151,10 +151,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
   }
 
   try {
-    // Identity as it was when the bytes were read. Size and mtime ride along because they catch a
-    // replacement that reuses an inode, which a busy directory makes ordinary rather than exotic.
-    const sourceSnapshot = fs.fstatSync(sourceFd);
-
     const sourceBytes = readAllFrom(fs, sourceFd);
     const sourceDigest = digestOf(sourceBytes);
     const playlistContent = sourceBytes.toString('utf-8');
@@ -183,6 +179,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       throw new Error('Private key is required for signing');
     }
     const replaceSignatures = Boolean(options && options.replaceSignatures);
+    const force = Boolean(options && options.force);
     const signedPlaylist = await buildSignedPlaylistEnvelope(
       playlist,
       privateKey,
@@ -207,19 +204,24 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // to the input by the time it is written, so the refusal below never fires and the write follows
     // the link into the input while the report calls it untouched. A descriptor cannot be re-pointed.
     //
-    // O_CREAT|O_EXCL first, so a success proves this call created the file: it did not exist a moment
-    // ago, so it cannot be the source, and the failure path knows whether an empty file it left behind
-    // is its own.
+    // Only ever truncate bytes this command has inspected.
     //
-    // O_EXCL refuses to follow a symlink, which is the case worth falling through. The retry keeps
-    // O_CREAT so a DANGLING symlink gets its target created — dropping it there turned the documented
-    // safe path into ENOENT — and follows the link, binding the real file the write would have hit.
-    // That file may be the source, which is why the identity check below runs on the descriptor.
+    // Every earlier version answered "is the output the input?" with file identity — inode, name,
+    // realpath — and every one of them lost to the same shape of race: a path can be re-pointed
+    // between any two syscalls, so a stat taken before the write says nothing about what the write
+    // will land on. Identity is the wrong question. What matters is not whether two names refer to one
+    // file but whether the bytes about to be destroyed are the bytes that were read and classified.
     //
-    // O_WRONLY: fstat, ftruncate and write need no read permission, and asking for it fails on a
-    // write-only destination the operator deliberately made that way.
+    // So the output descriptor is read back and digested, and the comparison is against the digest of
+    // the source. Equal means this IS the inspected document, however the name got here, and the
+    // discard rules apply to it. Unequal means the destination holds something never looked at, which
+    // is refused rather than guessed about. Neither answer depends on a name staying still.
     //
-    // No O_TRUNC anywhere: the input must not lose a byte before the decision is made.
+    // O_CREAT|O_EXCL first: a success proves the file did not exist a moment ago, so it holds nothing
+    // to preserve and nothing to compare. On EEXIST the retry keeps O_CREAT so a dangling symlink gets
+    // its target created, and adds O_RDWR because the destination now has to be read back.
+    //
+    // No O_TRUNC anywhere: nothing is destroyed before the decision.
     let fd;
     try {
       fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
@@ -228,73 +230,69 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       if (!openError || openError.code !== 'EEXIST') {
         throw openError;
       }
-      // Not O_EXCL, so `createdOutput` stays false: this may have created a dangling link's target or
-      // opened something that was already there, and the two are indistinguishable from here.
-      fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT);
+      try {
+        fd = fs.openSync(output, fs.constants.O_RDWR | fs.constants.O_CREAT);
+      } catch (retryError) {
+        if (retryError && retryError.code === 'EACCES') {
+          // The destination has to be read back before it can be destroyed, so a write-only file that
+          // already exists is no longer a usable target. Worth saying, because the errno alone reads
+          // like a bug rather than a rule.
+          throw new Error(
+            `Cannot read ${output} to check what it holds (${retryError.message}). A destination that ` +
+              'already exists is read before it is overwritten, so it needs read permission. Write to ' +
+              'a new name instead.'
+          );
+        }
+        throw retryError;
+      }
     }
 
     try {
-      // A file this call created cannot be the source: the source was already open when the exclusive
-      // create succeeded, so the name was free and the inode is new. That is proof, not a comparison,
-      // and it holds where inodes are not reported at all — without it, `--output` to a fresh name
-      // refused on such a filesystem, which is the one path the refusal tells people to take.
-      const verdict = createdOutput
-        ? 'different'
-        : sameFileVerdict(fs.fstatSync(fd), output, sourceSnapshot, playlistPath);
-      const inPlace = verdict === 'same';
+      // `inPlace` now means "this descriptor holds the document that was read", which is the only
+      // sense the discard rules ever needed.
+      let inPlace = false;
+      let overwroteAnother = false;
 
-      // Refuse rather than overwrite a signature only its holder could reproduce.
-      //
-      // The invariant is simply that a still-valid endorsement from another key is never destroyed by an
-      // in-place run. An earlier version kept a copy instead, which sounds kinder and is much harder to
-      // get right: a copy has to reproduce the source's access, and it cannot — POSIX ACLs grant what
-      // mode bits do not describe, macOS extended ACLs ignore the mask entirely, and Windows mode bits
-      // constrain nothing. Every one of those is a way for the copy to disclose the document. Refusing
-      // makes the guarantee hold on every platform, assumes nothing about the filesystem, and leaves the
-      // operator with the file they already had.
-      //
-      // Only for another key's signature. Your own entry is replaced by this run, an unverified one is
-      // not recoverable from the input either, and --output leaves the input where it is.
-      const unrecoverable = dropped.filter(
-        (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
-      );
-      if (unrecoverable.length > 0 && verdict !== 'different') {
-        const count = unrecoverable.length;
-        const plural = count === 1 ? '' : 's';
-        // `unknown` is refused alongside `same`, not treated as a pass. It means the filesystem
-        // reported no usable inode, and the alternative — comparing names — calls two hard links to
-        // one file different. Guessing wrong here truncates the document, so the guess is not made.
-        throw new Error(
-          verdict === 'unknown'
-            ? `This would discard ${count} still-valid signature${plural} from other keys, and this ` +
-              'filesystem does not report file identities, so whether the output is the input cannot ' +
-              'be established. Refusing rather than risking it. Write to a fresh name in a different ' +
-              'directory:\n' +
-              `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
-            : `This would discard ${count} still-valid signature${plural} from other keys. Write the ` +
-              'result elsewhere so the original stays:\n' +
-              `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
-        );
+      if (!createdOutput) {
+        const outputBytes = readAllFrom(fs, fd);
+        const outputDigest = digestOf(outputBytes);
+        inPlace = outputDigest === sourceDigest;
+
+        // An empty destination holds nothing to destroy, so there is nothing for the rule to protect.
+        // This is how a dangling symlink is written: O_EXCL will not follow the link, so the retry
+        // creates the target and cannot prove it did — but the file it opened is provably empty, which
+        // answers the same question the proof would have.
+        const empty = outputBytes.length === 0;
+
+        if (inPlace) {
+          // Refuse rather than overwrite a signature only its holder could reproduce. The invariant is
+          // that a still-valid endorsement from another key is never destroyed in place; scoped to what
+          // cannot be recovered, since your own entry is replaced by this run and an unverified one was
+          // not restorable from the input either.
+          const unrecoverable = dropped.filter(
+            (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
+          );
+          if (unrecoverable.length > 0) {
+            const count = unrecoverable.length;
+            throw new Error(
+              `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from ` +
+                'other keys. Write the result elsewhere so the original stays:\n' +
+                `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+            );
+          }
+        } else if (!empty && !force) {
+          // Something is there and it is not what was signed. Overwriting it would destroy a document
+          // this command never read, which no flag combination should do silently.
+          throw new Error(
+            `${output} already exists and is not the playlist being signed; choose a new name, or ` +
+              'pass --force to overwrite it.'
+          );
+        } else if (!empty) {
+          overwroteAnother = true;
+        }
       }
 
-      // Last check before the source is destroyed: is it still the file that was read?
-      //
-      // Everything above — the parsed document, the classification, the decision about what may be
-      // discarded — describes the bytes taken from `sourceFd`. Two things can make that stop applying
-      // to what is about to be truncated. An editor can rewrite the file in place, which the
-      // descriptor sees as a changed size or mtime. Or one can replace it atomically, which leaves the
-      // descriptor on the original inode while the PATH points somewhere new — invisible to the
-      // descriptor, and the case where writing would apply one document's authorization to another's
-      // bytes. So both are checked, and only where something is actually overwritten.
-      if (inPlace && !sourceUnchanged(fs, sourceFd, playlistPath, sourceSnapshot, sourceDigest)) {
-        throw new Error(
-          `${playlistPath} changed while this ran, so the signatures just prepared describe a ` +
-            'document that is no longer there. Nothing was written. Run it again against the file as ' +
-            'it stands now.'
-        );
-      }
-
-      // Truncate only now, past every refusal, and through the descriptor already judged.
+      // Truncate only now, past every refusal, through the descriptor whose contents were just read.
       fs.ftruncateSync(fd, 0);
       writeAll(fs, fd, Buffer.from(JSON.stringify(signedPlaylist, null, 2), 'utf-8'));
       // Durable before the success line prints: a report of a file that is not on disk is a lie the
@@ -309,6 +307,8 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
         playlist: signedPlaylist,
         dropped,
         inPlace,
+        overwroteAnother,
+        outputPath: path.resolve(output),
       };
     } finally {
       // Close, and nothing else. An earlier version removed the empty file a refusal had created, by
@@ -335,47 +335,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     } catch {
       // Nothing to do; the result has already been decided.
     }
-  }
-}
-
-/**
- * sourceUnchanged reports whether the source is still, byte for byte, the file that was read.
- *
- * The contents are the answer, so the contents are what is compared: the bytes are re-read from the
- * held descriptor and digested against the digest taken at read time. Metadata cannot stand in for
- * this. A rewrite that keeps the length lands on a timestamp with one-second granularity often enough
- * to be a real edit rather than a contrived one, and size and mtime would both match while every byte
- * had changed.
- *
- * The name is checked too, but only where the filesystem reports inode identities. A replacement by
- * rename leaves this descriptor on the original inode — the digest cannot see it, because the bytes
- * behind the fd never changed — and moves the PATH to a new file, which the output descriptor was
- * opened from. Only a fresh lookup by name reveals that. Where no identity is available the check is
- * skipped rather than failed: refusing on a missing inode made ordinary in-place signing impossible on
- * such a filesystem, and the digest still covers the case that damages a document there.
- *
- * @param {Object} fs - Node fs module
- * @param {number} sourceFd - Descriptor the source was read through
- * @param {string} sourcePath - The name it was opened from
- * @param {Object} snapshot - `fstat` taken at read time
- * @param {string} digest - Digest of the bytes read at that time
- * @returns {boolean} True when the file about to be overwritten is the one that was read
- */
-function sourceUnchanged(fs, sourceFd, sourcePath, snapshot, digest) {
-  if (digestOf(readAllFrom(fs, sourceFd)) !== digest) {
-    return false;
-  }
-
-  if (snapshot.ino === 0) {
-    return true;
-  }
-  try {
-    const current = fs.statSync(sourcePath);
-    // The name may now be on a filesystem that reports nothing; the digest above already spoke.
-    return current.ino === 0 || sameOpenFile(current, snapshot);
-  } catch {
-    // The name is gone. Whatever this descriptor still holds, the file the operator named is not there.
-    return false;
   }
 }
 

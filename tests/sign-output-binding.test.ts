@@ -308,25 +308,21 @@ describe('sign binds the output before deciding', () => {
           'utf-8'
         );
 
-        // Swap the file after it has been read, before the write.
+        // Swap the file after it has been read, before the output is bound to it. Hooked on the open,
+        // because that is the point in the sequence the race occupies — and because identity is no
+        // longer consulted, there is no stat left to hook.
         const replacement = '{"dpVersion":"1.1.0","title":"someone else\'s document"}';
-        let swapped = false;
+        let opens = 0;
         const replacing = {
           ...fs,
-          ftruncateSync: (fd: number, len: number) => fs.ftruncateSync(fd, len),
-          fstatSync: (fd: number) => {
-            const stat = fs.fstatSync(fd);
-            if (!swapped) {
-              swapped = true;
-              return stat;
-            }
-            if (!existsSync(join(dir, 'done'))) {
-              writeFileSync(join(dir, 'done'), '', 'utf-8');
+          openSync: (p: string, flags: number | string, mode?: number) => {
+            opens += 1;
+            if (opens === 2) {
               const staging = join(dir, 'staging.json');
               writeFileSync(staging, replacement, 'utf-8');
               fs.renameSync(staging, input);
             }
-            return stat;
+            return fs.openSync(p, flags as never, mode);
           },
         };
 
@@ -338,8 +334,11 @@ describe('sign binds the output before deciding', () => {
         );
 
         assert.equal(result.success, false, 'the replacement must not be overwritten');
-        assert.match(String(result.error), /changed while this ran/);
-        assert.match(String(result.error), /Nothing was written/);
+        // Under the content rule this is simply a destination holding a document that was never read.
+        // No identity check is involved, and none could have helped: a stat taken before the write
+        // says nothing about what the write lands on. The descriptor's bytes are the whole answer.
+        assert.match(String(result.error), /is not the playlist being signed/);
+        assert.match(String(result.error), /--force/);
         // The document that arrived is untouched: it was never what this run reasoned about.
         assert.equal(readFileSync(input, 'utf-8'), replacement);
       } finally {
@@ -364,16 +363,17 @@ describe('sign binds the output before deciding', () => {
         'utf-8'
       );
 
-      let seen = 0;
+      let opens = 0;
       const rewriting = {
         ...fs,
-        fstatSync: (fd: number) => {
-          seen += 1;
-          if (seen === 2) {
-            // Rewritten in place: the inode is unchanged, the contents are not.
+        openSync: (p: string, flags: number | string, mode?: number) => {
+          opens += 1;
+          if (opens === 2) {
+            // Rewritten in place: the inode is unchanged, the contents are not — which is the only
+            // thing that matters now.
             writeFileSync(input, '{"dpVersion":"1.1.0","title":"edited by someone else"}', 'utf-8');
           }
-          return fs.fstatSync(fd);
+          return fs.openSync(p, flags as never, mode);
         },
       };
 
@@ -385,7 +385,7 @@ describe('sign binds the output before deciding', () => {
       );
 
       assert.equal(result.success, false);
-      assert.match(String(result.error), /changed while this ran/);
+      assert.match(String(result.error), /is not the playlist being signed/);
       assert.equal(
         readFileSync(input, 'utf-8'),
         '{"dpVersion":"1.1.0","title":"edited by someone else"}'
@@ -416,17 +416,18 @@ describe('sign binds the output before deciding', () => {
         mtimeMs: Math.floor(stat.mtimeMs / 1000) * 1000,
       });
 
-      let seen = 0;
+      let opens = 0;
       const coarse = {
         ...fs,
         statSync: (p: string) => toSecond(fs.statSync(p)),
-        fstatSync: (fd: number) => {
-          seen += 1;
-          if (seen === 2) {
+        fstatSync: (fd: number) => toSecond(fs.fstatSync(fd)),
+        openSync: (p: string, flags: number | string, mode?: number) => {
+          opens += 1;
+          if (opens === 2) {
             // Same length, same second, different bytes.
             writeFileSync(input, rewritten, 'utf-8');
           }
-          return toSecond(fs.fstatSync(fd));
+          return fs.openSync(p, flags as never, mode);
         },
       };
 
@@ -438,7 +439,7 @@ describe('sign binds the output before deciding', () => {
       );
 
       assert.equal(result.success, false, 'a same-length rewrite must not slip past');
-      assert.match(String(result.error), /changed while this ran/);
+      assert.match(String(result.error), /is not the playlist being signed/);
       assert.equal(readFileSync(input, 'utf-8'), rewritten);
 
       // The premise: on this filesystem the metadata is identical, so nothing but the contents could
@@ -523,10 +524,9 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('a pre-existing output with no reportable identity is still refused', async () => {
-    // The conservative branch, kept where it is still needed: this file was already there, so nothing
-    // proves it is not the input, and the comparison that would tell is unavailable. Guessing wrong
-    // truncates the document.
+  test('a pre-existing output holding another document is refused, identities or not', async () => {
+    // Zero inodes everywhere, and it changes nothing: identity is not consulted at all now. The
+    // destination holds bytes that are not the signed document, which is the whole of the answer.
     const dir = makeTempDir();
     const own = makeKey();
     try {
@@ -549,8 +549,8 @@ describe('sign binds the output before deciding', () => {
       );
 
       assert.equal(result.success, false);
-      assert.match(String(result.error), /does not report file identities/);
-      assert.match(String(result.error), /fresh name in a different directory/);
+      assert.match(String(result.error), /is not the playlist being signed/);
+      assert.match(String(result.error), /--force/);
       // Neither file is touched.
       assert.equal(readFileSync(input, 'utf-8'), originalBytes);
       assert.equal(readFileSync(output, 'utf-8'), 'something that was already here');
@@ -624,28 +624,132 @@ describe('sign binds the output before deciding', () => {
     }
   );
 
-  test('writes to a write-only destination', { skip: isWindows }, async () => {
-    // fstat, ftruncate and write need no read permission. Opening O_RDWR asked for one anyway and
-    // failed on a destination the operator had deliberately made write-only.
+  test(
+    'a write-only destination that already exists is refused with the reason',
+    { skip: isWindows },
+    async () => {
+      // A deliberate loss, stated rather than hidden. The destination is read back before it is
+      // destroyed — that read IS the safety rule — so a pre-existing file this process cannot read is no
+      // longer a usable target. The errno alone would read like a bug, so it says what the rule is.
+      const dir = makeTempDir();
+      const own = makeKey();
+      try {
+        const input = join(dir, 'playlist.json');
+        const output = join(dir, 'out.json');
+        await writeCoSigned(input, own, makeKey());
+        writeFileSync(output, 'existing', 'utf-8');
+        fs.chmodSync(output, 0o200);
+
+        const result = await quietly(() =>
+          signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true })
+        );
+
+        fs.chmodSync(output, 0o600);
+        assert.equal(result.success, false);
+        assert.match(String(result.error), /needs read permission/);
+        assert.match(String(result.error), /new name/);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
+
+  test('a newly created destination needs no read permission', async () => {
+    // The O_EXCL path stays O_WRONLY, because a file this call just created holds nothing to read.
     const dir = makeTempDir();
     const own = makeKey();
     try {
       const input = join(dir, 'playlist.json');
       const output = join(dir, 'out.json');
       await writeCoSigned(input, own, makeKey());
-      writeFileSync(output, '', 'utf-8');
-      fs.chmodSync(output, 0o200);
+
+      const flags: number[] = [];
+      const recording = {
+        ...fs,
+        openSync: (p: string, f: number | string, mode?: number) => {
+          if (p === output && typeof f === 'number') {
+            flags.push(f);
+          }
+          return fs.openSync(p, f as never, mode);
+        },
+      };
 
       const result = await quietly(() =>
-        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true })
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, fs: recording })
       );
 
       assert.equal(result.success, true, result.error);
-      fs.chmodSync(output, 0o600);
+      assert.equal(flags.length, 1, 'the exclusive create must have succeeded outright');
+      assert.equal(
+        (flags[0] & fs.constants.O_RDWR) === fs.constants.O_RDWR,
+        false,
+        'a created output must not ask for read access'
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--force is what allows overwriting a document that was never read', async () => {
+    // Without it the destination is left alone and the operator picks a name; with it the overwrite is
+    // deliberate, and the report names the file, because that line is the only record the other
+    // document existed.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'someone-elses.json');
+      await writeCoSigned(input, own, makeKey());
+      writeFileSync(output, '{"dpVersion":"1.1.0","title":"not mine"}', 'utf-8');
+
+      const refused = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true })
+      );
+      assert.equal(refused.success, false);
+      assert.match(String(refused.error), /is not the playlist being signed/);
+      assert.match(String(refused.error), /--force/);
+      assert.equal(
+        readFileSync(output, 'utf-8'),
+        '{"dpVersion":"1.1.0","title":"not mine"}',
+        'the refusal must leave it alone'
+      );
+
+      const forced = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, force: true })
+      );
+      assert.equal(forced.success, true, forced.error);
+      assert.equal(forced.overwroteAnother, true);
       assert.equal(
         (JSON.parse(readFileSync(output, 'utf-8')) as { signatures: unknown[] }).signatures.length,
         1
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--force is not needed, and claims nothing, when the destination is the signed document', async () => {
+    // The in-place case is not an overwrite of somebody else's work, so it must not be reported as one.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      writeFileSync(
+        input,
+        JSON.stringify({ ...document, signatures: [signature] }, null, 2),
+        'utf-8'
+      );
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(result.inPlace, true);
+      assert.equal(result.overwroteAnother, false);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -673,9 +777,10 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('an existing --output is replaced, not appended to', async () => {
+  test('an existing --output is replaced, not appended to, under --force', async () => {
     // Opening without O_TRUNC is what makes the decision safe; the truncate has to happen on the
-    // proceed path or a shorter document would leave the tail of a longer one behind.
+    // proceed path or a shorter document would leave the tail of a longer one behind. --force is what
+    // authorizes destroying a document this command never read.
     const dir = makeTempDir();
     const own = makeKey();
     try {
@@ -685,10 +790,11 @@ describe('sign binds the output before deciding', () => {
       writeFileSync(output, 'x'.repeat(50_000), 'utf-8');
 
       const result = await quietly(() =>
-        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true })
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, force: true })
       );
 
       assert.equal(result.success, true, result.error);
+      assert.equal(result.overwroteAnother, true, 'the report must name what --force destroyed');
       const written = readFileSync(output, 'utf-8');
       assert.doesNotMatch(written, /xxxx/, 'no tail of the previous contents may survive');
       assert.equal((JSON.parse(written) as { signatures: unknown[] }).signatures.length, 1);

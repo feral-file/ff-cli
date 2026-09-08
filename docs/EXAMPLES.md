@@ -690,6 +690,23 @@ The refusal is narrow: it is about what cannot be recovered, not about how many 
 in-place run still proceeds when the only entries dropped are **your own** — sign again to add any of
 them back — or ones that **no longer verify**, which the input could not restore either.
 
+**`sign` only ever overwrites bytes it has read.** Before writing, it reads the destination back and
+compares it with the document being signed. Equal means this is that document, wherever the name now
+points, and the rule above applies to it. Different means the destination holds something never
+inspected, and the run is refused:
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures -o notes.json
+
+Sign failed: notes.json already exists and is not the playlist being signed; choose a new name, or pass --force to overwrite it.
+```
+
+`--force` allows it, and the report names what it replaced. This is a content rule, not an identity
+one: no comparison of paths or inodes can promise that the file about to be truncated is the file that
+was read, because a name can be re-pointed between any two system calls — but comparing the bytes
+through the descriptor being written can. A destination that already exists needs read permission for
+that reason.
+
 The rule holds on every platform and assumes nothing about the filesystem. An earlier version kept a
 copy of the input instead; that requires reproducing the source's access, which is not portable — POSIX
 ACLs grant what mode bits do not describe, macOS extended ACLs are not constrained by the mask, and
