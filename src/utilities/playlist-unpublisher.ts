@@ -69,7 +69,7 @@ export async function fetchPlaylistForUnpublish(
  * 1. Resolve the id or URL the user supplied to a feed path segment.
  * 2. `GET` the stored playlist — the intent must carry the stored id and slug, and only the stored
  *    document says who owns it.
- * 3. Refuse locally when the configured key is not a stored owner.
+ * 3. Refuse locally when the signing key is not a stored owner.
  * 4. Build and sign the delete-intent in the `curator` role.
  * 5. `DELETE` with the intent as the body and report the outcome.
  *
@@ -91,6 +91,12 @@ export async function unpublishPlaylist(
     return { success: false, error: 'No playlist id or URL was given' };
   }
 
+  // Where the identity came from, resolved before the first request so every refusal — local or from
+  // the feed — names the key the operator actually used rather than a config file this run may not
+  // have read.
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+
   // Resolve and validate together: `--key ""` is a failed override, not an absent one, and must never
   // fall through to the configured key on an operation that tombstones an id.
   let privateKey: string;
@@ -107,7 +113,7 @@ export async function unpublishPlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'delete'),
+      ...describeFeedMutationError(error, 'delete', keySource),
       feedServer: feedServerUrl,
     };
   }
@@ -125,8 +131,6 @@ export async function unpublishPlaylist(
     };
   }
 
-  const keySource: KeySource =
-    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
   const refusal = await ownershipPreflight(stored, signerDidKey, 'delete', keySource);
   if (refusal) {
     return { success: false, ...refusal, feedServer: feedServerUrl };
@@ -173,7 +177,7 @@ export async function unpublishPlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'delete'),
+      ...describeFeedMutationError(error, 'delete', keySource),
       feedServer: feedServerUrl,
     };
   }

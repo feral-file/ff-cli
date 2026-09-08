@@ -316,7 +316,7 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
     } catch {
       // An entry that does not verify is not proof. It is also not this command's business to report:
       // a stale or tampered signature on someone else's key changes nothing about whether the
-      // configured key can act, and the answer below is derived from the set that survived.
+      // signing key can act, and the answer below is derived from the set that survived.
     }
   }
 
@@ -350,7 +350,7 @@ function retryAdvice(keySource: KeySource, plural: boolean): string {
 }
 
 /**
- * Refuse locally when the configured key cannot authorize a mutation on the stored playlist.
+ * Refuse locally when the signing key cannot authorize a mutation on the stored playlist.
  *
  * The feed's own answer to every case here is a bare `403 forbidden`, which says nothing about which
  * identity was offered, which ones would have worked, or whether the problem is the declaration or the
@@ -359,9 +359,9 @@ function retryAdvice(keySource: KeySource, plural: boolean): string {
  * declaration is right and the signature that would back it was never made.
  *
  * @param stored - The playlist as the feed serves it
- * @param signerDidKey - `did:key` the configured signing key will assert
+ * @param signerDidKey - `did:key` the signing key will assert
  * @param action - Which mutation is being authorized, for the wording
- * @returns A failure to report, or `null` when the configured key is a proven owner.
+ * @returns A failure to report, or `null` when the signing key is a proven owner.
  */
 export async function ownershipPreflight(
   stored: StoredPlaylist,
@@ -473,10 +473,20 @@ function feedErrorDetail(error: AxiosError): string {
  *
  * The codes handled are exactly those dp1-feed-v2 documents for these routes; anything else falls
  * through with the server's own words rather than being guessed at.
+ *
+ * `keySource` matters here for the same reason it does locally: two of these messages talk about the
+ * signing identity, and calling it "configured" when the operator passed `--key` describes a file this
+ * run never read. Worse, after a 403 it reads as though the override had been dropped — which is
+ * precisely the doubt an operator should not be left with when their key was used and refused.
+ *
+ * @param error - The failure thrown by the request
+ * @param action - Which mutation was attempted
+ * @param keySource - Where the signing identity came from
  */
 export function describeFeedMutationError(
   error: unknown,
-  action: 'delete' | 'replace'
+  action: 'delete' | 'replace',
+  keySource: KeySource = 'configured'
 ): FeedMutationFailure {
   const axiosError = error as AxiosError;
   const status = axiosError.response?.status;
@@ -494,21 +504,29 @@ export function describeFeedMutationError(
       error: `${verb} refused: the feed saw no signatures on the request.`,
       message:
         `Every mutating request is authorized by the signatures in its body — there is no API key.\n` +
-        `  This usually means no signing key is configured: run "ff-cli status" to check, and\n` +
-        `  "ff-cli setup" to generate one.${suffix}`,
+        (keySource === 'supplied'
+          ? `  The key passed with --key produced no signature the feed could read, which should not\n` +
+            `  happen once it has been accepted locally — please report this.\n`
+          : `  This usually means no signing key is configured: run "ff-cli status" to check, and\n` +
+            `  "ff-cli setup" to generate one.\n`) +
+        `  ${suffix.trim() || 'The feed gave no further detail.'}`,
     };
   }
 
-  // A 403 that reaches here has already passed the local ownership proof: the configured key was found
+  // A 403 that reaches here has already passed the local ownership proof: the key that signed was found
   // in the stored curators[] with a valid curator-role signature over the stored bytes. Repeating "your
   // key is not declared" would therefore be a lie, and it is the wrong place to send someone — the
   // remaining causes are the feed disagreeing about the stored document, or a replace touching the
   // owner set. Say that the feed refused, and that the local check disagreed.
   if (status === 403) {
+    const which =
+      keySource === 'supplied'
+        ? 'the key you passed with --key is'
+        : 'the configured signing key is';
     return {
       error: `${verb} refused by the feed: it did not accept the signing key as an owner.`,
       message:
-        `The local check disagreed — the configured key is named in the stored playlist's curators[]\n` +
+        `The local check disagreed — ${which} named in the stored playlist's curators[]\n` +
         `  and carries a valid "${OWNER_ROLE}" signature over the stored document — so this is the feed's\n` +
         `  own judgement, not a missing declaration.\n` +
         (action === 'replace'

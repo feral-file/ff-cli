@@ -164,6 +164,12 @@ export async function replacePlaylist(
     };
   }
 
+  // Where the identity came from, resolved before the first request so every refusal — local or from
+  // the feed — names the key the operator actually used rather than a config file this run may not
+  // have read.
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+
   // Presence, not truthiness: `--key ""` is an override that failed to expand, and falling back to the
   // configured key would sign someone else's replacement into place.
   let privateKey: string;
@@ -178,7 +184,7 @@ export async function replacePlaylist(
   try {
     stored = await fetchStoredPlaylist(feedServerUrl, documentId);
   } catch (error) {
-    const described = describeFeedMutationError(error, 'replace');
+    const described = describeFeedMutationError(error, 'replace', keySource);
     const missing = (error as { response?: { status?: number } }).response?.status === 404;
     return {
       success: false,
@@ -202,8 +208,6 @@ export async function replacePlaylist(
     return { success: false, ...mismatch, feedServer: feedServerUrl };
   }
 
-  const keySource: KeySource =
-    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
   const ownership = await ownershipPreflight(stored, signerDidKey, 'replace', keySource);
   if (ownership) {
     return { success: false, ...ownership, feedServer: feedServerUrl };
@@ -239,7 +243,7 @@ export async function replacePlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'replace'),
+      ...describeFeedMutationError(error, 'replace', keySource),
       feedServer: feedServerUrl,
     };
   }
@@ -277,7 +281,12 @@ function replaceIdentityMismatch(
 
   const documentOwners = storedOwnerKeys(playlist as unknown as StoredPlaylist);
   const owners = storedOwnerKeys(stored);
-  if (documentOwners.join(' ') !== owners.join(' ')) {
+  // Compared element-wise rather than by joining on a separator: the owner set is an ordered list
+  // of opaque strings, and any separator is a guess about what cannot appear inside one.
+  const sameOwners =
+    documentOwners.length === owners.length &&
+    documentOwners.every((key, index) => key === owners[index]);
+  if (!sameOwners) {
     differences.push(
       `    curators: stored [${owners.join(', ')}], document [${documentOwners.join(', ')}]`
     );

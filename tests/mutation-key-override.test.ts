@@ -47,8 +47,13 @@ interface FeedRun {
   close: () => void;
 }
 
-/** Loopback feed: serves `stored` on GET, records and accepts any write. */
-async function startFeed(stored: Record<string, unknown>): Promise<FeedRun> {
+/**
+ * Loopback feed: serves `stored` on GET, records the write and answers it.
+ *
+ * `writeStatus` exists for the case where the local preflight PASSES and the feed still refuses — the
+ * only way the remote error mapping is reachable at all.
+ */
+async function startFeed(stored: Record<string, unknown>, writeStatus?: number): Promise<FeedRun> {
   const recorded: { method?: string; body?: string } = {};
   const server: Server = createServer((req, res) => {
     let body = '';
@@ -64,6 +69,11 @@ async function startFeed(stored: Record<string, unknown>): Promise<FeedRun> {
       }
       recorded.method = req.method;
       recorded.body = body;
+      if (writeStatus !== undefined) {
+        res.writeHead(writeStatus, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'forbidden', message: 'signer is not an owner' }));
+        return;
+      }
       if (req.method === 'DELETE') {
         res.writeHead(204);
         res.end();
@@ -388,6 +398,82 @@ describe('refusals point at the key the operator actually used', () => {
       assert.match(run.output, /Point playlist\.privateKey/);
       assert.doesNotMatch(run.output, /you passed with --key/);
       assertNoKeyLeak(run.output, ownerKey, configuredKey);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});
+
+describe('a feed refusal names the key that was actually used', () => {
+  // The remote mapping is only reachable once the LOCAL preflight has passed, which means the key was
+  // found in the stored curators[] and verified. Saying "the configured key" there is doubly wrong when
+  // --key was given: it names a file this run never read, and after a 403 it reads as though the
+  // override had been dropped — the one conclusion an operator must not draw when their key was used
+  // and refused by the feed.
+  test('unpublish: a 403 after a successful --key preflight names the supplied key', async () => {
+    const ownerKey = makePrivateKeyBase64();
+    const configuredKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored, 403);
+    const run = await runCli(feed.baseUrl, configuredKey, [
+      'unpublish',
+      String(stored.id),
+      '-y',
+      '--key',
+      ownerKey,
+    ]);
+    try {
+      assert.notEqual(run.status, 0);
+      // It really reached the feed: this is the remote path, not the local preflight.
+      assert.equal(feed.recorded.method, 'DELETE');
+      assert.match(run.output, /refused by the feed/i);
+      assert.match(run.output, /the key you passed with --key is named in the stored playlist/);
+      assert.doesNotMatch(run.output, /configured/i);
+      // The feed's own words still come through.
+      assert.match(run.output, /signer is not an owner/);
+      assertNoKeyLeak(run.output, ownerKey, configuredKey);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('publish --replace: a 403 after a successful --key preflight names the supplied key', async () => {
+    const ownerKey = makePrivateKeyBase64();
+    const configuredKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored, 403);
+    const run = await runCli(
+      feed.baseUrl,
+      configuredKey,
+      ['publish', 'playlist.json', '--replace', '--key', ownerKey],
+      { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` }
+    );
+    try {
+      assert.notEqual(run.status, 0);
+      assert.equal(feed.recorded.method, 'PUT');
+      assert.match(run.output, /refused by the feed/i);
+      assert.match(run.output, /the key you passed with --key is named in the stored playlist/);
+      assert.doesNotMatch(run.output, /configured/i);
+      assertNoKeyLeak(run.output, ownerKey, configuredKey);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a configured key is still described as configured on a feed 403', async () => {
+    // Non-vacuity pair: the wording tracks the source, rather than simply never saying "configured".
+    const ownerKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored, 403);
+    const run = await runCli(feed.baseUrl, ownerKey, ['unpublish', String(stored.id), '-y']);
+    try {
+      assert.notEqual(run.status, 0);
+      assert.equal(feed.recorded.method, 'DELETE');
+      assert.match(run.output, /the configured signing key is named in the stored playlist/);
+      assert.doesNotMatch(run.output, /you passed with --key/);
     } finally {
       run.cleanup();
       feed.close();
