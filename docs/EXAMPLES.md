@@ -748,7 +748,7 @@ ff-cli publish playlist.json --replace -s 0 --key <private key for a stored owne
 ```
 
 `ff-cli status --key <private key>` reports which identity a key carries, which is how you check it
-against the `Stored owners:` list in a refusal. `unpublish` also prints `Signing as:`, both in its
+against the `Keys that have proved ownership:` list in a refusal. `unpublish` also prints `Signing as:`, both in its
 confirmation and under `-y`, so the identity that performs an irreversible delete is always in the
 record. It resolves that key once, before the lookup and before the prompt, and signs with the same
 material — editing `config.json` while a confirmation is open cannot change who the delete runs as.
