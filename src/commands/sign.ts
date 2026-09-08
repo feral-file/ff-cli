@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
+import { resolveExplicitSigningKey } from '../utilities/signing-key-source';
 
 // playlist-signer is still CommonJS; require keeps the interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -9,6 +10,10 @@ export const signCommand = new Command('sign')
   .description('Sign a DP-1 playlist file with a DP-1 signature envelope')
   .argument('<file>', 'Path to the playlist file to sign')
   .option('-k, --key <privateKey>', 'Ed25519 private key in base64 format (overrides config)')
+  .option(
+    '--key-file <path>',
+    'Read the Ed25519 private key from this file instead of the command line'
+  )
   .option('-r, --role <role>', 'DP-1 signing role (overrides config)')
   .option('-o, --output <file>', 'Output file path (defaults to overwriting input file)')
   .option(
@@ -24,6 +29,7 @@ export const signCommand = new Command('sign')
       file: string,
       options: {
         key?: string;
+        keyFile?: string;
         role?: string;
         output?: string;
         replaceSignatures?: boolean;
@@ -31,12 +37,24 @@ export const signCommand = new Command('sign')
       }
     ) => {
       try {
+        // Resolve the explicit key before the playlist is opened, so an unreadable or empty key file
+        // costs nothing but the run. `--key` material is passed through exactly as typed, including
+        // when it is empty: signPlaylistFile refuses that with the shell-expansion message, which is
+        // the right diagnosis for a value from the command line and the wrong one for a file.
+        const explicitKey = resolveExplicitSigningKey(options);
+
         console.log(chalk.blue('\nSign playlist\n'));
 
-        const result = await signPlaylistFile(file, options.key, options.output, options.role, {
-          replaceSignatures: !!options.replaceSignatures,
-          force: !!options.force,
-        });
+        const result = await signPlaylistFile(
+          file,
+          explicitKey?.material,
+          options.output,
+          options.role,
+          {
+            replaceSignatures: !!options.replaceSignatures,
+            force: !!options.force,
+          }
+        );
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));

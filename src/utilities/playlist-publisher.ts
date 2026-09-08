@@ -168,7 +168,7 @@ export async function replacePlaylist(
   // the feed — names the key the operator actually used rather than a config file this run may not
   // have read.
   const keySource: KeySource =
-    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+    options.keySource ?? (options.privateKey !== undefined ? '--key' : 'configured');
 
   // Presence, not truthiness: `--key ""` is an override that failed to expand, and falling back to the
   // configured key would sign someone else's replacement into place.

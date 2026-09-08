@@ -39,7 +39,7 @@ Optional settings used where headless/browser‑like behavior is needed.
 
 Used for signing DP‑1 playlists.
 
-- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` to override it for a single run. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
+- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` or `--key-file <path>` to override it for a single run — see [Where the signing key can come from](#where-the-signing-key-can-come-from). The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
   **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) accept the private key in any of these encodings:
 
@@ -61,9 +61,50 @@ Used for signing DP‑1 playlists.
 
   To read the `did:key` your signatures will carry, run `ff-cli status`. It reports the identity from
   `PLAYLIST_PRIVATE_KEY` even when no config file exists yet, and `ff-cli status --key <privateKey>`
-  reports it for an explicit key — the one `sign --key` would use.
+  (or `--key-file <path>`) reports it for an explicit key — the one `sign` would use with the same flag.
 
 - `playlist.role` (string): DP-1 signing role used by `ff-cli sign`. The shipped `config.json.example` sets `curator`, because a document signed as `agent` is ownerless to a role-aware feed and `ff-cli publish` refuses it. The code default when the key is omitted entirely is still `agent`. You can also set this via `PLAYLIST_ROLE` in `.env`. Guided `ff-cli setup`, `config validate`, and `sign --role` only accept the usual DP-1 signing roles (`agent`, `feed`, `curator`, `institution`, `licensor`). It does **not** apply to `find` and `build`, which always sign as `curator` — see [Signing role and ownership](#signing-role-and-ownership).
+
+### Where the signing key can come from
+
+Three sources, in this order of precedence:
+
+1. **`-k, --key <privateKey>` or `--key-file <path>`** on the command line — `sign`, `status`,
+   `unpublish`, and `publish --replace` all take both.
+2. **`PLAYLIST_PRIVATE_KEY`** in the environment or in `.env`.
+3. **`playlist.privateKey`** in `config.json`.
+
+An explicit key wins for that one run only; nothing is written back. All three accept the same
+encodings listed above, and the CLI normalizes whichever you supply before signing, so a key file is a
+delivery mechanism rather than a fourth key format.
+
+**Prefer `--key-file` to `--key`.** `--key` writes your private key into your shell history file and
+exposes it in the process list, where any local user can read it for as long as the command runs.
+Neither disclosure can be undone: an Ed25519 signing key *is* the identity it asserts, and a playlist's
+`curators[]` owner set is immutable, so a leaked key cannot be rotated out of a document that already
+names it. `--key-file` keeps the material in a file you control:
+
+```bash
+ff-cli status --key-file ~/.config/ff-cli/signing.key      # whose key is this?
+ff-cli sign playlist.json -r curator --key-file ~/.config/ff-cli/signing.key
+```
+
+**Keep the key file private** — `chmod 600` it, in a directory only you can enter. The CLI does not
+check its permissions and will not refuse a world-readable one: a mode check cannot see the directory
+above the file, cannot describe a Windows ACL, and would refuse paths that are perfectly appropriate,
+so it would be ceremony rather than protection.
+
+The rules on both flags:
+
+- **Passing both is an error**, not a precedence rule. A precedence rule has to silently ignore one of
+  the two keys you supplied, and a key you believe was used and was not is the failure this CLI keeps
+  removing.
+- **An empty `--key`** — what `--key "$SIGNING_KEY"` becomes when the variable is unset — is rejected,
+  never treated as absent.
+- **A `--key-file` that is missing, unreadable, or holds no key material** is rejected the same way.
+  Neither ever falls back to the configured key: signing under an identity you did not choose is not
+  something a publish or a delete can be taken back from.
+- **The key is never echoed**, in any error, in any encoding.
 
 ### Generate an Ed25519 private key
 
@@ -143,8 +184,8 @@ signatures in the request body, and an `apiKey` left in an existing config is ig
 
 `playlist.privateKey` is needed only where the CLI itself has to sign at request time — `publish
 --replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. Both accept
-`-k, --key` to use a different key for one run, so a second owner identity does not require editing this
-file. A plain
+`-k, --key` or `--key-file <path>` to use a different key for one run, so a second owner identity does
+not require editing this file. A plain
 `publish` signs nothing: it uploads the `signatures[]` envelope the document already carries, so it
 works with no key configured at all (the document must have been signed at some point, by
 `ff-cli sign` or by whoever produced it, but not by this command).

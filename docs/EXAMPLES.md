@@ -789,9 +789,9 @@ a new playlist instead of trying to recreate it.
 ### Signing with a key other than the configured one
 
 The configured `playlist.privateKey` is the default, not the only option. `unpublish` and
-`publish --replace` take `-k, --key`, like `ff-cli sign` and `ff-cli status`, and it overrides that
-default both for the intent signature and for the local ownership check — so holding a second owner key
-no longer means editing `config.json`:
+`publish --replace` take `-k, --key` and `--key-file <path>`, like `ff-cli sign` and `ff-cli status`,
+and either one overrides that default both for the intent signature and for the local ownership check —
+so holding a second owner key no longer means editing `config.json`:
 
 ```bash
 ff-cli unpublish <id> -s 0 --key <private key for a stored owner>
@@ -804,8 +804,36 @@ confirmation and under `-y`, so the identity that performs an irreversible delet
 record. It resolves that key once, before the lookup and before the prompt, and signs with the same
 material — editing `config.json` while a confirmation is open cannot change who the delete runs as.
 
-A refusal names the key you actually used. If it came from `--key`, the retry says `--key`; it will not
-send you to `playlist.privateKey` for a run that never read it.
+#### Keeping the key off the command line
+
+`--key` puts the private key in your shell history file and in the process list, where any local user
+can read it while the command runs. `--key-file <path>` reads the same material from a file instead, on
+all four commands, with the same key encodings:
+
+```bash
+ff-cli status   --key-file ~/.config/ff-cli/owner.key          # whose key is this?
+ff-cli sign     playlist.json -r curator --key-file ~/.config/ff-cli/owner.key
+ff-cli unpublish <id> -s 0 --key-file ~/.config/ff-cli/owner.key
+ff-cli publish  playlist.json --replace -s 0 --key-file ~/.config/ff-cli/owner.key
+```
+
+Keep the file private (`chmod 600`, in a directory only you can enter) — the CLI does not check its
+permissions. Passing `--key` and `--key-file` together is an error rather than a precedence rule, and a
+key file that is missing, unreadable, or empty is refused rather than quietly falling back to the
+configured key:
+
+```
+$ ff-cli unpublish <id> -y --key-file ./owner.key    # file was truncated
+
+Cannot sign the delete
+  The key file at ./owner.key holds no key material. Refusing rather than falling back to
+  the configured key: a signature made under an identity you did not choose is not something
+  a publish or a delete can be taken back from.
+```
+
+A refusal names the key you actually used. If it came from `--key`, the retry says `--key`; if it came
+from `--key-file`, the retry says `--key-file`; it will not send you to `playlist.privateKey` for a run
+that never read it.
 
 An empty `--key` is **rejected**, not ignored:
 
@@ -819,8 +847,9 @@ Cannot sign the delete
   delete can be taken back from.
 ```
 
-A plain `publish` **refuses** `--key` rather than ignoring it: it signs nothing at request time, so the
-flag would do nothing. `ff-cli fetch` has no `--key` for the same reason — it is a read.
+A plain `publish` **refuses** `--key` and `--key-file` rather than ignoring them: it signs nothing at
+request time, so the flag would do nothing. `ff-cli fetch` has neither for the same reason — it is a
+read.
 
 ### When ownership cannot be proved
 
