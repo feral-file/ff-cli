@@ -14,11 +14,13 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import {
+  chmodSync,
   existsSync,
   linkSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -38,6 +40,7 @@ const projectRoot = resolve(__dirname, '..');
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim limitations in spawnSync.
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
+const isWindows = process.platform === 'win32';
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'ff1-resign-'));
@@ -148,7 +151,7 @@ describe('edit a published playlist, re-sign, replace', () => {
       // holds no feed identity to check a kid against, so it is another key's signature like any other.
       assert.deepEqual(signed.dropped.map((entry: { kind: string }) => entry.kind).sort(), [
         'other',
-        'self',
+        'replaced',
       ]);
       // The document was edited, so nothing that was on it verifies against it now. The verdict is
       // exactly that — not "void", which would assert they verified against the PREVIOUS content, a
@@ -744,6 +747,101 @@ describe('edit a published playlist, re-sign, replace', () => {
       // The input is the backup, so the report says so rather than naming a file it did not write.
       assert.equal(readFileSync(path, 'utf-8'), originalBytes);
       assert.match(`${result.stdout ?? ''}`, /input file is untouched/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a role change on the signing key is a loss, not a replacement', async () => {
+    // Matching on the key alone quietly produced unpublishable documents: re-signing as `agent` with a
+    // key that had signed as `curator` dropped the curator entry, called it "replaced", and left it out
+    // of the backup — and the result then fails the publisher's declared-curator preflight with nothing
+    // on disk to recover from. Ownership lives in the role as much as in the key.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }] };
+      const curatorSig = await signPlaylist(document, keyA, 'curator');
+      const path = join(dir, 'role-change.json');
+      const originalBytes = JSON.stringify({ ...document, signatures: [curatorSig] }, null, 2);
+      writeFileSync(path, originalBytes, 'utf-8');
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'agent', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      // Reported as removed, and as this key's own — not as another key's, and not as replaced.
+      assert.match(
+        out,
+        /your signature in another role \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed/
+      );
+      assert.doesNotMatch(out, /replaced by this signing/);
+
+      // It counts toward the backup trigger like any other loss, so the curator signature survives.
+      const backup = `${path}.before-resign.json`;
+      assert.equal(readFileSync(backup, 'utf-8'), originalBytes);
+
+      // And the written document really has lost its curator entry — the state that fails a publish.
+      const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as {
+        signatures: Array<{ role: string }>;
+      };
+      assert.deepEqual(
+        onDisk.signatures.map((entry) => entry.role),
+        ['agent']
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('the backup carries the source file permissions', { skip: isWindows }, async () => {
+    // Skipped on Windows, where POSIX mode bits are not meaningful and chmod only moves the write bit.
+    //
+    // A playlist at 0600 is restricted deliberately. A backup of it at 0644 under the usual umask
+    // publishes the document, and its signing history, to every local user — a disclosure created by
+    // the command that was trying to protect them.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'private.json');
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2),
+        'utf-8'
+      );
+      chmodSync(path, 0o600);
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const mode = statSync(`${path}.before-resign.json`).mode & 0o777;
+      assert.equal(
+        mode,
+        0o600,
+        `backup must not widen access; got 0${mode.toString(8)} (umask would give 0644)`
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

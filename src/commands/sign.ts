@@ -43,6 +43,7 @@ export const signCommand = new Command('sign')
           // key can emit one and this CLI has no feed identity to check a kid against.
           const dropped: Array<{
             kind: string;
+            sameKey: boolean;
             role: string | null;
             kid: string | null;
             verified: boolean;
@@ -57,7 +58,9 @@ export const signCommand = new Command('sign')
               console.log(chalk.dim(`    - ${entry.label}`));
             }
 
-            const others = dropped.filter((entry) => entry.kind === 'other' && entry.checkable);
+            // Everything this run did not supersede. A same-key entry in another role belongs here:
+            // the fresh signature asserts a different role, so that entry is gone and not reinstated.
+            const others = dropped.filter((entry) => entry.kind !== 'replaced' && entry.checkable);
             const stillValid = others.filter((entry) => entry.verified);
             const unverified = others.filter((entry) => !entry.verified);
 
@@ -97,7 +100,10 @@ export const signCommand = new Command('sign')
               );
               for (const entry of unverified) {
                 const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'unknown key';
-                console.log(chalk.yellow(`    ${who}${entry.role ? ` (${entry.role})` : ''}`));
+                const mine = entry.sameKey ? ' — your own key' : '';
+                console.log(
+                  chalk.yellow(`    ${who}${entry.role ? ` (${entry.role})` : ''}${mine}`)
+                );
               }
               console.log(
                 chalk.yellow(

@@ -163,11 +163,11 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       role,
       replaceSignatures
     );
-    // Classify against the signature just produced: its `kid` is this key's identity, so no separate
-    // derivation is needed to tell the signer's own entries from everyone else's.
-    const signingKid = signedPlaylist.signatures[signedPlaylist.signatures.length - 1]?.kid;
+    // Classify against the signature just produced: its `kid` and `role` are what this run actually
+    // asserted, so no separate derivation is needed to tell which entries it supersedes.
+    const fresh = signedPlaylist.signatures[signedPlaylist.signatures.length - 1];
     const dropped = replaceSignatures
-      ? await describeDroppedSignatures(playlist, signingKid, dp1)
+      ? await describeDroppedSignatures(playlist, fresh?.kid, fresh?.role, dp1)
       : [];
     const verification = await verifySignedPlaylistEnvelope(signedPlaylist, dp1);
     if (!verification.valid) {
@@ -192,11 +192,10 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // from the old file either, and an --output run leaves the input untouched. A backup in those cases
     // would be litter, and litter trains people to ignore the file that matters.
     let backupPath = null;
-    if (inPlace && dropped.some((entry) => entry.kind === 'other' && entry.verified)) {
-      backupPath = reserveBackupPath(fs, playlistPath);
+    if (inPlace && dropped.some((entry) => entry.kind !== 'replaced' && entry.verified)) {
       // The bytes as read, not a re-serialization: the signatures cover the exact document, so a
       // reformatted copy would not verify and would be a backup in name only.
-      fs.writeFileSync(backupPath, playlistContent, 'utf-8');
+      backupPath = writeBackup(fs, playlistPath, playlistContent);
     }
 
     fs.writeFileSync(output, JSON.stringify(signedPlaylist, null, 2), 'utf-8');
@@ -224,6 +223,13 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  * A count alone is not actionable on a co-curated playlist: the owner has to know whose signatures are
  * gone before they publish the replacement, not after someone notices their name missing.
  *
+ * **An entry counts as replaced only when the fresh signature matches it in BOTH `kid` and `role`.**
+ * Matching on the key alone was wrong in a way that quietly produced unpublishable documents: re-signing
+ * as `agent` with a key that had signed as `curator` dropped the curator entry, called it "replaced",
+ * and left it out of the backup — and the result then fails the publisher's declared-curator preflight,
+ * with nothing left on disk to recover the lost signature from. Ownership lives in the role as much as
+ * in the key, so a role change is a loss like any other.
+ *
  * **There is no "void" verdict here, and that is deliberate.** Calling an entry void asserts that it
  * verified against the previous content and no longer does — a claim about a document this command has
  * never seen. The operator edited in place; the pre-edit bytes exist nowhere by the time `sign` runs.
@@ -237,7 +243,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  *
  * It does not treat a `feed` role as "the feed's, so it comes back" either. Any key can emit a
  * signature carrying `role: "feed"`, and this CLI holds no feed identity to check a `kid` against.
- * Every non-self entry is reported as another key's, with its own role carried through — a document may
+ * Non-replaced entries are reported as removed, with their own role carried through — a document may
  * legitimately hold `agent`, `institution`, or `licensor` entries. That a feed re-appends its own
  * signature after verifying a replacement is stated separately, as the general fact it is.
  *
@@ -246,10 +252,11 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  *
  * @param {Object} playlist - The playlist as read, before signing
  * @param {string} [signingKid] - `did:key` of the key that just signed
+ * @param {string} [signingRole] - DP-1 role the fresh signature asserts
  * @param {Object} dp1 - Loaded dp1-js module
- * @returns {Promise<Array<{kind: string, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
+ * @returns {Promise<Array<{kind: string, sameKey: boolean, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
  */
-async function describeDroppedSignatures(playlist, signingKid, dp1) {
+async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1) {
   const dropped = [];
   const raw = Buffer.from(JSON.stringify(playlist));
 
@@ -270,18 +277,31 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
       verified = false;
     }
 
-    const own = Boolean(kid && signingKid && kid === signingKid);
+    const sameKey = Boolean(kid && signingKid && kid === signingKid);
+    const replaced = sameKey && role === signingRole;
+    const outcome = verified
+      ? 'removed; still valid over this content'
+      : 'removed; could not be verified against this document';
+
+    let label;
+    if (replaced) {
+      label = `your own earlier signature (${descriptor}) — replaced by this signing`;
+    } else if (sameKey) {
+      // Same key, different role. Naming it as another key's would be wrong, and naming it as replaced
+      // would be worse: this run asserts a different role, so the entry is gone and not reinstated.
+      label = `your signature in another role (${descriptor}) — ${outcome}`;
+    } else {
+      label = `another key's signature (${descriptor}) — ${outcome}`;
+    }
+
     dropped.push({
-      kind: own ? 'self' : 'other',
+      kind: replaced ? 'replaced' : 'other',
+      sameKey,
       role,
       kid,
       verified,
       checkable: true,
-      label: own
-        ? `your own earlier signature (${descriptor}) — replaced by this signing`
-        : verified
-          ? `another key's signature (${descriptor}) — removed; still valid over this content`
-          : `another key's signature (${descriptor}) — removed; could not be verified against this document`,
+      label,
     });
   }
 
@@ -291,6 +311,7 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
     // signature that failed, it is one nothing here can judge.
     dropped.push({
       kind: 'other',
+      sameKey: false,
       role: null,
       kid: null,
       verified: false,
@@ -303,30 +324,75 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
 }
 
 /**
- * Choose a path for the pre-re-sign backup, never overwriting one that already exists.
+ * Write the pre-re-sign backup, reserving a free name and preserving the source's permissions.
  *
- * An existing `.before-resign.json` is somebody's only copy of an earlier document — quite possibly
- * from the previous run of this same command — so clobbering it to preserve the current one would
- * destroy exactly what the backup exists to protect. Later attempts are numbered instead.
+ * Three properties this has to hold at once, all of them about not making the operator worse off than
+ * before they ran the command.
  *
- * The suffix goes after the full filename rather than before the extension so it cannot collide with a
- * real playlist, and so `playlist.json` and `playlist.backup.json` produce different names.
+ * **It never overwrites.** An existing `.before-resign.json` is somebody's only copy too — quite
+ * possibly from the previous run of this command — so clobbering it would destroy exactly what the
+ * backup exists to protect. Later attempts are numbered.
+ *
+ * **The check and the create are one operation.** `existsSync` followed by a truncating write leaves a
+ * window in which another process can create the file and have it destroyed anyway, which is the same
+ * guarantee failing in a way nobody would ever reproduce. `'wx'` fails with EEXIST instead of
+ * truncating, so the name is claimed atomically and a collision costs a retry rather than a file.
+ *
+ * **It carries the source's permissions.** A playlist at 0600 is restricted deliberately; a backup of
+ * it at 0644 under the usual umask silently publishes the document — and its signing history — to every
+ * local user. The mode is applied at create time rather than chmod'ed afterwards so there is no window
+ * where the bytes exist at wider permissions, and `fchmod` follows because `open` filters the mode
+ * through umask while `fchmod` does not.
  *
  * @param {Object} fs - Node fs module
  * @param {string} playlistPath - Path of the file about to be overwritten
- * @returns {string} A path that does not yet exist
+ * @param {string} contents - Exact bytes to preserve
+ * @returns {string} The path written
  */
-function reserveBackupPath(fs, playlistPath) {
-  const first = `${playlistPath}.before-resign.json`;
-  if (!fs.existsSync(first)) {
-    return first;
+function writeBackup(fs, playlistPath, contents) {
+  // Read the mode before the file is replaced. Absent (an unreadable stat) means fall back to the
+  // default rather than guessing at something more permissive than the source.
+  let mode;
+  try {
+    mode = fs.statSync(playlistPath).mode & 0o7777;
+  } catch {
+    mode = undefined;
   }
-  for (let n = 2; n < 1000; n += 1) {
-    const candidate = `${playlistPath}.before-resign.${n}.json`;
-    if (!fs.existsSync(candidate)) {
-      return candidate;
+
+  for (let attempt = 1; attempt < 1000; attempt += 1) {
+    const candidate =
+      attempt === 1
+        ? `${playlistPath}.before-resign.json`
+        : `${playlistPath}.before-resign.${attempt}.json`;
+
+    let fd;
+    try {
+      fd = fs.openSync(candidate, 'wx', mode);
+    } catch (error) {
+      if (error && error.code === 'EEXIST') {
+        continue;
+      }
+      throw error;
     }
+
+    try {
+      if (mode !== undefined) {
+        // open() applied the mode through umask, which can strip bits the source had. fchmod is not
+        // subject to umask, and this still runs before any bytes exist in the file.
+        try {
+          fs.fchmodSync(fd, mode);
+        } catch {
+          // Windows supports only the write bit here. A backup that exists with approximate
+          // permissions beats refusing to preserve the document at all.
+        }
+      }
+      fs.writeFileSync(fd, contents, 'utf-8');
+    } finally {
+      fs.closeSync(fd);
+    }
+    return candidate;
   }
+
   throw new Error(
     `Could not reserve a backup path next to ${playlistPath}: too many .before-resign files already ` +
       'exist. Move or delete some, or sign with --output to leave the input untouched.'
@@ -341,6 +407,9 @@ module.exports = {
   // material as a playlist, so it must accept the same encodings and raise the same guidance when the
   // key is malformed. Duplicating the normalizer there would let the two paths drift.
   normalizeSigningKeyToBase64Pkcs8,
+  // Exported for tests: the backup's guarantees (never overwrite, exclusive create, source mode) are
+  // the point of it, and they are far easier to pin directly than through a signing run.
+  writeBackup,
 };
 
 function resolvePlaylistSigningRole(role) {
