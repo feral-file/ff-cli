@@ -207,10 +207,14 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // to the input by the time it is written, so the refusal below never fires and the write follows
     // the link into the input while the report calls it untouched. A descriptor cannot be re-pointed.
     //
-    // O_CREAT|O_EXCL first, so a success tells us this call created the file — needed to clean up
-    // after a refusal without a racy existsSync. O_EXCL refuses to follow a symlink, which is exactly
-    // the case we want to fall through: the plain retry follows it and binds the real target, which is
-    // the file the write would have hit.
+    // O_CREAT|O_EXCL first, so a success proves this call created the file: it did not exist a moment
+    // ago, so it cannot be the source, and the failure path knows whether an empty file it left behind
+    // is its own.
+    //
+    // O_EXCL refuses to follow a symlink, which is the case worth falling through. The retry keeps
+    // O_CREAT so a DANGLING symlink gets its target created — dropping it there turned the documented
+    // safe path into ENOENT — and follows the link, binding the real file the write would have hit.
+    // That file may be the source, which is why the identity check below runs on the descriptor.
     //
     // O_WRONLY: fstat, ftruncate and write need no read permission, and asking for it fails on a
     // write-only destination the operator deliberately made that way.
@@ -224,11 +228,19 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       if (!openError || openError.code !== 'EEXIST') {
         throw openError;
       }
-      fd = fs.openSync(output, fs.constants.O_WRONLY);
+      // Not O_EXCL, so `createdOutput` stays false: this may have created a dangling link's target or
+      // opened something that was already there, and the two are indistinguishable from here.
+      fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT);
     }
 
     try {
-      const verdict = sameFileVerdict(fs.fstatSync(fd), output, sourceSnapshot, playlistPath);
+      // A file this call created cannot be the source: the source was already open when the exclusive
+      // create succeeded, so the name was free and the inode is new. That is proof, not a comparison,
+      // and it holds where inodes are not reported at all — without it, `--output` to a fresh name
+      // refused on such a filesystem, which is the one path the refusal tells people to take.
+      const verdict = createdOutput
+        ? 'different'
+        : sameFileVerdict(fs.fstatSync(fd), output, sourceSnapshot, playlistPath);
       const inPlace = verdict === 'same';
 
       // Refuse rather than overwrite a signature only its holder could reproduce.

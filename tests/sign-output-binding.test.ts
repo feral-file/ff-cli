@@ -20,6 +20,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -117,8 +118,8 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('a refusal leaves the output it created, and says so, rather than unlinking a name', async () => {
-    // The empty file a refusal leaves behind is litter, and removing it would mean unlinking by name —
+  test('a failed write leaves the output it created, and says so, rather than unlinking a name', async () => {
+    // The empty file a failure leaves behind is litter, and removing it would mean unlinking by name —
     // the one thing this function stopped trusting. Between closing the descriptor and the unlink the
     // name can be a different file, and deleting somebody else's document to tidy up after ourselves
     // is far worse than the litter. So it is left, and named, so nobody is surprised by it.
@@ -128,16 +129,11 @@ describe('sign binds the output before deciding', () => {
       const input = join(dir, 'playlist.json');
       const output = join(dir, 'fresh.json');
       const originalBytes = await writeCoSigned(input, own, makeKey());
-      const inputStat = fs.statSync(input);
 
       const removals: string[] = [];
-      const confused = {
+      const stalled = {
         ...fs,
-        fstatSync: (fd: number) => {
-          const real = fs.fstatSync(fd);
-          // Report the freshly created output as though it were the input.
-          return real.size === 0 ? inputStat : real;
-        },
+        writeSync: () => 0,
         rmSync: (...args: unknown[]) => {
           removals.push('rmSync');
           return (fs.rmSync as (...a: unknown[]) => unknown)(...args);
@@ -149,14 +145,10 @@ describe('sign binds the output before deciding', () => {
       };
 
       const result = await quietly(() =>
-        signPlaylistFile(input, own, output, 'curator', {
-          replaceSignatures: true,
-          fs: confused,
-        })
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, fs: stalled })
       );
 
       assert.equal(result.success, false);
-      assert.match(String(result.error), /would discard/);
       // Nothing is removed by name, ever.
       assert.deepEqual(removals, [], 'no file may be unlinked by name on the failure path');
       // The file it created is still there, empty, and the message says so.
@@ -495,38 +487,142 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('refuses when the filesystem reports no file identities', () => {
-    // Zero inodes mean identity cannot be established. Falling back to names is worse than useless
-    // here — two hard links to one file have different names — so an irreversible discard is refused
-    // rather than guessed at. Injected, since the platforms that do this are not the one running CI.
+  test('a fresh --output works where the filesystem reports no identities', async () => {
+    // An exclusive create proves the file is new: the source was already open, so the name was free
+    // and this inode cannot be it. No comparison is needed, which matters because the comparison is
+    // unavailable here — and refusing would have blocked the exact path the refusal tells people to
+    // take, leaving an empty file behind as it went.
     const dir = makeTempDir();
     const own = makeKey();
-    return (async () => {
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'out.json');
+      const originalBytes = await writeCoSigned(input, own, makeKey());
+
+      const anonymous = {
+        ...fs,
+        fstatSync: (fd: number) => ({ ...fs.fstatSync(fd), dev: 0, ino: 0 }),
+        statSync: (p: string) => ({ ...fs.statSync(p), dev: 0, ino: 0 }),
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', {
+          replaceSignatures: true,
+          fs: anonymous,
+        })
+      );
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(
+        (JSON.parse(readFileSync(output, 'utf-8')) as { signatures: unknown[] }).signatures.length,
+        1
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a pre-existing output with no reportable identity is still refused', async () => {
+    // The conservative branch, kept where it is still needed: this file was already there, so nothing
+    // proves it is not the input, and the comparison that would tell is unavailable. Guessing wrong
+    // truncates the document.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'out.json');
+      const originalBytes = await writeCoSigned(input, own, makeKey());
+      writeFileSync(output, 'something that was already here', 'utf-8');
+
+      const anonymous = {
+        ...fs,
+        fstatSync: (fd: number) => ({ ...fs.fstatSync(fd), dev: 0, ino: 0 }),
+        statSync: (p: string) => ({ ...fs.statSync(p), dev: 0, ino: 0 }),
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', {
+          replaceSignatures: true,
+          fs: anonymous,
+        })
+      );
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /does not report file identities/);
+      assert.match(String(result.error), /fresh name in a different directory/);
+      // Neither file is touched.
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(readFileSync(output, 'utf-8'), 'something that was already here');
+      // Nothing was created, so no leftover is claimed.
+      assert.doesNotMatch(String(result.error), /incomplete output may remain/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test(
+    'a dangling --output symlink has its target created and written',
+    { skip: isWindows },
+    async () => {
+      // O_EXCL refuses to follow a symlink, so the exclusive create returns EEXIST for a link that
+      // points at nothing. Retrying without O_CREAT then followed the link to a file that does not
+      // exist and failed ENOENT — turning the documented safe path into an error for anyone whose
+      // output name is a symlink into another directory. The retry keeps O_CREAT.
+      const dir = makeTempDir();
+      const own = makeKey();
       try {
         const input = join(dir, 'playlist.json');
+        const target = join(dir, 'target.json');
+        const link = join(dir, 'out.json');
         const originalBytes = await writeCoSigned(input, own, makeKey());
-
-        const anonymous = {
-          ...fs,
-          fstatSync: (fd: number) => ({ ...fs.fstatSync(fd), dev: 0, ino: 0 }),
-        };
+        symlinkSync(target, link); // target does not exist yet
 
         const result = await quietly(() =>
-          signPlaylistFile(input, own, join(dir, 'out.json'), 'curator', {
-            replaceSignatures: true,
-            fs: anonymous,
-          })
+          signPlaylistFile(input, own, link, 'curator', { replaceSignatures: true })
         );
 
-        assert.equal(result.success, false);
-        assert.match(String(result.error), /does not report file identities/);
-        assert.match(String(result.error), /fresh name in a different directory/);
+        assert.equal(result.success, true, result.error);
+        // The link's target is what got created and written.
+        assert.equal(existsSync(target), true);
+        assert.equal(
+          (JSON.parse(readFileSync(target, 'utf-8')) as { signatures: unknown[] }).signatures
+            .length,
+          1
+        );
         assert.equal(readFileSync(input, 'utf-8'), originalBytes);
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
-    })();
-  });
+    }
+  );
+
+  test(
+    'an --output symlink pointing at the input is still refused',
+    { skip: isWindows },
+    async () => {
+      // The other half of the same retry: keeping O_CREAT must not make the link a way past the
+      // refusal. The descriptor it binds is the input's, and the identity check runs on the descriptor.
+      const dir = makeTempDir();
+      const own = makeKey();
+      try {
+        const input = join(dir, 'playlist.json');
+        const link = join(dir, 'out.json');
+        const originalBytes = await writeCoSigned(input, own, makeKey());
+        symlinkSync(input, link);
+
+        const result = await quietly(() =>
+          signPlaylistFile(input, own, link, 'curator', { replaceSignatures: true })
+        );
+
+        assert.equal(result.success, false, 'a link to the input is the input');
+        assert.match(String(result.error), /would discard 1 still-valid signature from other keys/);
+        assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    }
+  );
 
   test('writes to a write-only destination', { skip: isWindows }, async () => {
     // fstat, ftruncate and write need no read permission. Opening O_RDWR asked for one anyway and
