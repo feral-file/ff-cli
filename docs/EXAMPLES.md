@@ -588,6 +588,10 @@ If you edited this playlist after it was signed, the existing signatures no long
 Signing fresh drops the feed's entry along with the curator's, which is correct: it covers the pre-edit
 content too, and the feed appends a new one of its own after it verifies the replacement.
 
+**On a co-curated playlist this loses the other curators' endorsements permanently** — a signature covers
+the content and the content changed, so they are void and cannot be carried forward; the command names
+each discarded entry so you can see whose signatures to ask for again before you publish the replacement.
+
 ```
 $ ff-cli sign playlist.json -r curator --replace-signatures
 
@@ -596,7 +600,24 @@ Sign playlist
 ✓ Playlist signed and saved to: /path/to/playlist.json
 
 Playlist signed
-  Replaced 2 existing signatures
+  Replaced 2 existing signatures:
+    - your own earlier signature (curator, ...GpbnnEGt)
+    - the feed's signature (feed, ...a2doK4Xr)
+  Signatures: 1
+```
+
+On a playlist another curator had endorsed, that list is the part to read before publishing:
+
+```
+Playlist signed
+  Replaced 3 existing signatures:
+    - your own earlier signature (curator, ...GpbnnEGt)
+    - another key's endorsement (curator, ...7qJ2mVdW)
+    - the feed's signature (feed, ...a2doK4Xr)
+  1 endorsement is now void — a signature covers the content, and the content changed.
+  Ask those curators to sign the edited document if you want them back:
+    ff-cli sign <file> -r curator --key <their key>
+  Signing appends, so they can add to this file without disturbing your signature.
   Signatures: 1
 ```
 
@@ -656,6 +677,23 @@ Unpublished
 Without `-y`, `unpublish` shows the title and the server and asks, defaulting to **no**. The delete
 tombstones the id: the playlist cannot be restored, and a later publish naming that id is refused. Build
 a new playlist instead of trying to recreate it.
+
+### Signing with a key other than the configured one
+
+`unpublish` and `publish --replace` take `-k, --key`, like `ff-cli sign` and `ff-cli status`. It
+overrides the configured key both for the intent signature and for the local ownership check, so holding
+a second owner key no longer means editing `config.json`:
+
+```bash
+ff-cli unpublish <id> -s 0 --key <private key for a stored owner>
+ff-cli publish playlist.json --replace -s 0 --key <private key for a stored owner>
+```
+
+`ff-cli status --key <private key>` reports which identity a key carries, which is how you check it
+against the `Stored owners:` list in a refusal.
+
+A plain `publish` **refuses** `--key` rather than ignoring it: it signs nothing at request time, so the
+flag would do nothing. `ff-cli fetch` has no `--key` for the same reason — it is a read.
 
 ### When ownership cannot be proved
 

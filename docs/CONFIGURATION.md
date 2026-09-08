@@ -142,7 +142,9 @@ No credential is configured for any of these. The feed has no API key: every wri
 signatures in the request body, and an `apiKey` left in an existing config is ignored.
 
 `playlist.privateKey` is needed only where the CLI itself has to sign at request time — `publish
---replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. A plain
+--replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. Both accept
+`-k, --key` to use a different key for one run, so a second owner identity does not require editing this
+file. A plain
 `publish` signs nothing: it uploads the `signatures[]` envelope the document already carries, so it
 works with no key configured at all (the document must have been signed at some point, by
 `ff-cli sign` or by whoever produced it, but not by this command).
