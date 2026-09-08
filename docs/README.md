@@ -99,7 +99,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
   - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`, `--replace-signatures`
   - Signing **appends** by default, so repeated runs accumulate endorsements. That is only correct while the signed content is unchanged: editing a signed playlist moves bytes the earlier signatures cover, and the envelope check then refuses to write the result. `--replace-signatures` discards every existing entry — including a feed's own co-signature — and signs the document as it stands. It is the required step before `publish --replace`
-  - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, separating your own earlier signature and the feed's (both replaced automatically) from another key's endorsement, which is void and can only be restored by asking that curator to sign the edited document
+  - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, and verifies it against the document as it now stands. Your own earlier signature is replaced by the same run. Another key's entry that **still verifies** — which is every entry when the content was not edited, since the signing payload excludes `signatures` — is reported as removed, not void; keep the previous file if you want it back. Only an entry that no longer verifies is a real loss, and the output names its holder and its own role (`agent`, `institution` and `licensor` are as valid as `curator`) so you ask the right person for the right thing
 - `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
   - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification; not recommended)
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist
@@ -362,7 +362,11 @@ playlist rather than a replacement. A `publish` without `--replace` is never sil
 replace; an id the feed already holds fails with a conflict, as before.
 
 `-k, --key` overrides the configured signing key on both — for the intent signature and for the local
-ownership check — the way `ff-cli sign --key` and `ff-cli status --key` already do. The configured key
+ownership check — the way `ff-cli sign --key` and `ff-cli status --key` already do. A `--key` that is
+present but empty (what `--key "$SIGNING_KEY"` becomes when the variable is unset) is **rejected**, never
+treated as absent: falling back to the configured key would authorize the write under an identity you did
+not choose, and a delete cannot be taken back. `unpublish` derives the identity before it looks the
+playlist up, so a bad credential fails before you are asked to confirm anything. The configured key
 is one identity; the key that owns a given playlist may be another, and editing `config.json` to delete
 something you own is not a workflow.
 
