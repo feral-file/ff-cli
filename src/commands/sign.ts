@@ -15,27 +15,143 @@ export const signCommand = new Command('sign')
     '--replace-signatures',
     'Discard the existing signatures and sign fresh (use after editing a signed playlist)'
   )
+  .option(
+    '--force',
+    'Overwrite an output file that holds a different document (refused without this)'
+  )
   .action(
     async (
       file: string,
-      options: { key?: string; role?: string; output?: string; replaceSignatures?: boolean }
+      options: {
+        key?: string;
+        role?: string;
+        output?: string;
+        replaceSignatures?: boolean;
+        force?: boolean;
+      }
     ) => {
       try {
         console.log(chalk.blue('\nSign playlist\n'));
 
         const result = await signPlaylistFile(file, options.key, options.output, options.role, {
           replaceSignatures: !!options.replaceSignatures,
+          force: !!options.force,
         });
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));
-          // Report the discard explicitly. Dropping an entry is a real change to the document —
-          // someone else's endorsement may have been in it — and staying silent would make a fresh
-          // sign indistinguishable from an appending one.
-          if (result.droppedSignatures > 0) {
-            const plural = result.droppedSignatures === 1 ? '' : 's';
+          // Name the casualty. --force overwrote a document this command never read, and the only
+          // record that it existed is now this line.
+          if (result.overwroteAnother) {
             console.log(
-              chalk.dim(`  Replaced ${result.droppedSignatures} existing signature${plural}`)
+              chalk.yellow(`  Overwrote a different document at ${result.outputPath} (--force)`)
+            );
+          }
+          // Name every discarded entry, and say only what was actually checked.
+          //
+          // Your own earlier signature is free: this command replaces it. For the rest the only
+          // establishable fact is whether the entry verifies against the document as it stands —
+          // "void" would assert it verified against the PREVIOUS content, which was edited in place
+          // and exists nowhere by the time this runs. A failed verification is equally consistent
+          // with an edit, with a tampered entry, and with one that was never valid, so it is reported
+          // as unverified rather than diagnosed.
+          //
+          // Roles are carried through rather than assumed: a document may hold `agent`,
+          // `institution`, or `licensor` entries, and a `feed` role is not special-cased because any
+          // key can emit one and this CLI has no feed identity to check a kid against.
+          const dropped: Array<{
+            kind: string;
+            sameKey: boolean;
+            claimsSigningKey: boolean;
+            role: string | null;
+            kid: string | null;
+            verified: boolean;
+            checkable: boolean;
+            label: string;
+          }> = result.dropped ?? [];
+
+          if (dropped.length > 0) {
+            const plural = dropped.length === 1 ? '' : 's';
+            console.log(chalk.dim(`  Replaced ${dropped.length} existing signature${plural}:`));
+            for (const entry of dropped) {
+              console.log(chalk.dim(`    - ${entry.label}`));
+            }
+
+            // Everything this run did not supersede. A same-key entry in another role belongs here:
+            // the fresh signature asserts a different role, so that entry is gone and not reinstated.
+            const others = dropped.filter((entry) => entry.kind !== 'replaced' && entry.checkable);
+            const stillValid = others.filter((entry) => entry.verified);
+            const unverified = others.filter((entry) => !entry.verified);
+
+            if (stillValid.length > 0) {
+              const noun = stillValid.length === 1 ? 'signature' : 'signatures';
+              const it = stillValid.length === 1 ? 'it' : 'them';
+              // Say where they still exist. Only two cases reach here: an --output run, where the
+              // input is untouched and holds them; or an in-place run whose still-valid entries are
+              // all this key's own in another role, which nobody else has to be asked for. An
+              // in-place run that would drop another key's still-valid signature never gets this far
+              // — it is refused, because that file is the only copy and its holder is the only one
+              // who could make another.
+              const where = result.inPlace
+                ? `  ${it.charAt(0).toUpperCase()}${it.slice(1)} ${
+                    stillValid.length === 1 ? 'was' : 'were'
+                  } made by your own key in another role; sign again to add back any you still want.`
+                : `  Your input file is untouched, so ${it} ${
+                    stillValid.length === 1 ? 'remains' : 'remain'
+                  } valid there.`;
+              console.log(
+                chalk.yellow(
+                  `  ${stillValid.length} other ${noun} still verified over this content and ` +
+                    `${stillValid.length === 1 ? 'was' : 'were'} removed anyway.\n` +
+                    where
+                )
+              );
+            }
+
+            if (unverified.length > 0) {
+              const noun = unverified.length === 1 ? 'signature' : 'signatures';
+              // Stated as what was observed, with both explanations, and no instruction that would
+              // only make sense under one of them.
+              console.log(
+                chalk.yellow(
+                  `  ${unverified.length} other ${noun} could not be verified against this document:`
+                )
+              );
+              for (const entry of unverified) {
+                const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'unknown key';
+                // "claims" is not decoration: an unverified entry carrying this key's kid has not
+                // established whose it is, and reading it as yours is how a forgery would hide.
+                const mine = entry.sameKey
+                  ? ' — your own key'
+                  : entry.claimsSigningKey
+                    ? ' — claims your key, unverified'
+                    : '';
+                console.log(
+                  chalk.yellow(`    ${who}${entry.role ? ` (${entry.role})` : ''}${mine}`)
+                );
+              }
+              console.log(
+                chalk.yellow(
+                  `  That is consistent with the content having changed since they were made, and\n` +
+                    `  equally with their never having been valid — this command only has the document\n` +
+                    `  as it stands, so it cannot tell which. If you want those signatures on what you\n` +
+                    `  publish, their holders have to sign this document; signing appends, so they can\n` +
+                    `  add to this file without disturbing yours.`
+                )
+              );
+            }
+
+            if (dropped.some((entry) => !entry.checkable)) {
+              console.log(
+                chalk.yellow(
+                  `  A legacy flat signature carries no kid or role, so nothing here can judge it.`
+                )
+              );
+            }
+
+            // The general fact, never a claim about a specific entry above.
+            console.log(
+              chalk.dim(`  A feed appends its own signature again after it verifies a replacement.`)
             );
           }
           if (Array.isArray(result.playlist?.signatures)) {

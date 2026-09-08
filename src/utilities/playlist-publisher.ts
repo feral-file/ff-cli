@@ -2,7 +2,6 @@ import axios, { AxiosError } from 'axios';
 import fs from 'fs';
 import type { Playlist } from '../types';
 import { verifyPlaylist } from './playlist-verifier';
-import { getPlaylistConfig } from '../config';
 import {
   OWNER_ROLE,
   buildReplaceIntent,
@@ -10,12 +9,13 @@ import {
   documentPayloadHash,
   fetchStoredPlaylist,
   intentTimestamp,
+  mutationSignerIdentity,
   ownershipPreflight,
   signIntent,
   storedOwnerKeys,
+  type KeySource,
   type StoredPlaylist,
 } from './feed-mutation';
-import { playlistSigningDidKey } from './signing-identity';
 
 interface PublishResult {
   success: boolean;
@@ -28,6 +28,8 @@ interface PublishResult {
 export interface ReplaceOptions {
   /** Signing key material for the authorization intent; falls back to the configured playlist key. */
   privateKey?: string;
+  /** Where `privateKey` came from, so a refusal points at something the operator can change. */
+  keySource?: KeySource;
 }
 
 /**
@@ -162,11 +164,18 @@ export async function replacePlaylist(
     };
   }
 
+  // Where the identity came from, resolved before the first request so every refusal — local or from
+  // the feed — names the key the operator actually used rather than a config file this run may not
+  // have read.
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+
+  // Presence, not truthiness: `--key ""` is an override that failed to expand, and falling back to the
+  // configured key would sign someone else's replacement into place.
   let privateKey: string;
   let signerDidKey: string;
   try {
-    privateKey = resolveIntentSigningKey(options.privateKey);
-    signerDidKey = playlistSigningDidKey(privateKey);
+    ({ privateKey, didKey: signerDidKey } = mutationSignerIdentity(options.privateKey, 'replace'));
   } catch (error) {
     return { success: false, error: (error as Error).message };
   }
@@ -175,7 +184,7 @@ export async function replacePlaylist(
   try {
     stored = await fetchStoredPlaylist(feedServerUrl, documentId);
   } catch (error) {
-    const described = describeFeedMutationError(error, 'replace');
+    const described = describeFeedMutationError(error, 'replace', keySource);
     const missing = (error as { response?: { status?: number } }).response?.status === 404;
     return {
       success: false,
@@ -199,7 +208,7 @@ export async function replacePlaylist(
     return { success: false, ...mismatch, feedServer: feedServerUrl };
   }
 
-  const ownership = await ownershipPreflight(stored, signerDidKey, 'replace');
+  const ownership = await ownershipPreflight(stored, signerDidKey, 'replace', keySource);
   if (ownership) {
     return { success: false, ...ownership, feedServer: feedServerUrl };
   }
@@ -234,7 +243,7 @@ export async function replacePlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'replace'),
+      ...describeFeedMutationError(error, 'replace', keySource),
       feedServer: feedServerUrl,
     };
   }
@@ -272,7 +281,12 @@ function replaceIdentityMismatch(
 
   const documentOwners = storedOwnerKeys(playlist as unknown as StoredPlaylist);
   const owners = storedOwnerKeys(stored);
-  if (documentOwners.join(' ') !== owners.join(' ')) {
+  // Compared element-wise rather than by joining on a separator: the owner set is an ordered list
+  // of opaque strings, and any separator is a guess about what cannot appear inside one.
+  const sameOwners =
+    documentOwners.length === owners.length &&
+    documentOwners.every((key, index) => key === owners[index]);
+  if (!sameOwners) {
     differences.push(
       `    curators: stored [${owners.join(', ')}], document [${documentOwners.join(', ')}]`
     );
@@ -311,27 +325,6 @@ function sameInstant(left: string, right: string): boolean {
   const a = Date.parse(left);
   const b = Date.parse(right);
   return Number.isFinite(a) && Number.isFinite(b) && a === b;
-}
-
-/**
- * resolveIntentSigningKey resolves the key that signs the authorization intent.
- *
- * The intent is signed separately from the document, and by whoever is running the command: the document
- * may legitimately carry several curators' signatures, while the intent proves that *this* operator holds
- * one of those keys right now.
- */
-function resolveIntentSigningKey(override?: string): string {
-  if (override && override.trim().length > 0) {
-    return override;
-  }
-  const configured = getPlaylistConfig().privateKey;
-  if (!configured) {
-    throw new Error(
-      'No playlist signing key is configured. A replace is authorized by a signed intent, so one is ' +
-        'required: run "ff-cli setup" or set playlist.privateKey in config.json.'
-    );
-  }
-  return configured;
 }
 
 /**

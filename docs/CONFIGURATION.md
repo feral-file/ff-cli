@@ -39,7 +39,7 @@ Optional settings used where headless/browser‑like behavior is needed.
 
 Used for signing DP‑1 playlists.
 
-- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
+- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` to override it for a single run. The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
   **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) accept the private key in any of these encodings:
 
@@ -142,7 +142,9 @@ No credential is configured for any of these. The feed has no API key: every wri
 signatures in the request body, and an `apiKey` left in an existing config is ignored.
 
 `playlist.privateKey` is needed only where the CLI itself has to sign at request time — `publish
---replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. A plain
+--replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. Both accept
+`-k, --key` to use a different key for one run, so a second owner identity does not require editing this
+file. A plain
 `publish` signs nothing: it uploads the `signatures[]` envelope the document already carries, so it
 works with no key configured at all (the document must have been signed at some point, by
 `ff-cli sign` or by whoever produced it, but not by this command).

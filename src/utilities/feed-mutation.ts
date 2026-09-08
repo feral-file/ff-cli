@@ -15,6 +15,8 @@
 
 import axios, { AxiosError } from 'axios';
 import type { Playlist } from '../types';
+import { getPlaylistConfig } from '../config';
+import { playlistSigningDidKey } from './signing-identity';
 
 // playlist-signer is still CommonJS; require keeps the interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -191,6 +193,66 @@ export async function fetchStoredPlaylist(
   return stored;
 }
 
+/**
+ * Resolve the key that signs an owner-bound intent, honouring an explicit `--key`.
+ *
+ * **Presence, never truthiness.** `--key ""` — the shape an unset shell variable takes,
+ * `--key "$SIGNING_KEY"` with nothing in it — is an override that FAILED, not an absent one. Treating it
+ * as absent silently fell back to the configured key, so a delete meant to be authorized by one identity
+ * was authorized by another and tombstoned the playlist under it. There is no recovering from that: the
+ * id is retired. So anything the caller actually passed goes through validation and is rejected there;
+ * only `undefined` means "use the configured key".
+ *
+ * @param override - Value of `--key` exactly as the command received it
+ * @param action - Which mutation is being authorized, for the no-key-configured message
+ * @returns Key material for signing
+ * @throws Error when the override is empty, or when nothing is configured and none was given
+ */
+export function resolveMutationSigningKey(
+  override: string | undefined,
+  action: 'delete' | 'replace'
+): string {
+  if (override !== undefined) {
+    if (override.trim().length === 0) {
+      throw new Error(
+        'The --key value is empty. This usually means a shell variable did not expand ' +
+          '(for example --key "$SIGNING_KEY" with SIGNING_KEY unset). Refusing rather than falling ' +
+          'back to the configured key: a signature made by the wrong identity is not something a ' +
+          `${action} can be taken back from.`
+      );
+    }
+    return override;
+  }
+
+  const configured = getPlaylistConfig().privateKey;
+  if (!configured) {
+    throw new Error(
+      `No playlist signing key is configured. A ${action} is authorized by a signature, so one is ` +
+        'required: run "ff-cli setup", set playlist.privateKey in config.json, or pass --key.'
+    );
+  }
+  return configured;
+}
+
+/**
+ * Identity a mutation will sign under, resolved and validated together.
+ *
+ * Commands call this before doing anything else so a bad credential fails before any request — and, for
+ * `unpublish`, before the operator is asked to confirm a delete they could not have completed. The key
+ * material never appears in what comes back: only the `did:key` it derives to.
+ *
+ * @param override - Value of `--key` exactly as the command received it
+ * @param action - Which mutation is being authorized
+ * @returns The key material and the `did:key` it asserts
+ */
+export function mutationSignerIdentity(
+  override: string | undefined,
+  action: 'delete' | 'replace'
+): { privateKey: string; didKey: string } {
+  const privateKey = resolveMutationSigningKey(override, action);
+  return { privateKey, didKey: playlistSigningDidKey(privateKey) };
+}
+
 /** Owner `did:key`s the stored playlist declares, in declaration order. */
 export function storedOwnerKeys(stored: StoredPlaylist): string[] {
   const curators = Array.isArray(stored.curators) ? stored.curators : [];
@@ -254,7 +316,7 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
     } catch {
       // An entry that does not verify is not proof. It is also not this command's business to report:
       // a stale or tampered signature on someone else's key changes nothing about whether the
-      // configured key can act, and the answer below is derived from the set that survived.
+      // signing key can act, and the answer below is derived from the set that survived.
     }
   }
 
@@ -262,7 +324,33 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
 }
 
 /**
- * Refuse locally when the configured key cannot authorize a mutation on the stored playlist.
+ * Where the signing identity came from.
+ *
+ * A refusal has to point at the thing the operator can actually change. Telling someone who passed
+ * `--key` to edit `playlist.privateKey` sends them to a file this run never read, and it reads as if
+ * their flag was ignored — which, after the empty-`--key` fallback, is exactly the doubt not to raise.
+ */
+export type KeySource = 'configured' | 'supplied';
+
+/** How to describe the identity in a refusal, given where it came from. */
+function identityLabel(keySource: KeySource): string {
+  return keySource === 'supplied'
+    ? 'The identity you passed with --key:'
+    : 'Your configured identity:';
+}
+
+/** What to do about it, given where it came from. */
+function retryAdvice(keySource: KeySource, plural: boolean): string {
+  const which = plural ? 'one of the keys listed above' : 'the key listed above';
+  return keySource === 'supplied'
+    ? `  Run it again with an owner key: --key <private key for ${which}>.\n` +
+        `  (Confirm which identity a key carries with "ff-cli status --key <private key>".)`
+    : `  Point playlist.privateKey at ${which}, or pass one for this run with --key (confirm any\n` +
+        `  key's identity with "ff-cli status --key <private key>").`;
+}
+
+/**
+ * Refuse locally when the signing key cannot authorize a mutation on the stored playlist.
  *
  * The feed's own answer to every case here is a bare `403 forbidden`, which says nothing about which
  * identity was offered, which ones would have worked, or whether the problem is the declaration or the
@@ -271,14 +359,15 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
  * declaration is right and the signature that would back it was never made.
  *
  * @param stored - The playlist as the feed serves it
- * @param signerDidKey - `did:key` the configured signing key will assert
+ * @param signerDidKey - `did:key` the signing key will assert
  * @param action - Which mutation is being authorized, for the wording
- * @returns A failure to report, or `null` when the configured key is a proven owner.
+ * @returns A failure to report, or `null` when the signing key is a proven owner.
  */
 export async function ownershipPreflight(
   stored: StoredPlaylist,
   signerDidKey: string,
-  action: 'delete' | 'replace'
+  action: 'delete' | 'replace',
+  keySource: KeySource = 'configured'
 ): Promise<FeedMutationFailure | null> {
   const { declared, proven } = await storedOwnership(stored);
   if (proven.includes(signerDidKey)) {
@@ -296,7 +385,7 @@ export async function ownershipPreflight(
       message:
         `The feed derives ownership from the stored document's curators[], and this one is empty — the\n` +
         `  shape a playlist published without an owner-role signature is frozen in. No signature can\n` +
-        `  authorize a ${verb}, including yours (${signerDidKey}).\n` +
+        `  authorize a ${verb}, including this one (${signerDidKey}).\n` +
         `  Nothing can repair it: the owner set is immutable, and only an owner could change it. Publish\n` +
         `  a corrected playlist under a new id instead.`,
     };
@@ -326,33 +415,35 @@ export async function ownershipPreflight(
   // it is simply not the one configured here.
   if (declared.includes(signerDidKey)) {
     return {
-      error: `Your key is declared on this playlist but never signed it as ${OWNER_ROLE}, so it cannot ${verb} it.`,
+      error: `This key is declared on this playlist but never signed it as ${OWNER_ROLE}, so it cannot ${verb} it.`,
       message:
         `The feed treats a declared key as an owner only once it has also signed the stored document\n` +
-        `  as "${OWNER_ROLE}". Yours is named in curators[] but carries no such signature, so an intent\n` +
-        `  signed with it would be refused.\n` +
-        `  Your configured identity:\n` +
+        `  as "${OWNER_ROLE}". This one is named in curators[] but carries no such signature, so an\n` +
+        `  intent signed with it would be refused.\n` +
+        `  ${identityLabel(keySource)}\n` +
         `    ${signerDidKey}\n` +
         `  Keys that have proved ownership:\n` +
         `${proven.map((key) => `    ${key}`).join('\n')}\n` +
-        `  Point playlist.privateKey at one of those (confirm any key's identity with\n` +
-        `  "ff-cli status --key <private key>"). Your own declaration cannot be upgraded after the fact:\n` +
-        `  the proof would have to be a signature over the document as published.`,
+        `${retryAdvice(keySource, proven.length > 1)}\n` +
+        `  The declaration cannot be upgraded after the fact: the proof would have to be a signature\n` +
+        `  over the document as published.`,
     };
   }
 
+  const source =
+    keySource === 'supplied' ? 'The key you passed with --key is' : 'The configured signing key is';
   return {
-    error: `The configured signing key is not an owner of this playlist, so it cannot ${verb} it.`,
+    error: `${source} not an owner of this playlist, so it cannot ${verb} it.`,
     message:
       `Only a key the stored playlist names in curators[] AND that signed it as "${OWNER_ROLE}" can\n` +
       `  authorize a ${verb}; the feed derives ownership from the stored document, not from a local copy.\n` +
-      `  Your configured identity:\n` +
+      `  ${identityLabel(keySource)}\n` +
       `    ${signerDidKey}\n` +
       `  Keys that have proved ownership:\n` +
       `${proven.map((key) => `    ${key}`).join('\n')}\n` +
-      `  Point playlist.privateKey at a key listed above (confirm any key's identity with\n` +
-      `  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set\n` +
-      `  is immutable, so a playlist signed by the wrong key stays that way.`,
+      `${retryAdvice(keySource, proven.length > 1)}\n` +
+      `  Ownership cannot be granted after the fact: the owner set is immutable, so a playlist signed\n` +
+      `  by the wrong key stays that way.`,
   };
 }
 
@@ -382,10 +473,20 @@ function feedErrorDetail(error: AxiosError): string {
  *
  * The codes handled are exactly those dp1-feed-v2 documents for these routes; anything else falls
  * through with the server's own words rather than being guessed at.
+ *
+ * `keySource` matters here for the same reason it does locally: two of these messages talk about the
+ * signing identity, and calling it "configured" when the operator passed `--key` describes a file this
+ * run never read. Worse, after a 403 it reads as though the override had been dropped — which is
+ * precisely the doubt an operator should not be left with when their key was used and refused.
+ *
+ * @param error - The failure thrown by the request
+ * @param action - Which mutation was attempted
+ * @param keySource - Where the signing identity came from
  */
 export function describeFeedMutationError(
   error: unknown,
-  action: 'delete' | 'replace'
+  action: 'delete' | 'replace',
+  keySource: KeySource = 'configured'
 ): FeedMutationFailure {
   const axiosError = error as AxiosError;
   const status = axiosError.response?.status;
@@ -403,21 +504,29 @@ export function describeFeedMutationError(
       error: `${verb} refused: the feed saw no signatures on the request.`,
       message:
         `Every mutating request is authorized by the signatures in its body — there is no API key.\n` +
-        `  This usually means no signing key is configured: run "ff-cli status" to check, and\n` +
-        `  "ff-cli setup" to generate one.${suffix}`,
+        (keySource === 'supplied'
+          ? `  The key passed with --key produced no signature the feed could read, which should not\n` +
+            `  happen once it has been accepted locally — please report this.\n`
+          : `  This usually means no signing key is configured: run "ff-cli status" to check, and\n` +
+            `  "ff-cli setup" to generate one.\n`) +
+        `  ${suffix.trim() || 'The feed gave no further detail.'}`,
     };
   }
 
-  // A 403 that reaches here has already passed the local ownership proof: the configured key was found
+  // A 403 that reaches here has already passed the local ownership proof: the key that signed was found
   // in the stored curators[] with a valid curator-role signature over the stored bytes. Repeating "your
   // key is not declared" would therefore be a lie, and it is the wrong place to send someone — the
   // remaining causes are the feed disagreeing about the stored document, or a replace touching the
   // owner set. Say that the feed refused, and that the local check disagreed.
   if (status === 403) {
+    const which =
+      keySource === 'supplied'
+        ? 'the key you passed with --key is'
+        : 'the configured signing key is';
     return {
       error: `${verb} refused by the feed: it did not accept the signing key as an owner.`,
       message:
-        `The local check disagreed — the configured key is named in the stored playlist's curators[]\n` +
+        `The local check disagreed — ${which} named in the stored playlist's curators[]\n` +
         `  and carries a valid "${OWNER_ROLE}" signature over the stored document — so this is the feed's\n` +
         `  own judgement, not a missing declaration.\n` +
         (action === 'replace'

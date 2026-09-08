@@ -16,14 +16,14 @@ import {
   describeFeedMutationError,
   fetchStoredPlaylist,
   intentTimestamp,
+  mutationSignerIdentity,
   ownershipPreflight,
   resolvePlaylistIdentifier,
   signIntent,
   storedOwnerKeys,
+  type KeySource,
   type StoredPlaylist,
 } from './feed-mutation';
-import { playlistSigningDidKey } from './signing-identity';
-import { getPlaylistConfig } from '../config';
 
 export interface UnpublishResult {
   success: boolean;
@@ -36,8 +36,17 @@ export interface UnpublishResult {
 }
 
 export interface UnpublishOptions {
-  /** Signing key material; falls back to the configured playlist key. Present so tests need no config. */
+  /**
+   * Exact signing key material to use. When the command resolved it already — which it does, so the
+   * identity shown in the confirmation is the identity that signs — this is that same value, and no
+   * config is read here. Omitted, the configured key is resolved instead.
+   */
   privateKey?: string;
+  /**
+   * Where `privateKey` came from, so a refusal points at something the operator can change: the config
+   * file, or the `--key` they just passed.
+   */
+  keySource?: KeySource;
 }
 
 /**
@@ -60,7 +69,7 @@ export async function fetchPlaylistForUnpublish(
  * 1. Resolve the id or URL the user supplied to a feed path segment.
  * 2. `GET` the stored playlist — the intent must carry the stored id and slug, and only the stored
  *    document says who owns it.
- * 3. Refuse locally when the configured key is not a stored owner.
+ * 3. Refuse locally when the signing key is not a stored owner.
  * 4. Build and sign the delete-intent in the `curator` role.
  * 5. `DELETE` with the intent as the body and report the outcome.
  *
@@ -82,16 +91,18 @@ export async function unpublishPlaylist(
     return { success: false, error: 'No playlist id or URL was given' };
   }
 
-  let privateKey: string;
-  try {
-    privateKey = resolveSigningKey(options.privateKey);
-  } catch (error) {
-    return { success: false, error: (error as Error).message };
-  }
+  // Where the identity came from, resolved before the first request so every refusal — local or from
+  // the feed — names the key the operator actually used rather than a config file this run may not
+  // have read.
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
 
+  // Resolve and validate together: `--key ""` is a failed override, not an absent one, and must never
+  // fall through to the configured key on an operation that tombstones an id.
+  let privateKey: string;
   let signerDidKey: string;
   try {
-    signerDidKey = playlistSigningDidKey(privateKey);
+    ({ privateKey, didKey: signerDidKey } = mutationSignerIdentity(options.privateKey, 'delete'));
   } catch (error) {
     return { success: false, error: (error as Error).message };
   }
@@ -102,7 +113,7 @@ export async function unpublishPlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'delete'),
+      ...describeFeedMutationError(error, 'delete', keySource),
       feedServer: feedServerUrl,
     };
   }
@@ -120,7 +131,7 @@ export async function unpublishPlaylist(
     };
   }
 
-  const refusal = await ownershipPreflight(stored, signerDidKey, 'delete');
+  const refusal = await ownershipPreflight(stored, signerDidKey, 'delete', keySource);
   if (refusal) {
     return { success: false, ...refusal, feedServer: feedServerUrl };
   }
@@ -166,7 +177,7 @@ export async function unpublishPlaylist(
   } catch (error) {
     return {
       success: false,
-      ...describeFeedMutationError(error, 'delete'),
+      ...describeFeedMutationError(error, 'delete', keySource),
       feedServer: feedServerUrl,
     };
   }
@@ -174,23 +185,3 @@ export async function unpublishPlaylist(
 
 /** Owner keys the stored playlist declares, re-exported so the command layer can show them. */
 export { storedOwnerKeys };
-
-/**
- * Resolve the signing key the same way every other signing path does.
- *
- * `getPlaylistConfig` already layers config.json over `PLAYLIST_PRIVATE_KEY` and screens out the sample
- * placeholder, so going through it keeps `unpublish` signing as the identity `ff-cli status` reports.
- */
-function resolveSigningKey(override?: string): string {
-  if (override && override.trim().length > 0) {
-    return override;
-  }
-  const configured = getPlaylistConfig().privateKey;
-  if (!configured) {
-    throw new Error(
-      'No playlist signing key is configured. A delete is authorized by a signature, so one is ' +
-        'required: run "ff-cli setup" or set playlist.privateKey in config.json.'
-    );
-  }
-  return configured;
-}

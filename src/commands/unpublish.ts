@@ -16,7 +16,11 @@ export const unpublishCommand = new Command('unpublish')
   .argument('<id-or-url>', 'Playlist id, slug, or feed URL')
   .option('-s, --server <index>', 'Feed server index (use this if multiple servers configured)')
   .option('-y, --yes', 'Skip the confirmation prompt')
-  .action(async (idOrUrl: string, options: { server?: string; yes?: boolean }) => {
+  .option(
+    '-k, --key <privateKey>',
+    'Ed25519 private key that signs the delete authorization (overrides config)'
+  )
+  .action(async (idOrUrl: string, options: { server?: string; yes?: boolean; key?: string }) => {
     try {
       console.log(chalk.blue('\nUnpublish playlist\n'));
 
@@ -24,6 +28,40 @@ export const unpublishCommand = new Command('unpublish')
       const { unpublishPlaylist, fetchPlaylistForUnpublish } = await import(
         '../utilities/playlist-unpublisher.js'
       );
+
+      // Resolve the signing credential ONCE, before anything else touches the network or the operator,
+      // and carry the material itself forward.
+      //
+      // This runs before the server is chosen, not after. With several feeds configured, selecting one
+      // is a question put to the operator, and asking it only to reject the key afterwards spends their
+      // attention on a run that could never have completed. A credential the command already holds is
+      // checkable without asking anybody anything, so it is checked first.
+      //
+      // Deriving it here means a malformed or empty --key fails before the lookup and before the
+      // confirmation prompt — otherwise someone was shown a playlist, asked to approve destroying it,
+      // and only then told their key was unusable.
+      //
+      // Passing the resolved material on, rather than letting unpublishPlaylist resolve again, closes a
+      // narrower gap: the prompt can stay open indefinitely, and a second resolution would re-read
+      // config.json at send time. A config edited in that window would sign the delete under an
+      // identity other than the one the operator saw and approved — and a delete tombstones the id.
+      // The DID displayed below and the key that signs are now the same value.
+      //
+      // Only the did:key is ever printed; the material never reaches the output from this path.
+      const { mutationSignerIdentity } = await import('../utilities/feed-mutation.js');
+      let signerDidKey: string;
+      let signingKey: string;
+      try {
+        ({ privateKey: signingKey, didKey: signerDidKey } = mutationSignerIdentity(
+          options.key,
+          'delete'
+        ));
+      } catch (error) {
+        console.error(chalk.red('\nCannot sign the delete'));
+        console.error(chalk.red(`  ${(error as Error).message}`));
+        console.log();
+        process.exit(1);
+      }
 
       const feedConfig = getFeedConfig();
       const selection = await selectFeedServer(feedConfig.baseURLs, {
@@ -62,6 +100,7 @@ export const unpublishCommand = new Command('unpublish')
 
         console.log(chalk.yellow(`  ${label}`));
         console.log(chalk.dim(`  Server: ${selection.url}`));
+        console.log(chalk.dim(`  Signing as: ${signerDidKey}`));
         console.log(
           chalk.dim('  This cannot be undone; the id is tombstoned and cannot be reused.')
         );
@@ -78,7 +117,17 @@ export const unpublishCommand = new Command('unpublish')
         }
       }
 
-      const result = await unpublishPlaylist(idOrUrl, selection.url);
+      // `Signing as` is printed on both paths, not only before the prompt: under -y it is the only
+      // record of which identity performed an irreversible delete, and it is what the assertion in the
+      // tests ties to the signature on the wire.
+      if (options.yes) {
+        console.log(chalk.dim(`  Signing as: ${signerDidKey}`));
+      }
+
+      const result = await unpublishPlaylist(idOrUrl, selection.url, {
+        privateKey: signingKey,
+        keySource: options.key !== undefined ? 'supplied' : 'configured',
+      });
 
       if (result.success) {
         console.log(chalk.green('Unpublished'));

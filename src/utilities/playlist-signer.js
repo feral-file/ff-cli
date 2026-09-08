@@ -111,26 +111,62 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @param {string} [roleOverride] - DP-1 signing role override
  * @param {Object} [options] - Signing options
  * @param {boolean} [options.replaceSignatures=false] - Drop every existing signature and sign fresh
+ * @param {boolean} [options.force=false] - Overwrite a destination holding a different document
+ * @param {Object} [options.fs] - Filesystem module override, for tests
  * @returns {Promise<Object>} Result with signed playlist
  * @returns {boolean} returns.success - Whether signing succeeded
  * @returns {Object} [returns.playlist] - Signed playlist object
- * @returns {number} [returns.droppedSignatures] - How many stale entries were discarded
+ * @returns {Array<Object>} [returns.dropped] - The stale entries that were discarded, classified
+ * @returns {boolean} [returns.inPlace] - Whether the input file itself was overwritten
  * @returns {string} [returns.error] - Error message if failed
  */
 async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride, options) {
-  const fs = require('fs');
+  // One fs handle for every filesystem call in this function, so a test can record the ORDER of the
+  // backup and the source write. That order is the whole guarantee: a backup synced after the source
+  // was truncated protects nothing, and no assertion about either write alone can catch it.
+  const fs = (options && options.fs) || require('fs');
   const path = require('path');
 
+  // Hold the source open for the whole call, and read its bytes through that descriptor.
+  //
+  // Everything downstream — the parsed document, the signature classification, the decision about what
+  // may be discarded — describes the file that was READ. Looking the path up again later to decide
+  // whether the output is that file compares against whatever is at the name now, so an atomic
+  // replacement in between lets a classification of one document authorize truncating another. The
+  // descriptor pins the identity the rest of the call is reasoning about.
+  let sourceFd;
+  const output = outputPath || playlistPath;
+  let createdOutput = false;
+  let wrote = false;
   try {
-    // Read playlist file
-    if (!fs.existsSync(playlistPath)) {
-      throw new Error(`Playlist file not found: ${playlistPath}`);
-    }
+    sourceFd = fs.openSync(playlistPath, fs.constants.O_RDONLY);
+  } catch (openError) {
+    return {
+      success: false,
+      error:
+        openError && openError.code === 'ENOENT'
+          ? `Playlist file not found: ${playlistPath}`
+          : openError.message,
+    };
+  }
 
-    const playlistContent = fs.readFileSync(playlistPath, 'utf-8');
+  try {
+    const sourceBytes = readAllFrom(fs, sourceFd);
+    const sourceDigest = digestOf(sourceBytes);
+    const playlistContent = sourceBytes.toString('utf-8');
     const playlist = JSON.parse(playlistContent);
     const config = getPlaylistConfig();
-    const privateKey = privateKeyBase64 || config.privateKey;
+    // Presence, not truthiness. `--key ""` is what an unset shell variable expands to; treating it as
+    // absent signs with the configured key while the user believes they supplied another one. The same
+    // hazard the feed mutations were just fixed for, and the signature it produces is just as wrong.
+    if (privateKeyBase64 !== undefined && String(privateKeyBase64).trim().length === 0) {
+      throw new Error(
+        'The --key value is empty. This usually means a shell variable did not expand ' +
+          '(for example --key "$SIGNING_KEY" with SIGNING_KEY unset). Refusing rather than falling ' +
+          'back to the configured key, which would sign under an identity you did not choose.'
+      );
+    }
+    const privateKey = privateKeyBase64 !== undefined ? privateKeyBase64 : config.privateKey;
     const role = resolvePlaylistSigningRole(roleOverride || config.role);
 
     const validation = await validatePlaylistForSigning(playlist);
@@ -143,10 +179,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       throw new Error('Private key is required for signing');
     }
     const replaceSignatures = Boolean(options && options.replaceSignatures);
-    const droppedSignatures = replaceSignatures
-      ? (Array.isArray(playlist.signatures) ? playlist.signatures.filter(Boolean).length : 0) +
-        (typeof playlist.signature === 'string' && playlist.signature.trim() ? 1 : 0)
-      : 0;
+    const force = Boolean(options && options.force);
     const signedPlaylist = await buildSignedPlaylistEnvelope(
       playlist,
       privateKey,
@@ -154,28 +187,361 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       role,
       replaceSignatures
     );
+    // Classify against the signature just produced: its `kid` and `role` are what this run actually
+    // asserted, so no separate derivation is needed to tell which entries it supersedes.
+    const fresh = signedPlaylist.signatures[signedPlaylist.signatures.length - 1];
+    const dropped = replaceSignatures
+      ? await describeDroppedSignatures(playlist, fresh?.kid, fresh?.role, dp1)
+      : [];
     const verification = await verifySignedPlaylistEnvelope(signedPlaylist, dp1);
     if (!verification.valid) {
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
     }
 
-    // Write to output file
-    const output = outputPath || playlistPath;
-    fs.writeFileSync(output, JSON.stringify(signedPlaylist, null, 2), 'utf-8');
+    // Bind the output to a descriptor BEFORE deciding whether it is the input, and write through that
+    // same descriptor. Checking a path and then writing to it is two lookups, and in a shared
+    // directory they can disagree: an --output that does not exist when it is checked can be a symlink
+    // to the input by the time it is written, so the refusal below never fires and the write follows
+    // the link into the input while the report calls it untouched. A descriptor cannot be re-pointed.
+    //
+    // Overwrite only a document this command has read.
+    //
+    // Every earlier version answered "is the output the input?" with file identity — inode, name,
+    // realpath — and every one of them lost to the same shape of race: a path can be re-pointed
+    // between any two syscalls, so a stat taken before the write says nothing about what the write
+    // will land on. Identity is the wrong question. What matters is not whether two names refer to one
+    // file but whether the bytes about to be destroyed are the bytes that were read and classified.
+    //
+    // So the output descriptor is read back and digested, and the comparison is against the digest of
+    // the source. Equal means this IS the inspected document, however the name got here, and the
+    // discard rules apply to it. Unequal means the destination holds something never looked at, which
+    // is refused rather than guessed about. Neither answer depends on a name staying still.
+    //
+    // O_CREAT|O_EXCL first: a success proves the file did not exist a moment ago, so it holds nothing
+    // to preserve and nothing to compare. On EEXIST the retry keeps O_CREAT so a dangling symlink gets
+    // its target created, and adds O_RDWR because the destination now has to be read back.
+    //
+    // No O_TRUNC anywhere: nothing is destroyed before the decision.
+    // Whether the operator already asked for a different destination, which changes what a refusal
+    // can usefully tell them.
+    const wroteElsewhere =
+      outputPath !== undefined && path.resolve(outputPath) !== path.resolve(playlistPath);
 
-    console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
+    let fd;
+    try {
+      fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
+      createdOutput = true;
+    } catch (openError) {
+      if (!openError || openError.code !== 'EEXIST') {
+        throw openError;
+      }
+      try {
+        fd = fs.openSync(output, fs.constants.O_RDWR | fs.constants.O_CREAT);
+      } catch (retryError) {
+        if (retryError && retryError.code === 'EACCES') {
+          // The destination has to be read back before it can be destroyed, so a write-only file that
+          // already exists is no longer a usable target. Worth saying, because the errno alone reads
+          // like a bug rather than a rule.
+          throw new Error(
+            `Cannot read ${output} to check what it holds (${retryError.message}). A destination that ` +
+              'already exists is read before it is overwritten, so it needs read permission. Write to ' +
+              'a new name instead.'
+          );
+        }
+        throw retryError;
+      }
+    }
 
-    return {
-      success: true,
-      playlist: signedPlaylist,
-      droppedSignatures,
-    };
+    try {
+      // `inPlace` now means "this descriptor holds the document that was read", which is the only
+      // sense the discard rules ever needed.
+      let inPlace = false;
+      let overwroteAnother = false;
+
+      if (!createdOutput) {
+        // This narrows the race; it does not close it. Between reading the destination here and
+        // truncating it below, another process can write to the same descriptor's file, and nothing
+        // available in userspace prevents that — file locking is not portable, and no command in this
+        // CLI attempts it. Every tool that edits a file in place carries the same window; `enrich`
+        // says so at its own equivalent check. A fresh --output name is the write that cannot collide,
+        // because nothing is there to lose.
+        const outputBytes = readAllFrom(fs, fd);
+        const outputDigest = digestOf(outputBytes);
+        inPlace = outputDigest === sourceDigest;
+
+        // An empty destination holds nothing to destroy, so there is nothing for the rule to protect.
+        // This is how a dangling symlink is written: O_EXCL will not follow the link, so the retry
+        // creates the target and cannot prove it did — but the file it opened is provably empty, which
+        // answers the same question the proof would have.
+        const empty = outputBytes.length === 0;
+
+        if (inPlace) {
+          // Refuse rather than overwrite a signature only its holder could reproduce. The invariant is
+          // that a still-valid endorsement from another key is never destroyed in place; scoped to what
+          // cannot be recovered, since your own entry is replaced by this run and an unverified one was
+          // not restorable from the input either.
+          const unrecoverable = dropped.filter(
+            (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
+          );
+          if (unrecoverable.length > 0) {
+            const count = unrecoverable.length;
+            const signatures = `${count} still-valid signature${count === 1 ? '' : 's'} from other keys`;
+            // Telling someone who already passed --output to "write it elsewhere" is not advice. They
+            // did; the file there holds the same document, which without identity is indistinguishable
+            // from an alias of the input — and identity is gone by design, because it could never
+            // answer the question anyway. So say what is true and what to do about it.
+            //
+            // --force deliberately does not reach here. It exists to replace a DIFFERENT document,
+            // where the only thing at risk is something the operator chose to discard. It is not a way
+            // to destroy a signature only its holder could reproduce.
+            throw new Error(
+              wroteElsewhere
+                ? `${output} holds the same document as the input, so writing there would discard ` +
+                  `${signatures} exactly as writing in place would. --force does not override this: ` +
+                  'it replaces a different document, never a signature only its holder could make ' +
+                  'again.\n' +
+                  `    If ${output} is a separate copy you no longer need, delete it and re-run — a ` +
+                  'name that does not exist is written with no check at all — or choose another ' +
+                  '--output name.'
+                : `This would discard ${signatures}. Write the result elsewhere so the original ` +
+                  'stays:\n' +
+                  `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+            );
+          }
+        } else if (!empty && !force) {
+          // Something is there and it is not what was signed. Overwriting it would destroy a document
+          // this command never read, which no flag combination should do silently.
+          throw new Error(
+            `${output} already exists and is not the playlist being signed; choose a new name, or ` +
+              'pass --force to overwrite it.'
+          );
+        } else if (!empty) {
+          overwroteAnother = true;
+        }
+      }
+
+      // Truncate only now, past every refusal, through the descriptor whose contents were just read.
+      fs.ftruncateSync(fd, 0);
+      writeAll(fs, fd, Buffer.from(JSON.stringify(signedPlaylist, null, 2), 'utf-8'));
+      // Durable before the success line prints: a report of a file that is not on disk is a lie the
+      // operator has no way to detect.
+      fs.fsyncSync(fd);
+      wrote = true;
+
+      console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
+
+      return {
+        success: true,
+        playlist: signedPlaylist,
+        dropped,
+        inPlace,
+        overwroteAnother,
+        outputPath: path.resolve(output),
+      };
+    } finally {
+      // Close, and nothing else. An earlier version removed the empty file a refusal had created, by
+      // name — and a name is exactly what this whole function stopped trusting. Between the close and
+      // the unlink the name can be another file, and deleting somebody else's document to tidy up
+      // after ourselves is a far worse outcome than the litter it was avoiding. The failure path says
+      // what may be there instead, and leaves it.
+      fs.closeSync(fd);
+    }
   } catch (error) {
     return {
       success: false,
-      error: error.message,
+      // Said only when this call created the file, which O_EXCL told us for certain. Anything else
+      // would be a guess about a name we no longer hold open, and the point of saying it at all is so
+      // an operator is not surprised by a zero-byte playlist we deliberately did not remove.
+      error:
+        createdOutput && !wrote
+          ? `${error.message}\n  An incomplete output may remain at ${output}.`
+          : error.message,
     };
+  } finally {
+    try {
+      fs.closeSync(sourceFd);
+    } catch {
+      // Nothing to do; the result has already been decided.
+    }
   }
+}
+
+/**
+ * readAllFrom reads a descriptor from byte zero, without depending on or moving its file offset.
+ *
+ * Positioned reads are used throughout so the same descriptor can be read twice — once for the
+ * document and once to check it has not changed — with no seek between them.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {number} fd - Descriptor open for reading
+ * @returns {Buffer} Everything the descriptor holds
+ */
+function readAllFrom(fs, fd) {
+  const chunks = [];
+  const buffer = Buffer.alloc(64 * 1024);
+  let position = 0;
+  for (;;) {
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, position);
+    if (!(bytes > 0)) {
+      break;
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytes)));
+    position += bytes;
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Content digest, the only comparison that answers "are these the same bytes". */
+function digestOf(buffer) {
+  return require('crypto').createHash('sha256').update(buffer).digest('hex');
+}
+
+/**
+ * writeAll writes every byte of `buffer` to `fd`, or throws.
+ *
+ * `write(2)` may write fewer bytes than asked — a short write is not an error, it is the contract — and
+ * the return value was being ignored. Since this runs immediately after truncating the destination, a
+ * short write left a partial document on disk under a "Playlist signed" report: the one failure the
+ * operator cannot see, because the command said it succeeded.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {number} fd - Descriptor open for writing
+ * @param {Buffer} buffer - Bytes to write
+ * @throws {Error} If the descriptor stops accepting bytes before the buffer is exhausted
+ */
+function writeAll(fs, fd, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(fd, buffer, offset, buffer.length - offset, offset);
+    if (!(written > 0)) {
+      throw new Error(
+        `Wrote only ${offset} of ${buffer.length} bytes; the file on disk is incomplete. ` +
+          'Re-run the command, and check the destination has space and is writable.'
+      );
+    }
+    offset += written;
+  }
+}
+
+/**
+ * Describe the signatures `--replace-signatures` discards, so the output can name them.
+ *
+ * A count alone is not actionable on a co-curated playlist: the owner has to know whose signatures are
+ * gone before they publish the replacement, not after someone notices their name missing.
+ *
+ * **An entry counts as replaced only when the fresh signature matches it in BOTH `kid` and `role`.**
+ * Matching on the key alone was wrong in a way that quietly produced unpublishable documents: re-signing
+ * as `agent` with a key that had signed as `curator` dropped the curator entry, called it "replaced",
+ * and left it out of the backup — and the result then fails the publisher's declared-curator preflight,
+ * with nothing left on disk to recover the lost signature from. Ownership lives in the role as much as
+ * in the key, so a role change is a loss like any other.
+ *
+ * **There is no "void" verdict here, and that is deliberate.** Calling an entry void asserts that it
+ * verified against the previous content and no longer does — a claim about a document this command has
+ * never seen. The operator edited in place; the pre-edit bytes exist nowhere by the time `sign` runs.
+ * A failed `VerifyMultiSignature` proves only that the entry does not verify against the document as it
+ * stands, which is equally consistent with an edit, with an entry that was tampered with, and with one
+ * that was never valid. So the verdict is exactly what can be checked: it verifies against this
+ * document, or it does not.
+ *
+ * A flat legacy `signature` is a third case again — no `kid`, no `role`, and nothing the
+ * multi-signature verifier can check — so it is reported as unverifiable rather than as a failure.
+ *
+ * It does not treat a `feed` role as "the feed's, so it comes back" either. Any key can emit a
+ * signature carrying `role: "feed"`, and this CLI holds no feed identity to check a `kid` against.
+ * Non-replaced entries are reported as removed, with their own role carried through — a document may
+ * legitimately hold `agent`, `institution`, or `licensor` entries. That a feed re-appends its own
+ * signature after verifying a replacement is stated separately, as the general fact it is.
+ *
+ * `kid` is reported as its last 8 characters: enough to match a curators[] row at a glance, with the
+ * full value still in the file.
+ *
+ * @param {Object} playlist - The playlist as read, before signing
+ * @param {string} [signingKid] - `did:key` of the key that just signed
+ * @param {string} [signingRole] - DP-1 role the fresh signature asserts
+ * @param {Object} dp1 - Loaded dp1-js module
+ * @returns {Promise<Array<{kind: string, sameKey: boolean, claimsSigningKey: boolean, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
+ */
+async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1) {
+  const dropped = [];
+  const raw = Buffer.from(JSON.stringify(playlist));
+
+  for (const entry of Array.isArray(playlist.signatures) ? playlist.signatures : []) {
+    if (!entry) {
+      continue;
+    }
+    const kid = typeof entry.kid === 'string' && entry.kid ? entry.kid : null;
+    const role = typeof entry.role === 'string' && entry.role ? entry.role : null;
+    const short = kid ? kid.slice(-8) : 'unknown';
+    const descriptor = role ? `${role}, ...${short}` : `no role, ...${short}`;
+
+    let verified = false;
+    try {
+      dp1.VerifyMultiSignature(raw, entry);
+      verified = true;
+    } catch {
+      verified = false;
+    }
+
+    // A `kid` and a `role` are claims the entry makes about itself, and nothing in a document stops an
+    // attacker — or a corrupted file — from copying the signer's own. Only a signature that verifies
+    // has established whose it is, so an unverified entry is never credited as this key's, and never
+    // reported as replaced. Otherwise a forged entry carrying the signing key's kid and role would be
+    // labelled "your own earlier signature, replaced" and vanish from the unverified summary, which is
+    // precisely where a tampered signature most needs to appear.
+    const claimsSigningKey = Boolean(kid && signingKid && kid === signingKid);
+    const sameKey = verified && claimsSigningKey;
+    const replaced = sameKey && role === signingRole;
+
+    const outcome = verified
+      ? 'removed; still valid over this content'
+      : 'removed; could not be verified against this document';
+
+    let label;
+    if (replaced) {
+      label = `your own earlier signature (${descriptor}) — replaced by this signing`;
+    } else if (sameKey) {
+      // Same key, different role. Naming it as another key's would be wrong, and naming it as replaced
+      // would be worse: this run asserts a different role, so the entry is gone and not reinstated.
+      label = `your signature in another role (${descriptor}) — ${outcome}`;
+    } else if (claimsSigningKey) {
+      // Carries this key's kid but does not verify, so whose it is was never established. Said as the
+      // claim it is: asserting it IS yours would credit a possible forgery, and asserting it is
+      // someone else's would misdescribe the ordinary case where you edited the document after signing.
+      label = `a signature claiming your key (${descriptor}) — ${outcome}`;
+    } else {
+      label = `another key's signature (${descriptor}) — ${outcome}`;
+    }
+
+    dropped.push({
+      kind: replaced ? 'replaced' : 'other',
+      sameKey,
+      claimsSigningKey,
+      role,
+      kid,
+      verified,
+      checkable: true,
+      label,
+    });
+  }
+
+  if (typeof playlist.signature === 'string' && playlist.signature.trim()) {
+    // A legacy flat signature carries neither kid nor role, and the multi-signature verifier has
+    // nothing to check it with. `checkable: false` keeps it out of both summaries: it is not a
+    // signature that failed, it is one nothing here can judge.
+    dropped.push({
+      kind: 'other',
+      sameKey: false,
+      claimsSigningKey: false,
+      role: null,
+      kid: null,
+      verified: false,
+      checkable: false,
+      label: 'a legacy flat signature (no kid, no role) — removed; not checkable here',
+    });
+  }
+
+  return dropped;
 }
 
 module.exports = {

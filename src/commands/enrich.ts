@@ -11,6 +11,12 @@ import {
   type TokenLookup,
 } from '../utilities/enrich-playlist';
 import { validatePlaylist } from '../utilities/playlist-verifier';
+// Rename semantics, not inode identity. This command writes a temp file and renames it over the
+// destination, and rename() replaces a directory ENTRY: onto a hard link it repoints that one name and
+// leaves the input's own name on the untouched original inode. So a hard-link -o is a genuinely
+// distinct output here, and treating it as in-place makes the stale-input guard below refuse a write
+// that was never unsafe. The signer's direct-write path needs the opposite predicate; see same-file.ts.
+import { isSameEntryForRename } from '../utilities/same-file';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { resolveTokenBatch } = require('../utilities/nft-indexer');
@@ -37,8 +43,12 @@ interface EnrichOptions {
  * The temporary file is created alongside the destination rather than in the
  * system temp directory: rename is only atomic within a filesystem, and those
  * are not guaranteed to be the same one.
+ *
+ * Exported for tests: whether a destination counts as the input depends on this
+ * function's rename semantics, and pairing it with the wrong predicate is a
+ * mistake that has already been made once.
  */
-async function writePlaylistAtomically(
+export async function writePlaylistAtomically(
   destination: string,
   contents: string,
   expectedDigest?: string
@@ -146,24 +156,6 @@ class OwnershipError extends Error {
     super(`cannot preserve ownership of ${target}`);
     this.name = 'OwnershipError';
   }
-}
-
-/**
- * isSameFile reports whether two paths name the same file on disk.
- *
- * Compares resolved paths rather than the strings the caller typed, so
- * `-o ./playlist.json` against `playlist.json`, and a symlink against its
- * target, are recognized as the in-place case they are.
- */
-async function isSameFile(a: string, b: string): Promise<boolean> {
-  if (a === b) {
-    return true;
-  }
-  const [left, right] = await Promise.all([
-    fs.realpath(a).catch(() => null),
-    fs.realpath(b).catch(() => null),
-  ]);
-  return left !== null && left === right;
 }
 
 /**
@@ -324,7 +316,7 @@ export const enrichCommand = new Command('enrich')
         const replaced = await writePlaylistAtomically(
           destination,
           JSON.stringify(result.playlist, null, 2),
-          (await isSameFile(file, destination)) ? originalDigest : undefined
+          (await isSameEntryForRename(destination, file)) ? originalDigest : undefined
         );
         if (!replaced) {
           console.error(chalk.red('\nThat playlist changed while the lookup ran.'));

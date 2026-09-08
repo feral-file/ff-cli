@@ -12,6 +12,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -22,6 +23,13 @@ const projectRoot = resolve(__dirname, '..');
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim limitations in spawnSync.
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
+
+// A real key, not a placeholder. `unpublish` derives its signing identity before it reaches the
+// confirmation gate — an unusable credential must fail before anything is looked up or asked — so a
+// stub value here would fail on the key and never exercise the gate these tests are about.
+const VALID_KEY = generateKeyPairSync('ed25519')
+  .privateKey.export({ format: 'der', type: 'pkcs8' })
+  .toString('base64');
 
 const TWO_SERVERS = ['https://feed.example.com/api/v1', 'http://127.0.0.1:8787/api/v1'];
 
@@ -109,7 +117,7 @@ function runCli(args: string[]): { status: number | null; stdout: string; stderr
       `${JSON.stringify(
         {
           defaultDuration: 10,
-          playlist: { privateKey: 'TESTKEY' },
+          playlist: { privateKey: VALID_KEY, role: 'curator' },
           feedServers: TWO_SERVERS.map((baseUrl) => ({ baseUrl })),
         },
         null,

@@ -191,8 +191,9 @@ accepts an API key. Both therefore carry a signed intent — `{ action, target: 
 created, signatures }`, with a `payloadHash` for replace — whose `created` must fall inside the feed's
 freshness window; the intent exists because a document's own signatures are public via `GET` and could
 otherwise be replayed to roll a resource back. The CLI proves ownership before it signs anything: it
-`GET`s the stored playlist and requires the configured key to be both named in the stored `curators[]`
-and the signer of a cryptographically valid `curator`-role signature over that stored document. Being
+`GET`s the stored playlist and requires the signing key — the configured `playlist.privateKey` unless
+`-k, --key` overrides it for that command — to be both named in the stored `curators[]` and the signer of
+a cryptographically valid `curator`-role signature over that stored document. Being
 named is a claim; the owner-role signature is the proof, and checking only the claim is what would let a
 legacy `agent`-signed document pass preflight and come back as a `403` reported as a missing
 declaration — the one thing not wrong with it. The three local refusals are therefore distinct: no
@@ -202,6 +203,35 @@ reported as the feed's own judgement, not as a missing declaration. This is also
 create a document whose declared curator did not sign in the `curator` role: that refusal is
 recoverable and the resulting stored playlist would not be. A delete tombstones the id, so the operation
 is final and the id is not reusable.
+
+A `--replace-signatures` run writing over its own input refuses when it would discard a still-valid
+signature from another key. Only that key's holder could produce it again, so overwriting the one file
+that carries it destroys something the command cannot restore; `--output` writes the result elsewhere
+and leaves the original in place. The refusal is scoped to what is unrecoverable — an in-place run still
+proceeds when the entries dropped are the signer's own, or no longer verify.
+
+Refusal rather than a preserved copy is deliberate. A copy has to reproduce the source's access, and no
+portable means of doing so exists: POSIX ACLs grant what the mode bits do not describe, macOS extended
+ACLs are not constrained by the mask, and Windows mode bits constrain nothing at all. Every version of
+that copy was a way to disclose the document. The refusal assumes nothing about the filesystem, so the
+invariant — a still-valid endorsement is never overwritten in place — holds identically everywhere.
+
+Which document a destination holds is decided by content, not by file identity. The destination is read
+back through the descriptor that will write it and compared with the document being signed; a
+destination holding anything else is refused unless `--force` says otherwise. Identity cannot answer
+this — a name can be re-pointed between any two system calls, so no comparison of paths or inodes
+describes what a later write will land on — while the bytes behind a descriptor can. It narrows the
+race and does not close it: the read and the overwrite are two operations, and an editor writing in the
+same instant can still lose its change, as with any tool that edits in place. A `--output` name that
+does not yet exist is the write that cannot collide.
+
+A destination holding the *same* document as the input is treated as an in-place run, since without
+identity a copy and a second name for the input are indistinguishable — and so the same narrow rule
+applies: it is refused only when the run would discard a still-valid signature from another key. A copy
+carrying only the signer's own entries, or only unverifiable ones, is written like any other
+destination; the input is a separate file and is untouched. Where the refusal does fire, `--force` does
+not reach it by design: force authorizes replacing a different document, never destroying a signature
+only its holder could reproduce.
 
 Editing a published playlist therefore has a required shape: `fetch` the stored document, change it,
 re-sign with `sign --replace-signatures`, then `publish --replace`. `fetch` exists because every other

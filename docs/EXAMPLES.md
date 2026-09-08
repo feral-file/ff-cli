@@ -546,8 +546,9 @@ documents you sign by hand, where `playlist.role` (default `agent`) decides the 
 ## Replace or Delete a Published Playlist
 
 A feed's `PUT` and `DELETE` are **owner-bound**, and neither accepts an API key. Both carry a short-lived
-signed **intent** — `ff-cli` builds it, signs it with the configured key in the `curator` role, and sends
-it alongside (replace) or as (delete) the request body. Only a key the **stored** playlist names in
+signed **intent** — `ff-cli` builds it, signs it in the `curator` role with the configured
+`playlist.privateKey` (or with `-k, --key` when you name one for that command), and sends it alongside
+(replace) or as (delete) the request body. Only a key the **stored** playlist names in
 `curators[]` can authorize either. This is the whole reason `publish` refuses a document with no
 owner-role signature: once such a playlist is created it can never be replaced or deleted.
 
@@ -588,6 +589,14 @@ If you edited this playlist after it was signed, the existing signatures no long
 Signing fresh drops the feed's entry along with the curator's, which is correct: it covers the pre-edit
 content too, and the feed appends a new one of its own after it verifies the replacement.
 
+**On a co-curated playlist this drops the other curators' signatures too.** The command verifies every
+discarded entry against the document as it now stands and names each one, so you can see whose
+signatures will not be on what you publish. Entries that still verify — all of them, if you have not
+actually edited anything — are reported as removed; keep the previous file if you want them back.
+Entries that do not verify are reported as exactly that, with no explanation attached: this command sees
+only the document as it stands, so it cannot tell a changed document from a signature that was never
+valid.
+
 ```
 $ ff-cli sign playlist.json -r curator --replace-signatures
 
@@ -596,9 +605,129 @@ Sign playlist
 ✓ Playlist signed and saved to: /path/to/playlist.json
 
 Playlist signed
-  Replaced 2 existing signatures
+  Replaced 3 existing signatures:
+    - a signature claiming your key (curator, ...Dy8sokwC) — removed; could not be verified against this document
+    - another key's signature (curator, ...L5ufrpW3) — removed; could not be verified against this document
+    - another key's signature (feed, ...1Rq7Lzik) — removed; could not be verified against this document
+  3 other signatures could not be verified against this document:
+    ...Dy8sokwC (curator) — claims your key, unverified
+    ...L5ufrpW3 (curator)
+    ...1Rq7Lzik (feed)
+  That is consistent with the content having changed since they were made, and
+  equally with their never having been valid — this command only has the document
+  as it stands, so it cannot tell which. If you want those signatures on what you
+  publish, their holders have to sign this document; signing appends, so they can
+  add to this file without disturbing yours.
+  A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
+
+**Your own earlier entry is in that list, and named as a claim rather than as yours.** It was made over
+the content before the edit, so it no longer verifies — and an entry that does not verify has not
+established whose it is. Reading a `kid` as proof of authorship is how a forged entry would hide behind
+your identity, so the command says what it checked: this signature claims your key, and could not be
+confirmed. On an unedited document the same entry verifies and is reported plainly as replaced.
+
+Four things that report deliberately does **not** say.
+
+It does not call an entry *void*. That would assert it verified against the previous content and no
+longer does — and the previous content was edited in place, so it exists nowhere by the time `sign`
+runs. A failed verification is equally consistent with an edit, with a tampered entry, and with one
+that was never valid; the command reports what it checked and offers both explanations.
+
+It does not treat `role: "feed"` as the feed's own. Any key can emit that role and the CLI holds no
+feed identity to check a `kid` against. That a feed re-appends its signature after verifying a
+replacement is a general fact, printed as one, not a claim about the entry above it.
+
+It does not rewrite anyone's role. `agent`, `institution` and `licensor` are valid DP-1 roles, so each
+entry is named with the role it actually carries.
+
+It does not credit an unverified entry to the key it names — not even to yours. Attribution follows
+verification, never the other way round.
+
+A flat legacy `signature` gets its own line, because it carries no `kid` and no `role` and the
+multi-signature verifier has nothing to check it with:
+
+```
+    - a legacy flat signature (no kid, no role) — removed; not checkable here
+  A legacy flat signature carries no kid or role, so nothing here can judge it.
+```
+
+Running the flag on a document you have **not** edited is a different situation, because nothing was
+invalidated — the signing payload excludes `signatures`, so the discarded entries still cover the
+content. **If any of them belongs to another key, an in-place run refuses:**
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures
+
+Sign playlist
+
+Sign failed: This would discard 1 still-valid signature from other keys. Write the result elsewhere so the original stays:
+    ff-cli sign playlist.json -r curator --replace-signatures --output <new file>
+```
+
+Only its holder could make that signature again, so overwriting the one file that carries it costs
+something this command cannot restore. Writing elsewhere keeps the original exactly where it is:
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures -o out.json
+
+Sign playlist
+
+✓ Playlist signed and saved to: /path/to/out.json
+
+Playlist signed
+  Replaced 2 existing signatures:
+    - your own earlier signature (curator, ...XppfYVjB) — replaced by this signing
+    - another key's signature (curator, ...UNFmeU8D) — removed; still valid over this content
+  1 other signature still verified over this content and was removed anyway.
+  Your input file is untouched, so it remains valid there.
+  A feed appends its own signature again after it verifies a replacement.
+  Signatures: 1
+```
+
+The refusal is narrow: it is about what cannot be recovered, not about how many signatures go. An
+in-place run still proceeds when the only entries dropped are **your own** — sign again to add any of
+them back — or ones that **no longer verify**, which the input could not restore either.
+
+**`sign` overwrites only a document it has read.** Before writing, it reads the destination back and
+compares it with the document being signed. Equal means this is that document, wherever the name now
+points, and the rule above applies to it. Different means the destination holds something never
+inspected, and the run is refused:
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures -o notes.json
+
+Sign failed: notes.json already exists and is not the playlist being signed; choose a new name, or pass --force to overwrite it.
+```
+
+`--force` allows it, and the report names what it replaced. This is a content rule, not an identity
+one: no comparison of paths or inodes can promise that the file about to be truncated is the file that
+was read, because a name can be re-pointed between any two system calls — but comparing the bytes
+through the descriptor being written can. A destination that already exists needs read permission for
+that reason.
+
+**It narrows the race; it does not close it.** The read and the overwrite are two operations, and an
+editor writing in the same instant can still lose its change — every tool that edits a file in place
+carries this, and nothing in userspace removes it portably. A fresh `--output` name is the write that
+cannot collide, because nothing is there to lose.
+
+If the destination turns out to hold the **same** document as the input — a copy taken with `cp`, say —
+it is treated exactly as an in-place run, because without file identity a copy and a second name for the
+input are the same thing. So the same narrow rule decides it: the run is refused **only when it would
+discard a still-valid signature from another key**. That is the whole of what the refusal protects, and
+a copy carrying only your own signatures, or only ones that no longer verify, is simply written — the
+input is a different file and is not touched either way.
+
+When it does refuse, `--force` deliberately does **not** override it: force is for replacing a different
+document, never for destroying a signature only its holder could make again. Delete the copy and re-run,
+or pick another `--output` name; a name that does not exist is written with no check at all.
+
+The rule holds on every platform and assumes nothing about the filesystem. An earlier version kept a
+copy of the input instead; that requires reproducing the source's access, which is not portable — POSIX
+ACLs grant what mode bits do not describe, macOS extended ACLs are not constrained by the mask, and
+Windows mode bits constrain nothing — so every implementation of it was a way for the copy to disclose
+the document. Refusing needs none of that.
 
 Appending stays the default, because it is right whenever the content has not changed — a second curator
 co-signing an unedited playlist keeps the first endorsement, and the payload hash excludes `signatures`
@@ -657,6 +786,42 @@ Without `-y`, `unpublish` shows the title and the server and asks, defaulting to
 tombstones the id: the playlist cannot be restored, and a later publish naming that id is refused. Build
 a new playlist instead of trying to recreate it.
 
+### Signing with a key other than the configured one
+
+The configured `playlist.privateKey` is the default, not the only option. `unpublish` and
+`publish --replace` take `-k, --key`, like `ff-cli sign` and `ff-cli status`, and it overrides that
+default both for the intent signature and for the local ownership check — so holding a second owner key
+no longer means editing `config.json`:
+
+```bash
+ff-cli unpublish <id> -s 0 --key <private key for a stored owner>
+ff-cli publish playlist.json --replace -s 0 --key <private key for a stored owner>
+```
+
+`ff-cli status --key <private key>` reports which identity a key carries, which is how you check it
+against the `Keys that have proved ownership:` list in a refusal. `unpublish` also prints `Signing as:`, both in its
+confirmation and under `-y`, so the identity that performs an irreversible delete is always in the
+record. It resolves that key once, before the lookup and before the prompt, and signs with the same
+material — editing `config.json` while a confirmation is open cannot change who the delete runs as.
+
+A refusal names the key you actually used. If it came from `--key`, the retry says `--key`; it will not
+send you to `playlist.privateKey` for a run that never read it.
+
+An empty `--key` is **rejected**, not ignored:
+
+```
+$ ff-cli unpublish <id> -y --key "$SIGNING_KEY"     # variable unset
+
+Cannot sign the delete
+  The --key value is empty. This usually means a shell variable did not expand
+  (for example --key "$SIGNING_KEY" with SIGNING_KEY unset). Refusing rather than falling
+  back to the configured key: a signature made by the wrong identity is not something a
+  delete can be taken back from.
+```
+
+A plain `publish` **refuses** `--key` rather than ignoring it: it signs nothing at request time, so the
+flag would do nothing. `ff-cli fetch` has no `--key` for the same reason — it is a read.
+
 ### When ownership cannot be proved
 
 A key counts as an owner only when the **stored** playlist names it in `curators[]` **and** carries its
@@ -700,16 +865,22 @@ Unpublish playlist
 Unpublish failed
   The configured signing key is not an owner of this playlist, so it cannot delete it.
 
-Only a key the stored playlist names in curators[] can authorize a delete; the feed derives
-  ownership from the stored document, not from a local copy.
+Only a key the stored playlist names in curators[] AND that signed it as "curator" can
+  authorize a delete; the feed derives ownership from the stored document, not from a local copy.
   Your configured identity:
     did:key:z6MkoX8i2dynyvLh4hUHZt8b42q9uAwwCWxM4NSX4YDfMtaC
-  Stored owners:
+  Keys that have proved ownership:
     did:key:z6MkoDkq5YXsFGXPiD6HDUVfze5mvhU5QF4hTy59pVVPYg82
-  Point playlist.privateKey at a key listed above (confirm any key's identity with
-  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set
-  is immutable, so a playlist signed by the wrong key stays that way.
+  Point playlist.privateKey at the key listed above, or pass one for this run with --key (confirm
+  any key's identity with "ff-cli status --key <private key>").
+  Ownership cannot be granted after the fact: the owner set is immutable, so a playlist signed
+  by the wrong key stays that way.
 ```
+
+That run used the configured key, so the refusal names it as configured. Had it been given
+`--key`, the same refusal would name that key instead and the retry line would read
+`Run it again with an owner key: --key <private key for the key listed above>` — a refusal always
+points at the key the command actually used, never at a config file the run never read.
 
 Ownership cannot be granted after the fact — the owner set is immutable, and only an owner could change
 it — so the only fix is to hold a declared key. A playlist whose stored `curators[]` is **empty** is a
