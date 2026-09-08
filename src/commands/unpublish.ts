@@ -29,22 +29,13 @@ export const unpublishCommand = new Command('unpublish')
         '../utilities/playlist-unpublisher.js'
       );
 
-      const feedConfig = getFeedConfig();
-      const selection = await selectFeedServer(feedConfig.baseURLs, {
-        serverArg: options.server,
-        nonInteractive: !!options.yes,
-      });
-      if (!selection.ok) {
-        console.error(chalk.red(`\n${selection.error}`));
-        if (selection.detail) {
-          console.log(chalk.yellow(selection.detail));
-        }
-        console.log();
-        process.exit(1);
-      }
-
       // Resolve the signing credential ONCE, before anything else touches the network or the operator,
       // and carry the material itself forward.
+      //
+      // This runs before the server is chosen, not after. With several feeds configured, selecting one
+      // is a question put to the operator, and asking it only to reject the key afterwards spends their
+      // attention on a run that could never have completed. A credential the command already holds is
+      // checkable without asking anybody anything, so it is checked first.
       //
       // Deriving it here means a malformed or empty --key fails before the lookup and before the
       // confirmation prompt — otherwise someone was shown a playlist, asked to approve destroying it,
@@ -68,6 +59,20 @@ export const unpublishCommand = new Command('unpublish')
       } catch (error) {
         console.error(chalk.red('\nCannot sign the delete'));
         console.error(chalk.red(`  ${(error as Error).message}`));
+        console.log();
+        process.exit(1);
+      }
+
+      const feedConfig = getFeedConfig();
+      const selection = await selectFeedServer(feedConfig.baseURLs, {
+        serverArg: options.server,
+        nonInteractive: !!options.yes,
+      });
+      if (!selection.ok) {
+        console.error(chalk.red(`\n${selection.error}`));
+        if (selection.detail) {
+          console.log(chalk.yellow(selection.detail));
+        }
         console.log();
         process.exit(1);
       }

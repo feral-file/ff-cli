@@ -109,16 +109,22 @@ async function runCli(
   baseUrl: string,
   configuredKey: string,
   args: string[],
-  files: Record<string, string> = {}
+  files: Record<string, string> = {},
+  extraServer = false
 ): Promise<CliRun> {
   const dir = mkdtempSync(join(tmpdir(), 'ff1-keyoverride-'));
+  // `extraServer` makes the server choice ambiguous, which is what turns selection into a question
+  // put to the operator — the thing that must not be asked before the key is checked.
+  const feedServers = extraServer
+    ? [{ baseUrl }, { baseUrl: 'https://feed.example.invalid/api/v1' }]
+    : [{ baseUrl }];
   writeFileSync(
     join(dir, 'config.json'),
     `${JSON.stringify(
       {
         defaultDuration: 10,
         playlist: { privateKey: configuredKey, role: 'curator', curatorName: 'Configured' },
-        feedServers: [{ baseUrl }],
+        feedServers,
       },
       null,
       2
@@ -190,7 +196,7 @@ describe('unpublish --key', () => {
     try {
       assert.notEqual(refused.status, 0);
       assert.match(refused.output, /not an owner/i);
-      assert.match(refused.output, new RegExp(playlistSigningDidKey(configuredKey)));
+      assert.ok(refused.output.includes(playlistSigningDidKey(configuredKey)));
       assert.equal(feedA.recorded.method, undefined, 'nothing may be sent');
       assertNoKeyLeak(refused.output, ownerKey, configuredKey);
     } finally {
@@ -324,6 +330,87 @@ describe('an empty --key is a failed override, not an absent one', () => {
       }
     });
   }
+});
+
+describe('the key is checked before the operator is asked anything', () => {
+  // Selecting between several configured feeds is a question put to the operator. Asking it and only
+  // then rejecting the key spends their attention on a run that could never have completed — and the
+  // credential was in hand the whole time, checkable without asking anybody anything.
+  for (const [label, key] of [
+    ['malformed', 'not-a-key'],
+    ['empty', ''],
+  ] as const) {
+    test(`unpublish: a ${label} --key is rejected without a server prompt`, async () => {
+      const ownerKey = makePrivateKeyBase64();
+      const stored = await storedPlaylist(ownerKey);
+      const feed = await startFeed(stored);
+      // No -s and two servers configured: without the reorder this asks which feed to use first.
+      const run = await runCli(
+        feed.baseUrl,
+        ownerKey,
+        ['unpublish', String(stored.id), '--key', key],
+        {},
+        true
+      );
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, /Cannot sign the delete/);
+        assert.doesNotMatch(run.output, /Multiple feed servers configured/);
+        assert.doesNotMatch(run.output, /Select server/);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be requested');
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+
+    test(`publish --replace: a ${label} --key is rejected without a server prompt`, async () => {
+      const ownerKey = makePrivateKeyBase64();
+      const stored = await storedPlaylist(ownerKey);
+      const feed = await startFeed(stored);
+      const run = await runCli(
+        feed.baseUrl,
+        ownerKey,
+        ['publish', 'playlist.json', '--replace', '--key', key],
+        { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` },
+        true
+      );
+      try {
+        assert.notEqual(run.status, 0);
+        assert.match(run.output, /Cannot sign the replacement/);
+        assert.doesNotMatch(run.output, /Multiple feed servers configured/);
+        assert.doesNotMatch(run.output, /Select server/);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be requested');
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+
+  test('a plain publish still needs no key, even with several servers configured', async () => {
+    // Non-vacuity guard: the reorder must not make a signing key a precondition for a publish that
+    // signs nothing. Here the ambiguous server choice is what fails, which proves the key check did
+    // not run first and reject an absent key.
+    const ownerKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored);
+    const run = await runCli(
+      feed.baseUrl,
+      ownerKey,
+      ['publish', 'playlist.json'],
+      { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` },
+      true
+    );
+    try {
+      assert.notEqual(run.status, 0);
+      assert.match(run.output, /Multiple feed servers configured/);
+      assert.doesNotMatch(run.output, /Cannot sign/);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
 });
 
 describe('unpublish validates the key before it asks anything', () => {
@@ -567,11 +654,14 @@ describe('the identity shown is the identity that signs', () => {
 
       assert.equal(status, 0, output);
       // The config really was replaced while the command was running.
-      assert.match(readFileSync(configPath, 'utf-8'), new RegExp(intruderKey.slice(0, 24)));
+      // Substring, not a regex: this is base64, and `+` and `/` are regex metacharacters — building a
+      // pattern from key material made the assertion pass or fail depending on which bytes the key
+      // happened to contain.
+      assert.ok(readFileSync(configPath, 'utf-8').includes(intruderKey.slice(0, 24)));
 
       // The identity reported, and the one on the wire, must both be the one resolved at the start.
       const ownerDid = playlistSigningDidKey(ownerKey);
-      assert.match(output, new RegExp(`Signing as: ${ownerDid}`));
+      assert.ok(output.includes(`Signing as: ${ownerDid}`));
       assert.equal(recorded.method, 'DELETE');
       const body = JSON.parse(String(recorded.body)) as {
         signatures: Array<{ kid: string }>;

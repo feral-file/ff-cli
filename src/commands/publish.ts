@@ -44,6 +44,27 @@ export const publishCommand = new Command('publish')
         '../utilities/playlist-publisher.js'
       );
 
+      // Validate the signing credential before the server is chosen, for a replace.
+      //
+      // Selecting between several configured feeds is a question put to the operator; asking it and
+      // only then rejecting their key spends their attention on a run that could never have completed.
+      // The credential is already in hand, so it is checked without asking anybody anything.
+      //
+      // Only for --replace: a plain publish signs nothing at request time and must keep working with
+      // no key configured at all, so requiring one here would break it.
+      let replaceKey: string | undefined;
+      if (options.replace) {
+        const { mutationSignerIdentity } = await import('../utilities/feed-mutation.js');
+        try {
+          replaceKey = mutationSignerIdentity(options.key, 'replace').privateKey;
+        } catch (error) {
+          console.error(chalk.red('\nCannot sign the replacement'));
+          console.error(chalk.red(`  ${(error as Error).message}`));
+          console.log();
+          process.exit(1);
+        }
+      }
+
       const feedConfig = getFeedConfig();
       const selection = await selectFeedServer(feedConfig.baseURLs, { serverArg: options.server });
       if (!selection.ok) {
@@ -60,7 +81,8 @@ export const publishCommand = new Command('publish')
       // neither flag meant the safe one.
       const result = options.replace
         ? await replacePlaylist(file, selection.url, {
-            privateKey: options.key,
+            // The material resolved above, so the identity validated here is the one that signs.
+            privateKey: replaceKey,
             keySource: options.key !== undefined ? 'supplied' : 'configured',
           })
         : await publishPlaylist(file, selection.url);
