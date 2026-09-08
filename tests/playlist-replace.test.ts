@@ -191,6 +191,18 @@ describe('publish --replace', () => {
       assert.match(String(result.error), /may not change/i);
       assert.match(String(result.message), /slug/);
       assert.match(String(result.message), /created/);
+      // The remedy has to name commands that actually produce the next step's input. `verify` was
+      // named here once and does not: it validates and prints a summary, leaving no document to edit.
+      assert.match(
+        String(result.message),
+        new RegExp(`ff-cli fetch ${stored.id} -o playlist.json`)
+      );
+      assert.match(
+        String(result.message),
+        /ff-cli sign playlist\.json -r curator --replace-signatures/
+      );
+      assert.match(String(result.message), /ff-cli publish playlist\.json --replace/);
+      assert.doesNotMatch(String(result.message), /ff-cli verify/);
       // Nothing is written: the refusal is local.
       assert.equal(feed.recorded.method, undefined);
     } finally {
