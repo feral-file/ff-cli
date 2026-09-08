@@ -11,6 +11,10 @@ import {
   type TokenLookup,
 } from '../utilities/enrich-playlist';
 import { validatePlaylist } from '../utilities/playlist-verifier';
+// Filesystem identity, not realpath: realpath resolves symlinks but two hard links to one inode have
+// different real paths, so the concurrent-change guard below was skipped for a destination that is the
+// input under another name — exactly the case it exists to protect.
+import { isSameFile } from '../utilities/same-file';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { resolveTokenBatch } = require('../utilities/nft-indexer');
@@ -146,24 +150,6 @@ class OwnershipError extends Error {
     super(`cannot preserve ownership of ${target}`);
     this.name = 'OwnershipError';
   }
-}
-
-/**
- * isSameFile reports whether two paths name the same file on disk.
- *
- * Compares resolved paths rather than the strings the caller typed, so
- * `-o ./playlist.json` against `playlist.json`, and a symlink against its
- * target, are recognized as the in-place case they are.
- */
-async function isSameFile(a: string, b: string): Promise<boolean> {
-  if (a === b) {
-    return true;
-  }
-  const [left, right] = await Promise.all([
-    fs.realpath(a).catch(() => null),
-    fs.realpath(b).catch(() => null),
-  ]);
-  return left !== null && left === right;
 }
 
 /**

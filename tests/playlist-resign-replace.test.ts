@@ -13,7 +13,15 @@
 import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
@@ -628,6 +636,70 @@ describe('edit a published playlist, re-sign, replace', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  for (const linkKind of ['symlink', 'hard link'] as const) {
+    test(`treats an --output that is a ${linkKind} of the input as in place`, async () => {
+      // The write follows the link to the input's inode either way. Deciding by path string called it
+      // a different file, so no backup was written AND the report said the input was untouched — the
+      // one combination that loses the signature silently while claiming it did not.
+      const dir = makeTempDir();
+      const keyA = makePrivateKeyBase64();
+      const keyB = makePrivateKeyBase64();
+
+      try {
+        const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+        const document = {
+          ...base,
+          curators: [
+            { name: 'A', key: playlistSigningDidKey(keyA) },
+            { name: 'B', key: playlistSigningDidKey(keyB) },
+          ],
+        };
+        const sigA = await signPlaylist(document, keyA, 'curator');
+        const sigB = await signPlaylist(document, keyB, 'curator');
+        const path = join(dir, 'input.json');
+        const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
+        writeFileSync(path, originalBytes, 'utf-8');
+
+        const alias = join(dir, 'alias.json');
+        if (linkKind === 'symlink') {
+          symlinkSync(path, alias);
+        } else {
+          linkSync(path, alias);
+        }
+
+        const result = spawnSync(
+          process.execPath,
+          [
+            tsxCli,
+            cliEntry,
+            'sign',
+            path,
+            '-r',
+            'curator',
+            '-k',
+            keyA,
+            '--replace-signatures',
+            '-o',
+            alias,
+          ],
+          { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+        );
+
+        assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+        const out = `${result.stdout ?? ''}`;
+        // The original must have been preserved before the write went through the link.
+        assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), originalBytes);
+        assert.match(out, /The document as it was is saved at .*before-resign\.json/);
+        // And it must not claim the input survived, because it did not.
+        assert.doesNotMatch(out, /input file is untouched/);
+        // The input really was overwritten through the alias.
+        assert.notEqual(readFileSync(path, 'utf-8'), originalBytes);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
 
   test('writes no backup when --output leaves the input untouched', async () => {
     const dir = makeTempDir();

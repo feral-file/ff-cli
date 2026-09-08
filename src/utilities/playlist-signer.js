@@ -6,6 +6,7 @@
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
 const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
+const { isSameFileSync } = require('./same-file');
 
 /**
  * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
@@ -174,7 +175,10 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     }
 
     const output = outputPath || playlistPath;
-    const inPlace = path.resolve(output) === path.resolve(playlistPath);
+    // Filesystem identity, not path equality: an --output pointing at a symlink or a hard link of the
+    // input is the same inode, and a string comparison calls it a different file — so no backup was
+    // written and the report claimed the input was untouched while the write went straight through it.
+    const inPlace = isSameFileSync(output, playlistPath);
 
     // Preserve the original BEFORE overwriting it, when overwriting is what destroys the only copy of
     // a signature this run cannot reproduce.
