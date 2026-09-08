@@ -43,6 +43,14 @@ export interface FeedServerSelectionOptions {
    * a TTY is checked separately, so callers need not test it themselves.
    */
   nonInteractive?: boolean;
+  /**
+   * Prompt function, for tests. Production callers omit it and get a readline prompt on stdin.
+   *
+   * The interactive branch has a failure mode worth covering — a bare Enter must not select a server —
+   * and driving a real readline over a pseudo-terminal to reach one `if` is more machinery than the
+   * branch is worth. This is the smaller seam.
+   */
+  ask?: (question: string) => Promise<string>;
 }
 
 /**
@@ -99,19 +107,39 @@ export async function selectFeedServer(
   console.log(chalk.yellow('Multiple feed servers configured:'));
   console.log(describeServers(baseURLs));
   console.log();
-  const prompt = createPrompt();
-  const answer = await prompt.ask('Select server (0-based index): ');
-  prompt.close();
+  const answer = await askForSelection(options.ask);
   console.log();
 
-  const index = Number(answer);
+  // A bare Enter is not a choice. `Number('')` is 0, so accepting it would send the write to whichever
+  // feed happens to be listed first — usually production — for someone who was hesitating, or who
+  // reflexively took a default that was never offered. This prompt deliberately has no default: the
+  // whole point of asking is that the CLI cannot tell which feed was meant.
+  const selected = answer.trim();
+  const index = selected.length === 0 ? Number.NaN : Number(selected);
   if (!Number.isInteger(index) || index < 0 || index >= baseURLs.length) {
     return {
       ok: false,
-      error: `Invalid selection: ${answer} (expected integer in 0..${upperBound})`,
+      error:
+        selected.length === 0
+          ? `No server selected (expected integer in 0..${upperBound})`
+          : `Invalid selection: ${selected} (expected integer in 0..${upperBound})`,
+      detail: describeServers(baseURLs),
     };
   }
   return { ok: true, url: baseURLs[index], index };
+}
+
+/** Ask which server to use, through the injected prompt when a caller supplied one. */
+async function askForSelection(ask?: (question: string) => Promise<string>): Promise<string> {
+  if (ask) {
+    return ask('Select server (0-based index): ');
+  }
+  const prompt = createPrompt();
+  try {
+    return await prompt.ask('Select server (0-based index): ');
+  } finally {
+    prompt.close();
+  }
 }
 
 /** Numbered listing of the configured servers, used in both the prompt and the failure detail. */

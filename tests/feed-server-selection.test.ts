@@ -56,6 +56,43 @@ describe('selectFeedServer', () => {
     assert.match(String(selection.detail), /1: /);
   });
 
+  test('a bare Enter at the prompt selects nothing', async () => {
+    // `Number('')` is 0, so an empty answer used to select the FIRST configured server — usually
+    // production — for an operator who was hesitating or who reflexively took a default that was never
+    // offered. The prompt has no default by design: the CLI is asking because it cannot tell.
+    const previousIsTTY = process.stdin.isTTY;
+    (process.stdin as { isTTY?: boolean }).isTTY = true;
+    try {
+      for (const answer of ['', '   ', '\n']) {
+        const selection = await selectFeedServer(TWO_SERVERS, { ask: async () => answer });
+        assert.equal(selection.ok, false, `expected ${JSON.stringify(answer)} to select nothing`);
+        assert.match(String(selection.error), /No server selected/);
+        // The list has to come back with the refusal, or the retry is a guess.
+        assert.ok(String(selection.detail).includes(TWO_SERVERS[0]));
+        assert.ok(String(selection.detail).includes(TWO_SERVERS[1]));
+      }
+
+      // Non-vacuity: a real answer at the same prompt still works.
+      const chosen = await selectFeedServer(TWO_SERVERS, { ask: async () => '1' });
+      assert.equal(chosen.ok, true);
+      assert.equal(chosen.url, TWO_SERVERS[1]);
+    } finally {
+      (process.stdin as { isTTY?: boolean }).isTTY = previousIsTTY;
+    }
+  });
+
+  test('rejects a non-numeric answer at the prompt', async () => {
+    const previousIsTTY = process.stdin.isTTY;
+    (process.stdin as { isTTY?: boolean }).isTTY = true;
+    try {
+      const selection = await selectFeedServer(TWO_SERVERS, { ask: async () => 'prod' });
+      assert.equal(selection.ok, false);
+      assert.match(String(selection.error), /Invalid selection: prod/);
+    } finally {
+      (process.stdin as { isTTY?: boolean }).isTTY = previousIsTTY;
+    }
+  });
+
   test('reports missing configuration rather than choosing a default', async () => {
     const selection = await selectFeedServer([]);
     assert.equal(selection.ok, false);
