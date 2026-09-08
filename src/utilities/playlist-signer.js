@@ -108,12 +108,16 @@ async function verifyPlaylist(playlist, publicKeyHex) {
  * @param {string} playlistPath - Path to playlist JSON file
  * @param {string} [privateKeyBase64] - Ed25519 private key in hex or base64 format (optional, uses config if not provided)
  * @param {string} [outputPath] - Output path (optional, overwrites input if not provided)
+ * @param {string} [roleOverride] - DP-1 signing role override
+ * @param {Object} [options] - Signing options
+ * @param {boolean} [options.replaceSignatures=false] - Drop every existing signature and sign fresh
  * @returns {Promise<Object>} Result with signed playlist
  * @returns {boolean} returns.success - Whether signing succeeded
  * @returns {Object} [returns.playlist] - Signed playlist object
+ * @returns {number} [returns.droppedSignatures] - How many stale entries were discarded
  * @returns {string} [returns.error] - Error message if failed
  */
-async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride) {
+async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, roleOverride, options) {
   const fs = require('fs');
   const path = require('path');
 
@@ -138,7 +142,18 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     if (!privateKey) {
       throw new Error('Private key is required for signing');
     }
-    const signedPlaylist = await buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role);
+    const replaceSignatures = Boolean(options && options.replaceSignatures);
+    const droppedSignatures = replaceSignatures
+      ? (Array.isArray(playlist.signatures) ? playlist.signatures.filter(Boolean).length : 0) +
+        (typeof playlist.signature === 'string' && playlist.signature.trim() ? 1 : 0)
+      : 0;
+    const signedPlaylist = await buildSignedPlaylistEnvelope(
+      playlist,
+      privateKey,
+      dp1,
+      role,
+      replaceSignatures
+    );
     const verification = await verifySignedPlaylistEnvelope(signedPlaylist, dp1);
     if (!verification.valid) {
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
@@ -153,6 +168,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     return {
       success: true,
       playlist: signedPlaylist,
+      droppedSignatures,
     };
   } catch (error) {
     return {
@@ -208,13 +224,25 @@ async function validatePlaylistForSigning(playlist) {
  * as dp1-js/dp1-go §7.1); prior `signatures[]` entries are kept on the returned
  * object so repeated `sign` runs accumulate endorsements instead of replacing them.
  *
+ * `replaceSignatures` discards them instead, and exists because appending is only
+ * correct while the signed content is unchanged. Editing a signed document moves
+ * bytes the earlier entries cover, so they become unverifiable — and this function's
+ * caller verifies the whole envelope before writing, which means an edited document
+ * cannot be re-signed at all without dropping them. That is the ordinary path for a
+ * feed replace: fetch the published playlist, change a field, sign fresh, PUT.
+ *
+ * The feed's own `feed` entry is dropped by the same rule rather than as a special
+ * case: it covers the pre-edit content too, and the feed appends a new one after it
+ * verifies the replacement, so carrying the old one forward can only fail.
+ *
  * @param {Object} playlist - Parsed playlist (may already include `signatures[]`)
  * @param {string} privateKey - Private key material forwarded to dp1-js
  * @param {Object} dp1 - Loaded dp1-js module
  * @param {string} role - DP-1 signing role
+ * @param {boolean} [replaceSignatures=false] - Discard existing signatures instead of appending
  * @returns {Promise<Object>} Playlist with legacy `signature` cleared and merged `signatures[]`
  */
-async function buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role) {
+async function buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role, replaceSignatures) {
   const playlistToSign = { ...playlist };
   delete playlistToSign.signature;
   delete playlistToSign.signatures;
@@ -224,9 +252,10 @@ async function buildSignedPlaylistEnvelope(playlist, privateKey, dp1, role) {
   // dp1-js's cryptic OpenSSL ASN.1 failure ("header too long" / "wrong tag").
   const normalizedKey = normalizeSigningKeyToBase64Pkcs8(privateKey);
 
-  const existingSignatures = Array.isArray(playlist.signatures)
-    ? playlist.signatures.filter((entry) => Boolean(entry))
-    : [];
+  const existingSignatures =
+    !replaceSignatures && Array.isArray(playlist.signatures)
+      ? playlist.signatures.filter((entry) => Boolean(entry))
+      : [];
 
   if (typeof dp1.SignMultiEd25519 === 'function') {
     const signature = await dp1.SignMultiEd25519(
