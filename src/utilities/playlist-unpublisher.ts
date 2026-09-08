@@ -21,6 +21,7 @@ import {
   resolvePlaylistIdentifier,
   signIntent,
   storedOwnerKeys,
+  type KeySource,
   type StoredPlaylist,
 } from './feed-mutation';
 
@@ -35,8 +36,17 @@ export interface UnpublishResult {
 }
 
 export interface UnpublishOptions {
-  /** Signing key material; falls back to the configured playlist key. Present so tests need no config. */
+  /**
+   * Exact signing key material to use. When the command resolved it already — which it does, so the
+   * identity shown in the confirmation is the identity that signs — this is that same value, and no
+   * config is read here. Omitted, the configured key is resolved instead.
+   */
   privateKey?: string;
+  /**
+   * Where `privateKey` came from, so a refusal points at something the operator can change: the config
+   * file, or the `--key` they just passed.
+   */
+  keySource?: KeySource;
 }
 
 /**
@@ -115,7 +125,9 @@ export async function unpublishPlaylist(
     };
   }
 
-  const refusal = await ownershipPreflight(stored, signerDidKey, 'delete');
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+  const refusal = await ownershipPreflight(stored, signerDidKey, 'delete', keySource);
   if (refusal) {
     return { success: false, ...refusal, feedServer: feedServerUrl };
   }

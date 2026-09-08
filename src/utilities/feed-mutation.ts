@@ -324,6 +324,32 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
 }
 
 /**
+ * Where the signing identity came from.
+ *
+ * A refusal has to point at the thing the operator can actually change. Telling someone who passed
+ * `--key` to edit `playlist.privateKey` sends them to a file this run never read, and it reads as if
+ * their flag was ignored — which, after the empty-`--key` fallback, is exactly the doubt not to raise.
+ */
+export type KeySource = 'configured' | 'supplied';
+
+/** How to describe the identity in a refusal, given where it came from. */
+function identityLabel(keySource: KeySource): string {
+  return keySource === 'supplied'
+    ? 'The identity you passed with --key:'
+    : 'Your configured identity:';
+}
+
+/** What to do about it, given where it came from. */
+function retryAdvice(keySource: KeySource, plural: boolean): string {
+  const which = plural ? 'one of the keys listed above' : 'the key listed above';
+  return keySource === 'supplied'
+    ? `  Run it again with an owner key: --key <private key for ${which}>.\n` +
+        `  (Confirm which identity a key carries with "ff-cli status --key <private key>".)`
+    : `  Point playlist.privateKey at ${which}, or pass one for this run with --key (confirm any\n` +
+        `  key's identity with "ff-cli status --key <private key>").`;
+}
+
+/**
  * Refuse locally when the configured key cannot authorize a mutation on the stored playlist.
  *
  * The feed's own answer to every case here is a bare `403 forbidden`, which says nothing about which
@@ -340,7 +366,8 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
 export async function ownershipPreflight(
   stored: StoredPlaylist,
   signerDidKey: string,
-  action: 'delete' | 'replace'
+  action: 'delete' | 'replace',
+  keySource: KeySource = 'configured'
 ): Promise<FeedMutationFailure | null> {
   const { declared, proven } = await storedOwnership(stored);
   if (proven.includes(signerDidKey)) {
@@ -358,7 +385,7 @@ export async function ownershipPreflight(
       message:
         `The feed derives ownership from the stored document's curators[], and this one is empty — the\n` +
         `  shape a playlist published without an owner-role signature is frozen in. No signature can\n` +
-        `  authorize a ${verb}, including yours (${signerDidKey}).\n` +
+        `  authorize a ${verb}, including this one (${signerDidKey}).\n` +
         `  Nothing can repair it: the owner set is immutable, and only an owner could change it. Publish\n` +
         `  a corrected playlist under a new id instead.`,
     };
@@ -388,33 +415,35 @@ export async function ownershipPreflight(
   // it is simply not the one configured here.
   if (declared.includes(signerDidKey)) {
     return {
-      error: `Your key is declared on this playlist but never signed it as ${OWNER_ROLE}, so it cannot ${verb} it.`,
+      error: `This key is declared on this playlist but never signed it as ${OWNER_ROLE}, so it cannot ${verb} it.`,
       message:
         `The feed treats a declared key as an owner only once it has also signed the stored document\n` +
-        `  as "${OWNER_ROLE}". Yours is named in curators[] but carries no such signature, so an intent\n` +
-        `  signed with it would be refused.\n` +
-        `  Your configured identity:\n` +
+        `  as "${OWNER_ROLE}". This one is named in curators[] but carries no such signature, so an\n` +
+        `  intent signed with it would be refused.\n` +
+        `  ${identityLabel(keySource)}\n` +
         `    ${signerDidKey}\n` +
         `  Keys that have proved ownership:\n` +
         `${proven.map((key) => `    ${key}`).join('\n')}\n` +
-        `  Point playlist.privateKey at one of those (confirm any key's identity with\n` +
-        `  "ff-cli status --key <private key>"). Your own declaration cannot be upgraded after the fact:\n` +
-        `  the proof would have to be a signature over the document as published.`,
+        `${retryAdvice(keySource, proven.length > 1)}\n` +
+        `  The declaration cannot be upgraded after the fact: the proof would have to be a signature\n` +
+        `  over the document as published.`,
     };
   }
 
+  const source =
+    keySource === 'supplied' ? 'The key you passed with --key is' : 'The configured signing key is';
   return {
-    error: `The configured signing key is not an owner of this playlist, so it cannot ${verb} it.`,
+    error: `${source} not an owner of this playlist, so it cannot ${verb} it.`,
     message:
       `Only a key the stored playlist names in curators[] AND that signed it as "${OWNER_ROLE}" can\n` +
       `  authorize a ${verb}; the feed derives ownership from the stored document, not from a local copy.\n` +
-      `  Your configured identity:\n` +
+      `  ${identityLabel(keySource)}\n` +
       `    ${signerDidKey}\n` +
       `  Keys that have proved ownership:\n` +
       `${proven.map((key) => `    ${key}`).join('\n')}\n` +
-      `  Point playlist.privateKey at a key listed above (confirm any key's identity with\n` +
-      `  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set\n` +
-      `  is immutable, so a playlist signed by the wrong key stays that way.`,
+      `${retryAdvice(keySource, proven.length > 1)}\n` +
+      `  Ownership cannot be granted after the fact: the owner set is immutable, so a playlist signed\n` +
+      `  by the wrong key stays that way.`,
   };
 }
 

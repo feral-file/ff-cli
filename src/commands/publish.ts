@@ -59,7 +59,10 @@ export const publishCommand = new Command('publish')
       // loudly on a duplicate id, a replace overwrites a published document — and an operator who typed
       // neither flag meant the safe one.
       const result = options.replace
-        ? await replacePlaylist(file, selection.url, { privateKey: options.key })
+        ? await replacePlaylist(file, selection.url, {
+            privateKey: options.key,
+            keySource: options.key !== undefined ? 'supplied' : 'configured',
+          })
         : await publishPlaylist(file, selection.url);
 
       if (result.success) {

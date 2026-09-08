@@ -13,6 +13,7 @@ import {
   ownershipPreflight,
   signIntent,
   storedOwnerKeys,
+  type KeySource,
   type StoredPlaylist,
 } from './feed-mutation';
 
@@ -27,6 +28,8 @@ interface PublishResult {
 export interface ReplaceOptions {
   /** Signing key material for the authorization intent; falls back to the configured playlist key. */
   privateKey?: string;
+  /** Where `privateKey` came from, so a refusal points at something the operator can change. */
+  keySource?: KeySource;
 }
 
 /**
@@ -199,7 +202,9 @@ export async function replacePlaylist(
     return { success: false, ...mismatch, feedServer: feedServerUrl };
   }
 
-  const ownership = await ownershipPreflight(stored, signerDidKey, 'replace');
+  const keySource: KeySource =
+    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+  const ownership = await ownershipPreflight(stored, signerDidKey, 'replace', keySource);
   if (ownership) {
     return { success: false, ...ownership, feedServer: feedServerUrl };
   }
