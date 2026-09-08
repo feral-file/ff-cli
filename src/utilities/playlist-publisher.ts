@@ -282,16 +282,24 @@ function replaceIdentityMismatch(
     return null;
   }
 
+  // The remedy has to hand back a runnable sequence, and every step of it has to produce the input the
+  // next one needs. `verify` was named here before and does not: it validates and prints a summary, so
+  // someone following it literally ends up with no document to edit and a second dead end.
+  const storedId = typeof stored.id === 'string' && stored.id ? stored.id : '<id>';
   return {
     error: 'The document changes fields a replace may not change.',
     message:
       `A replace keeps identity and ownership fixed: id, slug, and created must equal the stored\n` +
       `  document's, and the curators[] owner set is immutable.\n` +
       `${differences.join('\n')}\n` +
-      `  Start from the published document — "ff-cli verify <feed url>" prints it — edit the fields you\n` +
-      `  meant to change, and sign it again with "ff-cli sign <file> -r ${OWNER_ROLE}". Rebuilding with\n` +
-      `  "find" or "build" mints a new id, slug, and created, which is a new playlist rather than a\n` +
-      `  replacement.`,
+      `  Start from the published document, not a rebuilt one — "find" and "build" mint a new id, slug,\n` +
+      `  and created every run, which is a new playlist rather than a replacement:\n` +
+      `    ff-cli fetch ${storedId} -o playlist.json\n` +
+      `    (edit the fields you meant to change)\n` +
+      `    ff-cli sign playlist.json -r ${OWNER_ROLE} --replace-signatures\n` +
+      `    ff-cli publish playlist.json --replace\n` +
+      `  --replace-signatures is required after an edit: the fetched document's signatures cover the\n` +
+      `  content as published, and signing appends rather than replacing.`,
   };
 }
 
@@ -340,12 +348,32 @@ function readPlaylistFile(filePath: string): { playlist: Playlist } | { failure:
     return { failure: { success: false, error: `Playlist file not found: ${filePath}` } };
   }
 
+  let parsed: unknown;
   try {
-    const content = fs.readFileSync(filePath, 'utf-8');
-    return { playlist: JSON.parse(content) as Playlist };
+    parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
   } catch (_parseError) {
     return { failure: { success: false, error: `Invalid JSON in playlist file: ${filePath}` } };
   }
+
+  // Well-formed JSON is not yet a document. `null`, `[]`, `"text"` and numbers all parse cleanly, and
+  // casting them straight to Playlist made the very next step — reading `playlist.signature` — throw a
+  // TypeError from inside a helper that sits outside both public entry points' try/catch. The caller
+  // asked for a PublishResult and got an exception instead, so a stray file answered with a stack
+  // trace rather than a diagnosis. Both verbs must fail here, structurally, as they do for bad JSON.
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    const found = parsed === null ? 'null' : Array.isArray(parsed) ? 'an array' : typeof parsed;
+    return {
+      failure: {
+        success: false,
+        error: `Playlist file does not contain a playlist document: ${filePath}`,
+        message:
+          `The file is valid JSON but holds ${found}, not an object. A DP-1 playlist is a JSON object\n` +
+          `  with dpVersion, id, title, and items at the top level.`,
+      },
+    };
+  }
+
+  return { playlist: parsed as Playlist };
 }
 
 /**
