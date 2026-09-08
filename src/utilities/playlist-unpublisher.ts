@@ -120,7 +120,7 @@ export async function unpublishPlaylist(
     };
   }
 
-  const refusal = ownershipPreflight(stored, signerDidKey, 'delete');
+  const refusal = await ownershipPreflight(stored, signerDidKey, 'delete');
   if (refusal) {
     return { success: false, ...refusal, feedServer: feedServerUrl };
   }

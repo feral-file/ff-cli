@@ -200,31 +200,97 @@ export function storedOwnerKeys(stored: StoredPlaylist): string[] {
 }
 
 /**
- * Refuse locally when the configured key is not an owner of the stored playlist.
+ * Owners of a stored playlist, split into what it *claims* and what it *proves*.
  *
- * The feed's own answer to this is a bare `403 forbidden`, which says nothing about *which* identity was
- * offered or which ones would have worked — so an operator with several keys learns only that one of
- * them was wrong. Naming both sides turns that into an actionable line, and costs no request beyond the
- * `GET` the mutation already had to make.
- *
- * @returns A failure to report, or `null` when the configured key is an owner.
+ * Being named in `curators[]` is a claim; a valid `curator`-role signature from that key is the proof,
+ * and the feed requires both before it treats a key as an owner. The two sets diverge in exactly one
+ * real population: playlists published while ff-cli's default signing role was `agent`. Those declare a
+ * curator and carry only that key's `agent` signature, so a check that stopped at the declaration would
+ * pass them, sign an intent, send it, and read the feed's `403` back as "your key is not declared" — the
+ * one thing that is not wrong with them.
  */
-export function ownershipPreflight(
+export interface StoredOwnership {
+  /** Keys named in the stored `curators[]`. */
+  declared: string[];
+  /** Declared keys that also carry a cryptographically valid `curator`-role signature. */
+  proven: string[];
+}
+
+/**
+ * Resolve who can actually authorize a mutation on a stored playlist.
+ *
+ * Each candidate signature is verified individually rather than through a whole-envelope check: a stored
+ * document legitimately carries entries this CLI does not depend on — the feed's own `feed` signature,
+ * and any co-curator's — and one unverifiable stranger among them must not invalidate a proof that is
+ * itself sound. Verification is over the stored bytes with `signatures` stripped and JCS-canonicalized,
+ * so re-serializing the parsed document here is safe: canonicalization removes key-order and whitespace
+ * differences before the digest is taken.
+ *
+ * @param stored - The playlist as the feed serves it
+ * @returns Declared and proven owner keys
+ */
+export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwnership> {
+  const declared = storedOwnerKeys(stored);
+  const signatures = Array.isArray((stored as { signatures?: unknown }).signatures)
+    ? ((stored as unknown as { signatures: Dp1Signature[] }).signatures ?? []).filter(Boolean)
+    : [];
+
+  if (declared.length === 0 || signatures.length === 0) {
+    return { declared, proven: [] };
+  }
+
+  const dp1 = await import('dp1-js');
+  const raw = Buffer.from(JSON.stringify(stored));
+  const proven: string[] = [];
+
+  for (const signature of signatures) {
+    const kid = typeof signature?.kid === 'string' ? signature.kid.trim() : '';
+    if (signature?.role !== OWNER_ROLE || !declared.includes(kid) || proven.includes(kid)) {
+      continue;
+    }
+    try {
+      dp1.VerifyMultiSignature(raw, signature as never);
+      proven.push(kid);
+    } catch {
+      // An entry that does not verify is not proof. It is also not this command's business to report:
+      // a stale or tampered signature on someone else's key changes nothing about whether the
+      // configured key can act, and the answer below is derived from the set that survived.
+    }
+  }
+
+  return { declared, proven };
+}
+
+/**
+ * Refuse locally when the configured key cannot authorize a mutation on the stored playlist.
+ *
+ * The feed's own answer to every case here is a bare `403 forbidden`, which says nothing about which
+ * identity was offered, which ones would have worked, or whether the problem is the declaration or the
+ * proof. Separating them costs no request beyond the `GET` the mutation already had to make, and the
+ * three answers point in genuinely different directions: switch keys, nothing can ever work, or the
+ * declaration is right and the signature that would back it was never made.
+ *
+ * @param stored - The playlist as the feed serves it
+ * @param signerDidKey - `did:key` the configured signing key will assert
+ * @param action - Which mutation is being authorized, for the wording
+ * @returns A failure to report, or `null` when the configured key is a proven owner.
+ */
+export async function ownershipPreflight(
   stored: StoredPlaylist,
   signerDidKey: string,
   action: 'delete' | 'replace'
-): FeedMutationFailure | null {
-  const owners = storedOwnerKeys(stored);
-  if (owners.includes(signerDidKey)) {
+): Promise<FeedMutationFailure | null> {
+  const { declared, proven } = await storedOwnership(stored);
+  if (proven.includes(signerDidKey)) {
     return null;
   }
   const verb = action === 'delete' ? 'delete' : 'replace';
 
   // A playlist with no declared curators is not "owned by someone else" — it is owned by nobody, and
   // nothing can ever authorize a write to it. Telling that operator to switch keys sends them looking
-  // for one that does not exist; this is the state every playlist published before ff-cli signed as
-  // `curator` is in, and it is exactly what the publish-time owner-role gate now prevents.
-  if (owners.length === 0) {
+  // for one that does not exist; this is the state a playlist published without any curator declaration
+  // is frozen in, and it is exactly what the publish-time curator check now prevents.
+  if (declared.length === 0) {
     return {
       error: `This playlist declares no owners, so no key can ${verb} it.`,
       message:
@@ -236,15 +302,54 @@ export function ownershipPreflight(
     };
   }
 
+  // Declared, but nobody proved it. Same terminal outcome as the case above, different cause and
+  // therefore a different message: curators[] is correct and the owner-role signature that would back
+  // it was never made. This is the state of everything published from 2.5.0 with the default `agent`
+  // role, so it is the case an operator is most likely to meet on an older playlist.
+  if (proven.length === 0) {
+    return {
+      error: `No key has proved ownership of this playlist, so none can ${verb} it.`,
+      message:
+        `A key counts as an owner only when it is named in curators[] AND signed the document as\n` +
+        `  "${OWNER_ROLE}". This playlist names ${declared.length === 1 ? 'a curator' : `${declared.length} curators`} and carries no valid ${OWNER_ROLE} signature\n` +
+        `  from ${declared.length === 1 ? 'that key' : 'any of them'} — the shape of a playlist published while the default signing role was\n` +
+        `  "agent".\n` +
+        `  Declared:\n` +
+        `${declared.map((key) => `    ${key}`).join('\n')}\n` +
+        `  Nothing can repair it, including holding one of those keys: adding the missing signature\n` +
+        `  would be a replace, and a replace needs the very proof that is missing. Publish a corrected\n` +
+        `  playlist under a new id instead.`,
+    };
+  }
+
+  // Declared, and someone proved it — but not this key. Distinct from the case above: an owner exists,
+  // it is simply not the one configured here.
+  if (declared.includes(signerDidKey)) {
+    return {
+      error: `Your key is declared on this playlist but never signed it as ${OWNER_ROLE}, so it cannot ${verb} it.`,
+      message:
+        `The feed treats a declared key as an owner only once it has also signed the stored document\n` +
+        `  as "${OWNER_ROLE}". Yours is named in curators[] but carries no such signature, so an intent\n` +
+        `  signed with it would be refused.\n` +
+        `  Your configured identity:\n` +
+        `    ${signerDidKey}\n` +
+        `  Keys that have proved ownership:\n` +
+        `${proven.map((key) => `    ${key}`).join('\n')}\n` +
+        `  Point playlist.privateKey at one of those (confirm any key's identity with\n` +
+        `  "ff-cli status --key <private key>"). Your own declaration cannot be upgraded after the fact:\n` +
+        `  the proof would have to be a signature over the document as published.`,
+    };
+  }
+
   return {
     error: `The configured signing key is not an owner of this playlist, so it cannot ${verb} it.`,
     message:
-      `Only a key the stored playlist names in curators[] can authorize a ${verb}; the feed derives\n` +
-      `  ownership from the stored document, not from a local copy.\n` +
+      `Only a key the stored playlist names in curators[] AND that signed it as "${OWNER_ROLE}" can\n` +
+      `  authorize a ${verb}; the feed derives ownership from the stored document, not from a local copy.\n` +
       `  Your configured identity:\n` +
       `    ${signerDidKey}\n` +
-      `  Stored owners:\n` +
-      `${owners.map((key) => `    ${key}`).join('\n')}\n` +
+      `  Keys that have proved ownership:\n` +
+      `${proven.map((key) => `    ${key}`).join('\n')}\n` +
       `  Point playlist.privateKey at a key listed above (confirm any key's identity with\n` +
       `  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set\n` +
       `  is immutable, so a playlist signed by the wrong key stays that way.`,
@@ -303,15 +408,24 @@ export function describeFeedMutationError(
     };
   }
 
+  // A 403 that reaches here has already passed the local ownership proof: the configured key was found
+  // in the stored curators[] with a valid curator-role signature over the stored bytes. Repeating "your
+  // key is not declared" would therefore be a lie, and it is the wrong place to send someone — the
+  // remaining causes are the feed disagreeing about the stored document, or a replace touching the
+  // owner set. Say that the feed refused, and that the local check disagreed.
   if (status === 403) {
     return {
-      error: `${verb} refused: the signing key is not an owner of the stored playlist.`,
+      error: `${verb} refused by the feed: it did not accept the signing key as an owner.`,
       message:
-        `The signature verified, but its key is not in the stored playlist's curators[].\n` +
+        `The local check disagreed — the configured key is named in the stored playlist's curators[]\n` +
+        `  and carries a valid "${OWNER_ROLE}" signature over the stored document — so this is the feed's\n` +
+        `  own judgement, not a missing declaration.\n` +
         (action === 'replace'
-          ? `  A replace also fails this way when it changes the owner set: curators[] is immutable.\n`
+          ? `  For a replace the usual cause is the submitted document changing the owner set: curators[]\n` +
+            `  is immutable, and altering it is refused as a forbidden write rather than as a bad field.\n`
           : '') +
-        `  Sign with a key the stored playlist already names as a curator.${suffix}`,
+        `  Otherwise the stored document changed since it was read; run the command again, and report it\n` +
+        `  if it persists.${suffix}`,
     };
   }
 

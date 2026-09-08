@@ -259,6 +259,37 @@ describe('publish --replace', () => {
     }
   });
 
+  test('refuses when the stored playlist declares a curator that never signed as curator', async () => {
+    // The legacy shape a replace meets most often: a playlist published while the default signing role
+    // was `agent`. The submitted document can be signed impeccably and still authorize nothing, because
+    // the intent is checked against the STORED document's proof — which does not exist.
+    const dir = makeTempDir();
+    const privateKey = makePrivateKeyBase64();
+
+    const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+    const declared = {
+      ...base,
+      curators: [{ name: 'Owner', key: playlistSigningDidKey(privateKey) }],
+    };
+    const agentSignature = await signPlaylist(declared, privateKey, 'agent');
+    const legacyStored = { ...declared, signatures: [agentSignature] };
+    const edited = await signedPlaylist(privateKey, { title: 'Edited' });
+    const feed = await startFeed({ stored: legacyStored });
+
+    try {
+      const path = writePlaylist(dir, 'edited.json', edited);
+      const result = await replacePlaylist(path, feed.baseUrl, { privateKey });
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /No key has proved ownership/i);
+      assert.match(String(result.message), /new id/);
+      assert.equal(feed.recorded.method, undefined, 'nothing may be sent');
+    } finally {
+      feed.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('says to publish instead when the feed has never held this id', async () => {
     const dir = makeTempDir();
     const privateKey = makePrivateKeyBase64();
@@ -322,7 +353,7 @@ describe('publish --replace', () => {
       name: '403',
       status: 403,
       body: { error: 'forbidden', message: 'owner set changed' },
-      expect: /not an owner/i,
+      expect: /refused by the feed/i,
     },
     {
       name: '400 invalid_timestamp',

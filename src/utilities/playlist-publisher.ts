@@ -199,7 +199,7 @@ export async function replacePlaylist(
     return { success: false, ...mismatch, feedServer: feedServerUrl };
   }
 
-  const ownership = ownershipPreflight(stored, signerDidKey, 'replace');
+  const ownership = await ownershipPreflight(stored, signerDidKey, 'replace');
   if (ownership) {
     return { success: false, ...ownership, feedServer: feedServerUrl };
   }

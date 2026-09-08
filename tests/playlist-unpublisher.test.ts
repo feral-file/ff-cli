@@ -18,6 +18,7 @@ import {
   unpublishPlaylist,
 } from '../src/utilities/playlist-unpublisher';
 import { resolvePlaylistIdentifier } from '../src/utilities/feed-mutation';
+import { signPlaylist } from '../src/utilities/playlist-signer';
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
 function makePrivateKeyBase64(): string {
@@ -96,24 +97,43 @@ async function startFeed(
   };
 }
 
-/** A stored playlist owned by `ownerKey`. */
-function storedPlaylist(ownerKey: string): Record<string, unknown> {
+/** The unsigned body of a stored playlist declaring `ownerDid` as its curator. */
+function storedBody(ownerDid: string): Record<string, unknown> {
   return {
     dpVersion: '1.1.0',
     id: STORED_ID,
     slug: STORED_SLUG,
     title: 'Unpublish fixture',
     created: '2026-09-07T10:00:00Z',
-    curators: [{ name: 'Owner', key: ownerKey }],
+    curators: [{ name: 'Owner', key: ownerDid }],
     items: [],
   };
+}
+
+/**
+ * A stored playlist actually owned by `ownerKey` — declared AND signed as curator.
+ *
+ * Declaring alone is not ownership: the feed treats a key as an owner only once it has signed the
+ * stored document in the owner role, so a fixture that only declares would exercise the legacy
+ * unowned path rather than the ordinary one. `storedBody` is the same document without that proof, and
+ * the tests below use it deliberately for the legacy cases.
+ */
+async function storedPlaylist(
+  ownerKey: string,
+  overrides: Record<string, unknown> = {}
+): Promise<Record<string, unknown>> {
+  // Overrides are applied BEFORE signing. Editing a signed document moves bytes the signature covers,
+  // so a fixture patched afterwards would be an unverifiable document rather than a stored one.
+  const body = { ...storedBody(playlistSigningDidKey(ownerKey)), ...overrides };
+  const signature = await signPlaylist(body, ownerKey, 'curator');
+  return { ...body, signatures: [signature] };
 }
 
 describe('unpublish intent', () => {
   test('sends a delete intent naming the stored id and slug, signed as curator', async () => {
     const privateKey = makePrivateKeyBase64();
     const did = playlistSigningDidKey(privateKey);
-    const feed = await startFeed({ stored: storedPlaylist(did) });
+    const feed = await startFeed({ stored: await storedPlaylist(privateKey) });
 
     try {
       const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey });
@@ -149,7 +169,7 @@ describe('unpublish intent', () => {
     // the whole body, or a re-serialized copy — verifies here and fails there.
     const privateKey = makePrivateKeyBase64();
     const did = playlistSigningDidKey(privateKey);
-    const feed = await startFeed({ stored: storedPlaylist(did) });
+    const feed = await startFeed({ stored: await storedPlaylist(privateKey) });
 
     try {
       await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey });
@@ -177,7 +197,7 @@ describe('unpublish intent', () => {
     // A CLI that derived the slug from the title or the id would fail every delete with a bare 400.
     const privateKey = makePrivateKeyBase64();
     const did = playlistSigningDidKey(privateKey);
-    const stored = { ...storedPlaylist(did), slug: 'a-slug-nobody-could-guess' };
+    const stored = await storedPlaylist(privateKey, { slug: 'a-slug-nobody-could-guess' });
     const feed = await startFeed({ stored });
 
     try {
@@ -205,7 +225,7 @@ describe('unpublish ownership preflight', () => {
     const otherKey = makePrivateKeyBase64();
     const ownerDid = playlistSigningDidKey(ownerKey);
     const otherDid = playlistSigningDidKey(otherKey);
-    const feed = await startFeed({ stored: storedPlaylist(ownerDid) });
+    const feed = await startFeed({ stored: await storedPlaylist(ownerKey) });
 
     try {
       const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey: otherKey });
@@ -227,7 +247,7 @@ describe('unpublish ownership preflight', () => {
     // different answer from "wrong key": there is no right key, and telling the operator to switch keys
     // sends them looking for one that does not exist.
     const privateKey = makePrivateKeyBase64();
-    const stored = { ...storedPlaylist(playlistSigningDidKey(privateKey)), curators: [] };
+    const stored = { ...(await storedPlaylist(privateKey)), curators: [] };
     const feed = await startFeed({ stored });
 
     try {
@@ -236,6 +256,88 @@ describe('unpublish ownership preflight', () => {
       assert.equal(result.success, false);
       assert.match(String(result.error), /declares no owners/i);
       assert.match(String(result.message), /new id/);
+      assert.equal(feed.recorded.method, undefined);
+    } finally {
+      feed.close();
+    }
+  });
+
+  test('refuses a declared curator that only ever signed as agent', async () => {
+    // The legacy shape, and the one this check exists for: every playlist published from 2.5.0 with the
+    // default `agent` role declares a curator and carries only that key's agent signature. Declaration
+    // alone used to pass, so ff-cli signed an intent, sent it, and reported the feed's 403 as "your key
+    // is not declared" — the one thing that is not wrong with the document.
+    const privateKey = makePrivateKeyBase64();
+    const did = playlistSigningDidKey(privateKey);
+    const body = storedBody(did);
+    const agentSignature = await signPlaylist(body, privateKey, 'agent');
+    const feed = await startFeed({ stored: { ...body, signatures: [agentSignature] } });
+
+    try {
+      const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey });
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /No key has proved ownership/i);
+      // It must not read as a declaration problem: curators[] is correct.
+      assert.doesNotMatch(String(result.error), /not declared|not an owner/i);
+      // The declaration is still worth showing, so the operator can see it was not the problem.
+      assert.match(String(result.message), new RegExp(did));
+      assert.match(String(result.message), /new id/);
+      assert.equal(feed.recorded.method, undefined);
+    } finally {
+      feed.close();
+    }
+  });
+
+  test('refuses a key that is declared but was never proved, when another owner exists', async () => {
+    // Two curators declared; only A signed as curator. B holds a real declaration and no proof, so B
+    // cannot act — and the answer has to point at A rather than at B's curators[] entry.
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+    const didA = playlistSigningDidKey(keyA);
+    const didB = playlistSigningDidKey(keyB);
+    const body = {
+      ...storedBody(didA),
+      curators: [
+        { name: 'A', key: didA },
+        { name: 'B', key: didB },
+      ],
+    };
+    const curatorA = await signPlaylist(body, keyA, 'curator');
+    const agentB = await signPlaylist(body, keyB, 'agent');
+    const feed = await startFeed({ stored: { ...body, signatures: [curatorA, agentB] } });
+
+    try {
+      const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey: keyB });
+
+      assert.equal(result.success, false);
+      assert.match(
+        String(result.error),
+        /declared on this playlist but never signed it as curator/i
+      );
+      assert.match(String(result.message), new RegExp(didA));
+      assert.equal(feed.recorded.method, undefined);
+    } finally {
+      feed.close();
+    }
+  });
+
+  test('a tampered owner signature is not proof', async () => {
+    // The declaration and the role are both right; only the bytes are wrong. Reading the role without
+    // verifying would accept this, which is the difference between checking a claim and checking proof.
+    const privateKey = makePrivateKeyBase64();
+    const did = playlistSigningDidKey(privateKey);
+    const body = storedBody(did);
+    const signature = await signPlaylist(body, privateKey, 'curator');
+    const feed = await startFeed({
+      stored: { ...body, signatures: [{ ...signature, sig: 'AAAA' }] },
+    });
+
+    try {
+      const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey });
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /No key has proved ownership/i);
       assert.equal(feed.recorded.method, undefined);
     } finally {
       feed.close();
@@ -257,10 +359,10 @@ describe('unpublish feed error mapping', () => {
       expect: /no signatures/i,
     },
     {
-      name: '403 — the signer is not an owner',
+      name: '403 — the feed refused an owner the local check accepted',
       status: 403,
       body: { error: 'forbidden', message: 'signer is not an owner' },
-      expect: /not an owner/i,
+      expect: /refused by the feed/i,
     },
     {
       name: '400 invalid_timestamp — outside the freshness window',
@@ -293,7 +395,7 @@ describe('unpublish feed error mapping', () => {
       const privateKey = makePrivateKeyBase64();
       const did = playlistSigningDidKey(privateKey);
       const feed = await startFeed({
-        stored: storedPlaylist(did),
+        stored: await storedPlaylist(privateKey),
         deleteStatus: testCase.status,
         deleteBody: testCase.body,
       });
@@ -313,6 +415,31 @@ describe('unpublish feed error mapping', () => {
       }
     });
   }
+
+  test('a feed 403 is reported as the feed refusing, not as a missing declaration', async () => {
+    // The two failures are now genuinely different: the local one means the key is absent from the
+    // stored curators[] or unproved, and it never sends a request. This one has passed that check, so
+    // repeating "your key is not declared" would send the operator to fix something already correct.
+    const privateKey = makePrivateKeyBase64();
+    const feed = await startFeed({
+      stored: await storedPlaylist(privateKey),
+      deleteStatus: 403,
+      deleteBody: { error: 'forbidden', message: 'signer is not an owner' },
+    });
+
+    try {
+      const result = await unpublishPlaylist(STORED_ID, feed.baseUrl, { privateKey });
+
+      assert.equal(result.success, false);
+      // It reached the feed — this is a remote refusal, not a preflight one.
+      assert.equal(feed.recorded.method, 'DELETE');
+      assert.match(String(result.error), /refused by the feed/i);
+      assert.doesNotMatch(String(result.error), /not declared|declares no owners/i);
+      assert.match(String(result.message), /local check disagreed/i);
+    } finally {
+      feed.close();
+    }
+  });
 
   test('reports a lookup 404 without signing anything', async () => {
     const privateKey = makePrivateKeyBase64();
@@ -349,7 +476,7 @@ describe('playlist identifier resolution', () => {
 describe('playlist lookup helper', () => {
   test('fetchPlaylistForUnpublish returns the stored document', async () => {
     const privateKey = makePrivateKeyBase64();
-    const feed = await startFeed({ stored: storedPlaylist(playlistSigningDidKey(privateKey)) });
+    const feed = await startFeed({ stored: await storedPlaylist(privateKey) });
 
     try {
       const stored = await fetchPlaylistForUnpublish(STORED_ID, feed.baseUrl);
