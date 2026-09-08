@@ -104,44 +104,63 @@ export function isSameFileForDirectWrite(
 }
 
 /**
- * isSameFileAsOpenDescriptor answers {@link isSameFileForDirectWrite} for an output already opened.
+ * What a comparison of two bound files established — including that it established nothing.
  *
- * Deciding from a path and then writing to that path is two lookups, and a shared directory is where
- * they disagree: a `--output` that does not exist when it is checked can be a symlink to the input by
- * the time it is written, so the preflight says "different file", nothing refuses, and the write
- * follows the link straight through the input while the report calls it untouched. Binding the output
- * to a descriptor first and judging *that* removes the window — the fd cannot be re-pointed.
- *
- * The output's stat comes from `fstat` on the bound descriptor; only the source is looked up by name,
- * and it is the file this call is protecting rather than the one being written.
- *
- * @param outputStat - `fstatSync` of the descriptor the write will use
- * @param outputPath - The name that descriptor was opened from, for the zero-inode fallback
- * @param sourcePath - Path whose contents matter
- * @param fsLike - Filesystem operations, for tests
- * @returns True when writing through the descriptor lands on `sourcePath`
+ * `unknown` is a real answer, not a shrug. Node reports `ino` as 0 on volumes that supply no file
+ * index, and two zeros make every pair look identical; falling back to names instead is worse for a
+ * destructive decision, because two hard links to one inode have different names. So the absence of
+ * identity is reported as such and the caller decides what to do about it, which for anything
+ * irreversible means refusing.
  */
-export function isSameFileAsOpenDescriptor(
+export type SameFileVerdict = 'same' | 'different' | 'unknown';
+
+/**
+ * sameFileVerdict compares an output already bound to a descriptor against a captured source identity.
+ *
+ * Both sides are stats taken from open descriptors rather than looked up by name. That is the whole
+ * point: a path can be re-pointed between the check and the write, and in a shared directory it can be
+ * re-pointed at the very file the check was protecting.
+ *
+ * @param outputStat - `fstat` of the descriptor the write will use
+ * @param outputPath - The name that descriptor was opened from, used only for the exact-name shortcut
+ * @param sourceStat - `fstat` of the source, captured when it was read
+ * @param sourcePath - The source's name, used only for the exact-name shortcut
+ * @returns Whether writing through the descriptor lands on the source, or that it cannot be told
+ */
+export function sameFileVerdict(
   outputStat: { dev: number; ino: number },
   outputPath: string,
-  sourcePath: string,
-  fsLike: SameFileFs = nodeFs as unknown as SameFileFs
-): boolean {
+  sourceStat: { dev: number; ino: number },
+  sourcePath: string
+): SameFileVerdict {
   if (samePath(outputPath, sourcePath)) {
-    return true;
+    return 'same';
   }
-  try {
-    const source = fsLike.statSync(sourcePath);
-    if (inodeUnavailable(outputStat, source)) {
-      // No usable inode, so fall back to names as the path-taking form does. This is the one branch
-      // that cannot benefit from the descriptor, and it is also the one platform where the symlink
-      // swap it guards against is least available.
-      return fsLike.realpathSync(outputPath) === fsLike.realpathSync(sourcePath);
-    }
-    return sameInode(outputStat, source);
-  } catch {
+  if (inodeUnavailable(outputStat, sourceStat)) {
+    return 'unknown';
+  }
+  return sameInode(outputStat, sourceStat) ? 'same' : 'different';
+}
+
+/**
+ * sameOpenFile reports whether two stats taken from descriptors name one file.
+ *
+ * Used to detect that the file at a path was replaced while this process held it open: the descriptor
+ * still refers to the original inode, so a fresh `fstat` of the same descriptor matching the snapshot
+ * proves the bytes read are the bytes about to be overwritten.
+ *
+ * @param left - A stat from a descriptor
+ * @param right - Another stat from a descriptor
+ * @returns True when they are the same file, by inode where available
+ */
+export function sameOpenFile(
+  left: { dev: number; ino: number },
+  right: { dev: number; ino: number }
+): boolean {
+  if (inodeUnavailable(left, right)) {
     return false;
   }
+  return sameInode(left, right);
 }
 
 /** {@link isSameFileForDirectWrite}, for callers already working asynchronously. */

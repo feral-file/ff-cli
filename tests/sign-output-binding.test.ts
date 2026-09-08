@@ -29,6 +29,7 @@ import { signPlaylist, signPlaylistFile } from '../src/utilities/playlist-signer
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const isWindows = process.platform === 'win32';
 
 function makeTempDir(): string {
   return realpathSync(mkdtempSync(join(tmpdir(), 'ff1-bind-')));
@@ -181,6 +182,234 @@ describe('sign binds the output before deciding', () => {
       assert.equal(result.success, false);
       assert.equal(truncated, false, 'nothing may be truncated on the refusing path');
       assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a short write is an error, not a signed playlist', async () => {
+    // write(2) may write fewer bytes than asked; that is the contract, not a fault. Ignoring the return
+    // value left a partial document on disk under a "Playlist signed" report — the failure the operator
+    // cannot see, because the command told them it worked. This runs right after the truncate, so the
+    // partial file is all there is.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'out.json');
+      await writeCoSigned(input, own, makeKey());
+
+      // Accepts 10 bytes at a time, so a single call can never finish the document.
+      const trickle = {
+        ...fs,
+        writeSync: (fd: number, buffer: Buffer, offset: number, length: number, position: number) =>
+          fs.writeSync(fd, buffer, offset, Math.min(length, 10), position),
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, fs: trickle })
+      );
+
+      assert.equal(result.success, true, result.error);
+      // Every byte has to arrive, however many calls it took.
+      const written = readFileSync(output, 'utf-8');
+      assert.equal(
+        JSON.stringify(result.playlist, null, 2),
+        written,
+        'the file must hold the whole document'
+      );
+      assert.equal((JSON.parse(written) as { signatures: unknown[] }).signatures.length, 1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a descriptor that stops accepting bytes fails loudly', async () => {
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'out.json');
+      await writeCoSigned(input, own, makeKey());
+
+      const stalled = {
+        ...fs,
+        writeSync: () => 0,
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true, fs: stalled })
+      );
+
+      assert.equal(result.success, false, 'a zero-byte write must not report success');
+      assert.match(String(result.error), /Wrote only 0 of \d+ bytes/);
+      assert.match(String(result.error), /incomplete/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a source replaced while the command runs is not overwritten', async () => {
+    // The document, its signatures and the decision about what may be discarded all describe the file
+    // that was READ. A replacement by rename leaves the path pointing at a new inode, so applying that
+    // reasoning would truncate a document nothing here has looked at.
+    //
+    // The playlist has only the signer's own signature, so an in-place run would ordinarily proceed —
+    // isolating the freshness check as the thing that stops it.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      writeFileSync(
+        input,
+        JSON.stringify({ ...document, signatures: [signature] }, null, 2),
+        'utf-8'
+      );
+
+      // Swap the file after it has been read, before the write.
+      const replacement = '{"dpVersion":"1.1.0","title":"someone else\'s document"}';
+      let swapped = false;
+      const replacing = {
+        ...fs,
+        ftruncateSync: (fd: number, len: number) => fs.ftruncateSync(fd, len),
+        fstatSync: (fd: number) => {
+          const stat = fs.fstatSync(fd);
+          if (!swapped) {
+            swapped = true;
+            return stat;
+          }
+          if (!existsSync(join(dir, 'done'))) {
+            writeFileSync(join(dir, 'done'), '', 'utf-8');
+            const staging = join(dir, 'staging.json');
+            writeFileSync(staging, replacement, 'utf-8');
+            fs.renameSync(staging, input);
+          }
+          return stat;
+        },
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', {
+          replaceSignatures: true,
+          fs: replacing,
+        })
+      );
+
+      assert.equal(result.success, false, 'the replacement must not be overwritten');
+      assert.match(String(result.error), /changed while this ran/);
+      assert.match(String(result.error), /Nothing was written/);
+      // The document that arrived is untouched: it was never what this run reasoned about.
+      assert.equal(readFileSync(input, 'utf-8'), replacement);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a source rewritten in place while the command runs is not overwritten', async () => {
+    // The other shape: same inode, different bytes. The held descriptor cannot see a rename, and it is
+    // the only thing that can see this — so both checks exist and neither covers the other.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      writeFileSync(
+        input,
+        JSON.stringify({ ...document, signatures: [signature] }, null, 2),
+        'utf-8'
+      );
+
+      let seen = 0;
+      const rewriting = {
+        ...fs,
+        fstatSync: (fd: number) => {
+          seen += 1;
+          if (seen === 2) {
+            // Rewritten in place: the inode is unchanged, the contents are not.
+            writeFileSync(input, '{"dpVersion":"1.1.0","title":"edited by someone else"}', 'utf-8');
+          }
+          return fs.fstatSync(fd);
+        },
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', {
+          replaceSignatures: true,
+          fs: rewriting,
+        })
+      );
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /changed while this ran/);
+      assert.equal(
+        readFileSync(input, 'utf-8'),
+        '{"dpVersion":"1.1.0","title":"edited by someone else"}'
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses when the filesystem reports no file identities', () => {
+    // Zero inodes mean identity cannot be established. Falling back to names is worse than useless
+    // here — two hard links to one file have different names — so an irreversible discard is refused
+    // rather than guessed at. Injected, since the platforms that do this are not the one running CI.
+    const dir = makeTempDir();
+    const own = makeKey();
+    return (async () => {
+      try {
+        const input = join(dir, 'playlist.json');
+        const originalBytes = await writeCoSigned(input, own, makeKey());
+
+        const anonymous = {
+          ...fs,
+          fstatSync: (fd: number) => ({ ...fs.fstatSync(fd), dev: 0, ino: 0 }),
+        };
+
+        const result = await quietly(() =>
+          signPlaylistFile(input, own, join(dir, 'out.json'), 'curator', {
+            replaceSignatures: true,
+            fs: anonymous,
+          })
+        );
+
+        assert.equal(result.success, false);
+        assert.match(String(result.error), /does not report file identities/);
+        assert.match(String(result.error), /fresh name in a different directory/);
+        assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    })();
+  });
+
+  test('writes to a write-only destination', { skip: isWindows }, async () => {
+    // fstat, ftruncate and write need no read permission. Opening O_RDWR asked for one anyway and
+    // failed on a destination the operator had deliberately made write-only.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const output = join(dir, 'out.json');
+      await writeCoSigned(input, own, makeKey());
+      writeFileSync(output, '', 'utf-8');
+      fs.chmodSync(output, 0o200);
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, output, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, true, result.error);
+      fs.chmodSync(output, 0o600);
+      assert.equal(
+        (JSON.parse(readFileSync(output, 'utf-8')) as { signatures: unknown[] }).signatures.length,
+        1
+      );
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

@@ -6,7 +6,7 @@
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
 const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
-const { isSameFileAsOpenDescriptor } = require('./same-file');
+const { sameFileVerdict, sameOpenFile } = require('./same-file');
 
 /**
  * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
@@ -127,13 +127,32 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
   const fs = (options && options.fs) || require('fs');
   const path = require('path');
 
+  // Hold the source open for the whole call, and read its bytes through that descriptor.
+  //
+  // Everything downstream — the parsed document, the signature classification, the decision about what
+  // may be discarded — describes the file that was READ. Looking the path up again later to decide
+  // whether the output is that file compares against whatever is at the name now, so an atomic
+  // replacement in between lets a classification of one document authorize truncating another. The
+  // descriptor pins the identity the rest of the call is reasoning about.
+  let sourceFd;
   try {
-    // Read playlist file
-    if (!fs.existsSync(playlistPath)) {
-      throw new Error(`Playlist file not found: ${playlistPath}`);
-    }
+    sourceFd = fs.openSync(playlistPath, fs.constants.O_RDONLY);
+  } catch (openError) {
+    return {
+      success: false,
+      error:
+        openError && openError.code === 'ENOENT'
+          ? `Playlist file not found: ${playlistPath}`
+          : openError.message,
+    };
+  }
 
-    const playlistContent = fs.readFileSync(playlistPath, 'utf-8');
+  try {
+    // Identity as it was when the bytes were read. Size and mtime ride along because they catch a
+    // replacement that reuses an inode, which a busy directory makes ordinary rather than exotic.
+    const sourceSnapshot = fs.fstatSync(sourceFd);
+
+    const playlistContent = fs.readFileSync(sourceFd, 'utf-8');
     const playlist = JSON.parse(playlistContent);
     const config = getPlaylistConfig();
     // Presence, not truthiness. `--key ""` is what an unset shell variable expands to; treating it as
@@ -187,25 +206,29 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     //
     // O_CREAT|O_EXCL first, so a success tells us this call created the file — needed to clean up
     // after a refusal without a racy existsSync. O_EXCL refuses to follow a symlink, which is exactly
-    // the case we want to fall through: the plain O_RDWR retry follows it and binds the real target,
-    // which is the file the write would have hit.
+    // the case we want to fall through: the plain retry follows it and binds the real target, which is
+    // the file the write would have hit.
+    //
+    // O_WRONLY: fstat, ftruncate and write need no read permission, and asking for it fails on a
+    // write-only destination the operator deliberately made that way.
     //
     // No O_TRUNC anywhere: the input must not lose a byte before the decision is made.
     let fd;
     let createdOutput = false;
     try {
-      fd = fs.openSync(output, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL);
+      fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
       createdOutput = true;
     } catch (openError) {
       if (!openError || openError.code !== 'EEXIST') {
         throw openError;
       }
-      fd = fs.openSync(output, fs.constants.O_RDWR);
+      fd = fs.openSync(output, fs.constants.O_WRONLY);
     }
 
     let wrote = false;
     try {
-      const inPlace = isSameFileAsOpenDescriptor(fs.fstatSync(fd), output, playlistPath, fs);
+      const verdict = sameFileVerdict(fs.fstatSync(fd), output, sourceSnapshot, playlistPath);
+      const inPlace = verdict === 'same';
 
       // Refuse rather than overwrite a signature only its holder could reproduce.
       //
@@ -222,18 +245,48 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       const unrecoverable = dropped.filter(
         (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
       );
-      if (inPlace && unrecoverable.length > 0) {
+      if (unrecoverable.length > 0 && verdict !== 'different') {
         const count = unrecoverable.length;
+        const plural = count === 1 ? '' : 's';
+        // `unknown` is refused alongside `same`, not treated as a pass. It means the filesystem
+        // reported no usable inode, and the alternative — comparing names — calls two hard links to
+        // one file different. Guessing wrong here truncates the document, so the guess is not made.
         throw new Error(
-          `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from other ` +
-            'keys. Write the result elsewhere so the original stays:\n' +
-            `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+          verdict === 'unknown'
+            ? `This would discard ${count} still-valid signature${plural} from other keys, and this ` +
+              'filesystem does not report file identities, so whether the output is the input cannot ' +
+              'be established. Refusing rather than risking it. Write to a fresh name in a different ' +
+              'directory:\n' +
+              `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+            : `This would discard ${count} still-valid signature${plural} from other keys. Write the ` +
+              'result elsewhere so the original stays:\n' +
+              `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+        );
+      }
+
+      // Last check before the source is destroyed: is it still the file that was read?
+      //
+      // Everything above — the parsed document, the classification, the decision about what may be
+      // discarded — describes the bytes taken from `sourceFd`. Two things can make that stop applying
+      // to what is about to be truncated. An editor can rewrite the file in place, which the
+      // descriptor sees as a changed size or mtime. Or one can replace it atomically, which leaves the
+      // descriptor on the original inode while the PATH points somewhere new — invisible to the
+      // descriptor, and the case where writing would apply one document's authorization to another's
+      // bytes. So both are checked, and only where something is actually overwritten.
+      if (inPlace && !sourceUnchanged(fs, sourceFd, playlistPath, sourceSnapshot)) {
+        throw new Error(
+          `${playlistPath} changed while this ran, so the signatures just prepared describe a ` +
+            'document that is no longer there. Nothing was written. Run it again against the file as ' +
+            'it stands now.'
         );
       }
 
       // Truncate only now, past every refusal, and through the descriptor already judged.
       fs.ftruncateSync(fd, 0);
-      fs.writeSync(fd, JSON.stringify(signedPlaylist, null, 2), 0, 'utf-8');
+      writeAll(fs, fd, Buffer.from(JSON.stringify(signedPlaylist, null, 2), 'utf-8'));
+      // Durable before the success line prints: a report of a file that is not on disk is a lie the
+      // operator has no way to detect.
+      fs.fsyncSync(fd);
       wrote = true;
 
       console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
@@ -262,6 +315,69 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       success: false,
       error: error.message,
     };
+  } finally {
+    try {
+      fs.closeSync(sourceFd);
+    } catch {
+      // Nothing to do; the result has already been decided.
+    }
+  }
+}
+
+/**
+ * sourceUnchanged reports whether the source is still, byte for byte, the file that was read.
+ *
+ * Two failures, two checks. A rewrite in place keeps the inode and changes the contents, which the
+ * held descriptor sees as a different size or mtime. A replacement by rename leaves the descriptor on
+ * the original inode — it cannot see that at all — and moves the PATH to a new one, which only a
+ * fresh lookup by name reveals. Checking just one of them misses the other entirely.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {number} sourceFd - Descriptor the source was read through
+ * @param {string} sourcePath - The name it was opened from
+ * @param {Object} snapshot - `fstat` taken at read time
+ * @returns {boolean} True when the file about to be overwritten is the one that was read
+ */
+function sourceUnchanged(fs, sourceFd, sourcePath, snapshot) {
+  const current = fs.fstatSync(sourceFd);
+  if (!sameOpenFile(current, snapshot)) {
+    return false;
+  }
+  if (current.size !== snapshot.size || Number(current.mtimeMs) !== Number(snapshot.mtimeMs)) {
+    return false;
+  }
+  try {
+    return sameOpenFile(fs.statSync(sourcePath), snapshot);
+  } catch {
+    // The name is gone. Whatever the descriptor still holds, the file the operator named is not there.
+    return false;
+  }
+}
+
+/**
+ * writeAll writes every byte of `buffer` to `fd`, or throws.
+ *
+ * `write(2)` may write fewer bytes than asked — a short write is not an error, it is the contract — and
+ * the return value was being ignored. Since this runs immediately after truncating the destination, a
+ * short write left a partial document on disk under a "Playlist signed" report: the one failure the
+ * operator cannot see, because the command said it succeeded.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {number} fd - Descriptor open for writing
+ * @param {Buffer} buffer - Bytes to write
+ * @throws {Error} If the descriptor stops accepting bytes before the buffer is exhausted
+ */
+function writeAll(fs, fd, buffer) {
+  let offset = 0;
+  while (offset < buffer.length) {
+    const written = fs.writeSync(fd, buffer, offset, buffer.length - offset, offset);
+    if (!(written > 0)) {
+      throw new Error(
+        `Wrote only ${offset} of ${buffer.length} bytes; the file on disk is incomplete. ` +
+          'Re-run the command, and check the destination has space and is writable.'
+      );
+    }
+    offset += written;
   }
 }
 
