@@ -142,9 +142,11 @@ describe('edit a published playlist, re-sign, replace', () => {
         'other',
         'self',
       ]);
-      // The document was edited, so nothing that was on it still covers it.
+      // The document was edited, so nothing that was on it verifies against it now. The verdict is
+      // exactly that — not "void", which would assert they verified against the PREVIOUS content, a
+      // document this command never sees.
       assert.deepEqual(
-        signed.dropped.map((entry: { valid: boolean }) => entry.valid),
+        signed.dropped.map((entry: { verified: boolean }) => entry.verified),
         [false, false]
       );
 
@@ -251,7 +253,10 @@ describe('edit a published playlist, re-sign, replace', () => {
       assert.match(freshOut, /Replaced 2 existing signatures:/);
       // Each entry has to be named, with enough of the kid to match a curators[] row at a glance.
       assert.match(freshOut, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\)/);
-      assert.match(freshOut, /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — void/);
+      assert.match(
+        freshOut,
+        /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
+      );
       const onDisk = JSON.parse(readFileSync(path, 'utf-8')) as { signatures: unknown[] };
       assert.equal(onDisk.signatures.length, 1);
     } finally {
@@ -259,7 +264,7 @@ describe('edit a published playlist, re-sign, replace', () => {
     }
   });
 
-  test('names each lost signature with its own role, and who has to restore it', async () => {
+  test('names each unverified signature with its own role, without diagnosing why', async () => {
     // The case the classification exists for. Dropping your own signature or the feed's costs nothing;
     // dropping someone else's endorsement cannot be undone without asking them to sign again, and the
     // owner has to learn that before they publish the replacement, not after someone notices.
@@ -302,24 +307,29 @@ describe('edit a published playlist, re-sign, replace', () => {
       const out = `${result.stdout ?? ''}`;
       assert.match(out, /Replaced 3 existing signatures:/);
       assert.match(out, /your own earlier signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — replaced/);
-      assert.match(out, /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — void/);
-      assert.match(out, /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — void/);
-      // B's kid must be identifiable, or "another key" names nobody.
-      assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
-
-      // Both non-self entries are losses; the signer's own is not. A `feed` role is not assumed to
-      // return on its own — any key can emit one, and the CLI has no feed identity to verify against.
-      assert.match(out, /2 other signatures are now void/);
-      // Each loss is addressed to its holder IN ITS OWN ROLE: `agent`, `institution` and `licensor`
-      // are valid, so a blanket "sign again as curator" would be wrong.
       assert.match(
         out,
-        new RegExp(`ask \\.\\.\\.${playlistSigningDidKey(keyB).slice(-8)} to sign again as curator`)
+        /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
       );
-      assert.match(out, /ask \.\.\.[A-Za-z0-9]{8} to sign again as feed/);
+      assert.match(
+        out,
+        /another key's signature \(feed, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
+      );
+
+      // Both non-self entries failed to verify; the signer's own is not counted at all. A `feed` role
+      // is not assumed to return on its own — any key can emit one, and the CLI has no feed identity
+      // to check a kid against.
+      assert.match(out, /2 other signatures could not be verified against this document/);
+      // Each one is named, with its role, so the owner can see whose signatures are missing.
+      assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
+      assert.match(out, /\.\.\.[A-Za-z0-9]{8} \(curator\)/);
+      assert.match(out, /\.\.\.[A-Za-z0-9]{8} \(feed\)/);
+      // Both explanations are offered, because only one of them can be true and this command cannot
+      // tell which. Nothing may be asserted about the previous content.
+      assert.match(out, /equally with their never having been valid/);
+      assert.doesNotMatch(out, /void/i);
       // The feed's behaviour is stated generally, never as a claim about a specific entry.
       assert.match(out, /A feed appends its own signature again after it verifies a replacement/);
-      assert.doesNotMatch(out, /3 other signatures are now void/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -363,19 +373,19 @@ describe('edit a published playlist, re-sign, replace', () => {
       const out = `${result.stdout ?? ''}`;
       assert.match(
         out,
-        /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed, still valid/
+        /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; still valid/
       );
       assert.match(out, /still verified over this content and was removed anyway/);
       assert.match(out, /Keep a copy of the previous file/);
       // Nothing was invalidated, so no one may be told to sign again.
-      assert.doesNotMatch(out, /now void/);
-      assert.doesNotMatch(out, /to sign again as/);
+      assert.doesNotMatch(out, /void/i);
+      assert.doesNotMatch(out, /could not be verified/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test('the same document edited reports the same entry as void', async () => {
+  test('the same document edited reports the same entry as unverified', async () => {
     // Non-vacuity pair for the test above: one byte of content decides which branch is right, so both
     // have to be pinned or the verification could silently stop happening.
     const dir = makeTempDir();
@@ -408,13 +418,92 @@ describe('edit a published playlist, re-sign, replace', () => {
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
-      assert.match(out, /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — void/);
-      assert.match(out, /1 other signature is now void/);
       assert.match(
         out,
-        new RegExp(`ask \\.\\.\\.${playlistSigningDidKey(keyB).slice(-8)} to sign again as curator`)
+        /another key's signature \(curator, \.\.\.[A-Za-z0-9]{8}\) — removed; could not be verified/
       );
+      assert.match(out, /1 other signature could not be verified against this document/);
+      assert.ok(out.includes(playlistSigningDidKey(keyB).slice(-8)));
       assert.doesNotMatch(out, /still valid over this content/);
+      assert.doesNotMatch(out, /void/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a tampered entry is reported as unverified, never as void', async () => {
+    // A failed verification cannot distinguish an edit from an entry that was never valid. This one
+    // was tampered with on an OTHERWISE UNCHANGED document, so "the content changed" would be a plain
+    // falsehood — and it is reachable input, not a hypothetical.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const path = join(dir, 'tampered.json');
+      writeFileSync(
+        path,
+        JSON.stringify({ ...document, signatures: [sigA, { ...sigB, sig: 'AAAA' }] }, null, 2),
+        'utf-8'
+      );
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(out, /could not be verified against this document/);
+      // The content did NOT change here, so nothing may claim it did as the explanation.
+      assert.doesNotMatch(out, /void/i);
+      assert.match(out, /equally with their never having been valid/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a legacy flat signature is reported as not checkable, with no key or role invented', async () => {
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [{ name: 'A', key: playlistSigningDidKey(keyA) }],
+        signature: 'ed25519:deadbeef',
+      };
+      const path = join(dir, 'legacy.json');
+      writeFileSync(path, JSON.stringify(document, null, 2), 'utf-8');
+
+      const result = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
+        { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
+      );
+
+      assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
+      const out = `${result.stdout ?? ''}`;
+      assert.match(
+        out,
+        /a legacy flat signature \(no kid, no role\) — removed; not checkable here/
+      );
+      assert.match(out, /carries no kid or role, so nothing here can judge it/);
+      // It carries no key, so it must not be counted among entries that failed verification.
+      assert.doesNotMatch(out, /could not be verified against this document/);
+      assert.doesNotMatch(out, /void/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

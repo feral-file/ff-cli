@@ -196,22 +196,22 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  * A count alone is not actionable on a co-curated playlist: the owner has to know whose signatures are
  * gone before they publish the replacement, not after someone notices their name missing.
  *
- * Two things this deliberately does NOT do.
+ * **There is no "void" verdict here, and that is deliberate.** Calling an entry void asserts that it
+ * verified against the previous content and no longer does — a claim about a document this command has
+ * never seen. The operator edited in place; the pre-edit bytes exist nowhere by the time `sign` runs.
+ * A failed `VerifyMultiSignature` proves only that the entry does not verify against the document as it
+ * stands, which is equally consistent with an edit, with an entry that was tampered with, and with one
+ * that was never valid. So the verdict is exactly what can be checked: it verifies against this
+ * document, or it does not.
  *
- * It does not assume a discarded entry is void. The DP-1 signing payload excludes `signature` and
- * `signatures`, so re-signing an UNCHANGED document leaves every existing entry perfectly valid over
- * the same bytes — dropping them there is a removal, not an invalidation, and telling that user their
- * co-curators must sign again would send them asking for signatures they still have in the old file.
- * So each entry is verified against the document as it now stands, and only the ones that no longer
- * verify are reported as lost.
+ * A flat legacy `signature` is a third case again — no `kid`, no `role`, and nothing the
+ * multi-signature verifier can check — so it is reported as unverifiable rather than as a failure.
  *
- * It does not treat a `feed` role as "the feed's, so it comes back". Any key can emit a signature
- * carrying `role: "feed"`, and this CLI holds no feed identity to check a `kid` against, so that
- * reading would be a claim the code cannot support. Every non-self entry is reported as another key's,
- * with its own role carried through — a document may legitimately hold `agent`, `institution`, or
- * `licensor` entries, and telling their holders to come back as `curator` would be wrong. That a feed
- * re-appends its own signature after verifying a replacement is stated separately, as the general fact
- * it is, rather than as a classification of any particular entry.
+ * It does not treat a `feed` role as "the feed's, so it comes back" either. Any key can emit a
+ * signature carrying `role: "feed"`, and this CLI holds no feed identity to check a `kid` against.
+ * Every non-self entry is reported as another key's, with its own role carried through — a document may
+ * legitimately hold `agent`, `institution`, or `licensor` entries. That a feed re-appends its own
+ * signature after verifying a replacement is stated separately, as the general fact it is.
  *
  * `kid` is reported as its last 8 characters: enough to match a curators[] row at a glance, with the
  * full value still in the file.
@@ -219,7 +219,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
  * @param {Object} playlist - The playlist as read, before signing
  * @param {string} [signingKid] - `did:key` of the key that just signed
  * @param {Object} dp1 - Loaded dp1-js module
- * @returns {Promise<Array<{kind: string, role: string|null, kid: string|null, valid: boolean, label: string}>>}
+ * @returns {Promise<Array<{kind: string, role: string|null, kid: string|null, verified: boolean, checkable: boolean, label: string}>>}
  */
 async function describeDroppedSignatures(playlist, signingKid, dp1) {
   const dropped = [];
@@ -234,13 +234,12 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
     const short = kid ? kid.slice(-8) : 'unknown';
     const descriptor = role ? `${role}, ...${short}` : `no role, ...${short}`;
 
-    // Verified against the document as it stands now, which is what decides whether this is a loss.
-    let valid = false;
+    let verified = false;
     try {
       dp1.VerifyMultiSignature(raw, entry);
-      valid = true;
+      verified = true;
     } catch {
-      valid = false;
+      verified = false;
     }
 
     const own = Boolean(kid && signingKid && kid === signingKid);
@@ -248,24 +247,27 @@ async function describeDroppedSignatures(playlist, signingKid, dp1) {
       kind: own ? 'self' : 'other',
       role,
       kid,
-      valid,
+      verified,
+      checkable: true,
       label: own
         ? `your own earlier signature (${descriptor}) — replaced by this signing`
-        : valid
-          ? `another key's signature (${descriptor}) — removed, still valid over this content`
-          : `another key's signature (${descriptor}) — void, the content changed`,
+        : verified
+          ? `another key's signature (${descriptor}) — removed; still valid over this content`
+          : `another key's signature (${descriptor}) — removed; could not be verified against this document`,
     });
   }
 
   if (typeof playlist.signature === 'string' && playlist.signature.trim()) {
     // A legacy flat signature carries neither kid nor role, and the multi-signature verifier has
-    // nothing to check it with, so it can only be reported as what it is.
+    // nothing to check it with. `checkable: false` keeps it out of both summaries: it is not a
+    // signature that failed, it is one nothing here can judge.
     dropped.push({
       kind: 'other',
       role: null,
       kid: null,
-      valid: false,
-      label: 'a legacy flat signature (no kid, no role) — dropped',
+      verified: false,
+      checkable: false,
+      label: 'a legacy flat signature (no kid, no role) — removed; not checkable here',
     });
   }
 

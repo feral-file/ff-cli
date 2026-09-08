@@ -29,25 +29,27 @@ export const signCommand = new Command('sign')
 
         if (result.success) {
           console.log(chalk.green('\nPlaylist signed'));
-          // Name every discarded entry, not just the count, and separate the ones that cost
-          // something from the ones that do not.
+          // Name every discarded entry, and say only what was actually checked.
           //
-          // Your own earlier signature is free: this command replaces it. Another key's entry that
-          // still verifies is free too — the payload excludes signatures, so re-signing an unchanged
-          // document invalidates nothing, and that entry is merely removed from this file. Only an
-          // entry that no longer verifies is a real loss, and only its holder can restore it.
+          // Your own earlier signature is free: this command replaces it. For the rest the only
+          // establishable fact is whether the entry verifies against the document as it stands —
+          // "void" would assert it verified against the PREVIOUS content, which was edited in place
+          // and exists nowhere by the time this runs. A failed verification is equally consistent
+          // with an edit, with a tampered entry, and with one that was never valid, so it is reported
+          // as unverified rather than diagnosed.
           //
-          // Roles are carried through rather than assumed. A document may hold `agent`,
-          // `institution`, or `licensor` entries, and asking their holders to come back as `curator`
-          // would be wrong. A `feed` role is not special-cased either: any key can emit one and this
-          // CLI has no feed identity to check a kid against.
+          // Roles are carried through rather than assumed: a document may hold `agent`,
+          // `institution`, or `licensor` entries, and a `feed` role is not special-cased because any
+          // key can emit one and this CLI has no feed identity to check a kid against.
           const dropped: Array<{
             kind: string;
             role: string | null;
             kid: string | null;
-            valid: boolean;
+            verified: boolean;
+            checkable: boolean;
             label: string;
           }> = result.dropped ?? [];
+
           if (dropped.length > 0) {
             const plural = dropped.length === 1 ? '' : 's';
             console.log(chalk.dim(`  Replaced ${dropped.length} existing signature${plural}:`));
@@ -55,44 +57,55 @@ export const signCommand = new Command('sign')
               console.log(chalk.dim(`    - ${entry.label}`));
             }
 
-            const lost = dropped.filter((entry) => entry.kind === 'other' && !entry.valid);
-            const removedStillValid = dropped.filter(
-              (entry) => entry.kind === 'other' && entry.valid
-            );
+            const others = dropped.filter((entry) => entry.kind === 'other' && entry.checkable);
+            const stillValid = others.filter((entry) => entry.verified);
+            const unverified = others.filter((entry) => !entry.verified);
 
-            if (lost.length > 0) {
-              const noun = lost.length === 1 ? 'signature is' : 'signatures are';
+            if (stillValid.length > 0) {
+              const noun = stillValid.length === 1 ? 'signature' : 'signatures';
+              const it = stillValid.length === 1 ? 'it' : 'them';
               console.log(
                 chalk.yellow(
-                  `  ${lost.length} other ${noun} now void — a signature covers the content, and the content changed.\n` +
-                    `  Only their holders can restore them, by signing the edited document:`
+                  `  ${stillValid.length} other ${noun} still verified over this content and ` +
+                    `${stillValid.length === 1 ? 'was' : 'were'} removed anyway.\n` +
+                    `  Keep a copy of the previous file if you want ${it} back — nothing invalidated ${it}.`
                 )
               );
-              for (const entry of lost) {
-                const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'the holder';
-                const role = entry.role ?? 'their role';
-                console.log(chalk.yellow(`    ask ${who} to sign again as ${role}`));
+            }
+
+            if (unverified.length > 0) {
+              const noun = unverified.length === 1 ? 'signature' : 'signatures';
+              // Stated as what was observed, with both explanations, and no instruction that would
+              // only make sense under one of them.
+              console.log(
+                chalk.yellow(
+                  `  ${unverified.length} other ${noun} could not be verified against this document:`
+                )
+              );
+              for (const entry of unverified) {
+                const who = entry.kid ? `...${entry.kid.slice(-8)}` : 'unknown key';
+                console.log(chalk.yellow(`    ${who}${entry.role ? ` (${entry.role})` : ''}`));
               }
               console.log(
                 chalk.yellow(
-                  `  Signing appends, so they can add to this file without disturbing your signature.`
+                  `  That is consistent with the content having changed since they were made, and\n` +
+                    `  equally with their never having been valid — this command only has the document\n` +
+                    `  as it stands, so it cannot tell which. If you want those signatures on what you\n` +
+                    `  publish, their holders have to sign this document; signing appends, so they can\n` +
+                    `  add to this file without disturbing yours.`
                 )
               );
             }
 
-            if (removedStillValid.length > 0) {
-              const noun = removedStillValid.length === 1 ? 'signature' : 'signatures';
+            if (dropped.some((entry) => !entry.checkable)) {
               console.log(
                 chalk.yellow(
-                  `  ${removedStillValid.length} other ${noun} still verified over this content and ` +
-                    `was removed anyway.\n` +
-                    `  Keep a copy of the previous file if you want ${removedStillValid.length === 1 ? 'it' : 'them'} back — nothing invalidated ${removedStillValid.length === 1 ? 'it' : 'them'}.`
+                  `  A legacy flat signature carries no kid or role, so nothing here can judge it.`
                 )
               );
             }
 
-            // Stated as the general fact it is, not as a claim about any entry above: this CLI cannot
-            // tell which key a feed actually signs with.
+            // The general fact, never a claim about a specific entry above.
             console.log(
               chalk.dim(`  A feed appends its own signature again after it verifies a replacement.`)
             );
