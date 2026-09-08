@@ -131,12 +131,17 @@ describe('durability ordering', () => {
           `${required} must precede the source write: ${events.join(' -> ')}`
         );
       }
-      // The directory entry is synced too, so a crash cannot leave the backup nameless.
+      // The directory entry is synced too, so a crash cannot leave the backup nameless — but opening a
+      // directory is not portable and Windows refuses it, which the implementation treats as
+      // best-effort. Assert the ordering where it happens rather than requiring it everywhere; the
+      // data sync above is the part that must always precede the source write.
       const dirSync = events.indexOf('fsync:dir');
-      assert.ok(
-        dirSync !== -1 && dirSync < sourceWrite,
-        `dir sync must precede the source write: ${events.join(' -> ')}`
-      );
+      if (dirSync !== -1) {
+        assert.ok(
+          dirSync < sourceWrite,
+          `dir sync must precede the source write: ${events.join(' -> ')}`
+        );
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -275,32 +280,87 @@ describe('writeBackup', () => {
     // A 0640 alice:curators playlist re-signed by someone in another primary group yields a
     // 0640 bob:users copy: the mode is preserved and the access is still wider. That is the failure a
     // mode-only copy hides, so a chown that cannot be performed is a refusal, not a warning.
+    //
+    // The process identity is injected rather than read from `process`, so this runs everywhere. The
+    // production gate on `process.getuid` existing is right — Windows has no POSIX identity to compare
+    // — but reading it directly made this branch unreachable there, and a test that asserts nothing on
+    // one platform is worse than no test, because the suite still reports green.
     const dir = makeTempDir();
     try {
       const file = join(dir, 'playlist.json');
       writeFileSync(file, '{}', 'utf-8');
-      const real = statSync(file);
+      const source = statSync(file);
 
-      const ownedByAnother = {
+      const refusesChown = {
         ...fs,
-        // Report the source as belonging to a different uid/gid, so the chown branch is taken.
-        statSync: (p: string) => {
-          const stats = fs.statSync(p);
-          if (p === file) {
-            return { ...stats, mode: stats.mode, uid: real.uid + 1, gid: real.gid + 1 };
-          }
-          return stats;
-        },
         fchownSync: () => {
           throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
         },
       };
+      // A process identity that differs from the file's owner, so the chown branch is taken.
+      const otherUser = { uid: source.uid + 1, gid: source.gid + 1 };
 
-      assert.throws(() => writeBackup(ownedByAnother, file, '{}'), /same owner[\s\S]*--output/);
+      assert.throws(
+        () => writeBackup(refusesChown, file, '{}', otherUser),
+        /same owner[\s\S]*--output/
+      );
       // No half-made backup may survive: a copy that exists looks like a safe one.
       assert.equal(existsSync(`${file}.before-resign.json`), false);
       // And the source is untouched.
       assert.equal(readFileSync(file, 'utf-8'), '{}');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('does not chown when the process already owns the source', () => {
+    // Non-vacuity for the branch above, and the reason the gate exists: an identity that matches must
+    // not trigger a chown at all, on any platform.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+      const source = statSync(file);
+
+      let chowned = false;
+      const recording = {
+        ...fs,
+        fchownSync: () => {
+          chowned = true;
+          throw new Error('must not be called');
+        },
+      };
+
+      const written = writeBackup(recording, file, '{}', { uid: source.uid, gid: source.gid });
+
+      assert.equal(chowned, false, 'ownership already matches; nothing to reproduce');
+      assert.equal(readFileSync(written, 'utf-8'), '{}');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('skips the ownership step entirely without a POSIX identity', () => {
+    // What Windows sees. `undefined` uid/gid means there is nothing to compare, so no chown is
+    // attempted and the backup is still written — the platform has no POSIX ownership to preserve.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+
+      let chowned = false;
+      const recording = {
+        ...fs,
+        fchownSync: () => {
+          chowned = true;
+          throw new Error('must not be called');
+        },
+      };
+
+      const written = writeBackup(recording, file, '{}', { uid: undefined, gid: undefined });
+
+      assert.equal(chowned, false);
+      assert.equal(readFileSync(written, 'utf-8'), '{}');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

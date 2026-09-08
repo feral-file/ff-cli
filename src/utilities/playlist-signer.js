@@ -376,10 +376,12 @@ async function describeDroppedSignatures(playlist, signingKid, signingRole, dp1)
  * @param {Object} fs - Node fs module (injectable for tests)
  * @param {string} playlistPath - Path of the file about to be overwritten
  * @param {string} contents - Exact bytes to preserve
+ * @param {{uid: number|undefined, gid: number|undefined}} [identity] - POSIX identity of this process,
+ *   for tests; defaults to `process.getuid()`/`getgid()`, which are undefined off POSIX
  * @returns {string} The path written
  * @throws {Error} When the source cannot be stat-ed, or its ownership cannot be reproduced
  */
-function writeBackup(fs, playlistPath, contents) {
+function writeBackup(fs, playlistPath, contents, identity) {
   const path = require('path');
 
   // Read mode and ownership before the file is replaced. Without them there is nothing to reproduce,
@@ -401,8 +403,12 @@ function writeBackup(fs, playlistPath, contents) {
   // every stat, so the comparison there would always "differ" and chown a file whose ownership never
   // moved. (libuv makes fchown a no-op on Windows, so nothing would break — but the branch would be
   // asserting something it cannot know.)
-  const uid = process.getuid?.();
-  const gid = process.getgid?.();
+  //
+  // Injectable so the refusal path can be exercised wherever the tests run. Reading `process` directly
+  // made this branch unreachable on Windows, which is correct behaviour and a test that silently
+  // asserted nothing there — the coverage disappeared on exactly the platform least like the author's.
+  const uid = identity ? identity.uid : process.getuid?.();
+  const gid = identity ? identity.gid : process.getgid?.();
   const mustChown =
     uid !== undefined && gid !== undefined && (source.uid !== uid || source.gid !== gid);
 
