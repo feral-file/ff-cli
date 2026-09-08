@@ -22,6 +22,7 @@ import {
   rmSync,
   statSync,
   mkdirSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
@@ -48,8 +49,16 @@ function escapeForRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+/**
+ * A temp directory, resolved.
+ *
+ * macOS hands out `/var/folders/...`, which is itself a symlink to `/private/var/folders/...`. The
+ * backup path is chosen with realpath — deliberately, so the copy lands beside the file rather than
+ * beside a link — so an unresolved temp path here makes every path expectation disagree with the
+ * implementation on exactly one platform.
+ */
 function makeTempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'ff1-resign-'));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'ff1-resign-')));
 }
 
 function makePrivateKeyBase64(): string {

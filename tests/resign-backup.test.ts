@@ -16,6 +16,7 @@ import fs from 'node:fs';
 import {
   chmodSync,
   existsSync,
+  realpathSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -53,8 +54,16 @@ async function quietly<T>(fn: () => Promise<T>): Promise<T> {
 
 const isWindows = process.platform === 'win32';
 
+/**
+ * A temp directory, resolved.
+ *
+ * macOS hands out `/var/folders/...`, which is itself a symlink to `/private/var/folders/...`. The
+ * backup path is chosen with realpath — deliberately, so the copy lands beside the file rather than
+ * beside a link — so an unresolved temp path here makes every path expectation disagree with the
+ * implementation on exactly one platform.
+ */
 function makeTempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'ff1-backup-'));
+  return realpathSync(mkdtempSync(join(tmpdir(), 'ff1-backup-')));
 }
 
 describe('durability ordering', () => {
@@ -87,19 +96,23 @@ describe('durability ordering', () => {
         'utf-8'
       );
 
-      const backup = `${file}.before-resign.json`;
       const events: string[] = [];
+      // Label by role, matched on the shape of the name rather than on an exact string. The
+      // implementation resolves the backup path with realpath, so a literal comparison against the
+      // path the test built is one `realpath` away from silently degrading to `String(p)` — which
+      // reports a passing sequence full of absolute paths instead of a failing one.
       const label = (p: unknown) => {
-        if (p === backup) {
+        const name = String(p);
+        if (name.endsWith('.before-resign.json')) {
           return 'backup';
         }
-        if (p === file) {
+        if (name.endsWith('playlist.json')) {
           return 'source';
         }
-        if (p === dir) {
+        if (name === dir) {
           return 'dir';
         }
-        return String(p);
+        return name;
       };
       const fdNames = new Map<number, string>();
 
@@ -315,15 +328,28 @@ describe('writeBackup', () => {
         gid: source.gid + 1,
       });
 
-      // The window between create and chown must never be wider than the owner.
+      // The window between create and chown must never be wider than the owner. True on every
+      // platform: this is the mode the implementation passes, not the mode the filesystem records.
       assert.equal(
         openMode,
         0o600,
         `backup must be created private, not at the source mode; got 0${(openMode ?? 0).toString(8)}`
       );
-      assert.deepEqual(events, ['open', 'fchown', 'fchmod:640', 'write']);
-      // And the finished file still carries the source's permissions.
-      assert.equal(statSync(written).mode & 0o777, 0o640);
+      // The ordering is the property under test, and it is platform-independent. The chmod argument is
+      // derived from the source rather than hardcoded, so this reads the same where chmod is a no-op.
+      const sourceMode = source.mode & 0o7777;
+      assert.deepEqual(events, ['open', 'fchown', `fchmod:${sourceMode.toString(8)}`, 'write']);
+      // The finished file carries whatever the source carries.
+      assert.equal(statSync(written).mode & 0o777, source.mode & 0o777);
+      // Non-vacuity for the line above, where the platform honours mode bits at all: on Windows both
+      // sides read 0o666 and the comparison proves nothing, so say that rather than imply coverage.
+      if (!isWindows) {
+        assert.equal(
+          source.mode & 0o777,
+          0o640,
+          'chmod must have taken effect for this to mean anything'
+        );
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -352,8 +378,14 @@ describe('writeBackup', () => {
 
         const written = writeBackup(recording, file, '{}');
 
+        // The create mode is a constant, and that holds everywhere — it is what the implementation
+        // passes, not what the filesystem stores.
         assert.equal(openMode, 0o600, `source 0${sourceMode.toString(8)} must still open at 0600`);
-        assert.equal(statSync(written).mode & 0o777, sourceMode);
+        // The backup ends up matching the source, whatever the platform actually recorded for it.
+        assert.equal(statSync(written).mode & 0o777, statSync(file).mode & 0o777);
+        if (!isWindows) {
+          assert.equal(statSync(file).mode & 0o777, sourceMode, 'chmod must have taken effect');
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
