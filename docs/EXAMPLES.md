@@ -606,12 +606,13 @@ Sign playlist
 
 Playlist signed
   Replaced 3 existing signatures:
-    - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
-    - another key's signature (curator, ...7qJ2mVdW) — removed; could not be verified against this document
-    - another key's signature (feed, ...a2doK4Xr) — removed; could not be verified against this document
-  2 other signatures could not be verified against this document:
-    ...7qJ2mVdW (curator)
-    ...a2doK4Xr (feed)
+    - a signature claiming your key (curator, ...Dy8sokwC) — removed; could not be verified against this document
+    - another key's signature (curator, ...L5ufrpW3) — removed; could not be verified against this document
+    - another key's signature (feed, ...1Rq7Lzik) — removed; could not be verified against this document
+  3 other signatures could not be verified against this document:
+    ...Dy8sokwC (curator) — claims your key, unverified
+    ...L5ufrpW3 (curator)
+    ...1Rq7Lzik (feed)
   That is consistent with the content having changed since they were made, and
   equally with their never having been valid — this command only has the document
   as it stands, so it cannot tell which. If you want those signatures on what you
@@ -621,7 +622,13 @@ Playlist signed
   Signatures: 1
 ```
 
-Three things that report deliberately does **not** say.
+**Your own earlier entry is in that list, and named as a claim rather than as yours.** It was made over
+the content before the edit, so it no longer verifies — and an entry that does not verify has not
+established whose it is. Reading a `kid` as proof of authorship is how a forged entry would hide behind
+your identity, so the command says what it checked: this signature claims your key, and could not be
+confirmed. On an unedited document the same entry verifies and is reported plainly as replaced.
+
+Four things that report deliberately does **not** say.
 
 It does not call an entry *void*. That would assert it verified against the previous content and no
 longer does — and the previous content was edited in place, so it exists nowhere by the time `sign`
@@ -634,6 +641,9 @@ replacement is a general fact, printed as one, not a claim about the entry above
 
 It does not rewrite anyone's role. `agent`, `institution` and `licensor` are valid DP-1 roles, so each
 entry is named with the role it actually carries.
+
+It does not credit an unverified entry to the key it names — not even to yours. Attribution follows
+verification, never the other way round.
 
 A flat legacy `signature` gets its own line, because it carries no `kid` and no `role` and the
 multi-signature verifier has nothing to check it with:
@@ -650,10 +660,11 @@ content:
 ```
 Playlist signed
   Replaced 2 existing signatures:
-    - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
-    - another key's signature (curator, ...7qJ2mVdW) — removed; still valid over this content
+    - your own earlier signature (curator, ...WtZqrYoR) — replaced by this signing
+    - another key's signature (curator, ...Bmdh71FR) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
-  The document as it was is saved at playlist.json.before-resign.json — it is still valid there.
+  The document as it was is saved at unchanged.json.before-resign.json — it is still valid there.
+  A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
 

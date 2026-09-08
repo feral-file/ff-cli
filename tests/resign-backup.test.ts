@@ -13,18 +13,135 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import fs from 'node:fs';
-import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { generateKeyPairSync } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { writeBackup } = require('../src/utilities/playlist-signer');
+const { writeBackup, signPlaylistFile, signPlaylist } = require('../src/utilities/playlist-signer');
+
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { playlistSigningDidKey } = require('../src/utilities/signing-identity');
+
+function makePrivateKeyBase64(): string {
+  return generateKeyPairSync('ed25519')
+    .privateKey.export({ format: 'der', type: 'pkcs8' })
+    .toString('base64');
+}
+
+/** signPlaylistFile prints on success; keep the test output readable. */
+async function quietly<T>(fn: () => Promise<T>): Promise<T> {
+  const previous = console.log;
+  console.log = () => {};
+  try {
+    return await fn();
+  } finally {
+    console.log = previous;
+  }
+}
 
 const isWindows = process.platform === 'win32';
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'ff1-backup-'));
 }
+
+describe('durability ordering', () => {
+  test('the backup is written and synced before the source is touched', async () => {
+    // The guarantee is the ORDER. A backup synced after the source was truncated protects nothing —
+    // a crash in that window loses the original AND the copy, which is the one outcome the backup
+    // exists to make impossible. No assertion about either write on its own can catch that, so the
+    // whole sequence is recorded through one injected fs.
+    const dir = makeTempDir();
+    const keyA = makePrivateKeyBase64();
+    const keyB = makePrivateKeyBase64();
+
+    try {
+      const base = JSON.parse(
+        readFileSync(join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json'), 'utf-8')
+      ) as Record<string, unknown>;
+      const document = {
+        ...base,
+        curators: [
+          { name: 'A', key: playlistSigningDidKey(keyA) },
+          { name: 'B', key: playlistSigningDidKey(keyB) },
+        ],
+      };
+      const sigA = await signPlaylist(document, keyA, 'curator');
+      const sigB = await signPlaylist(document, keyB, 'curator');
+      const file = join(dir, 'playlist.json');
+      writeFileSync(
+        file,
+        JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2),
+        'utf-8'
+      );
+
+      const backup = `${file}.before-resign.json`;
+      const events: string[] = [];
+      const label = (p: unknown) => {
+        if (p === backup) {
+          return 'backup';
+        }
+        if (p === file) {
+          return 'source';
+        }
+        if (p === dir) {
+          return 'dir';
+        }
+        return String(p);
+      };
+      const fdNames = new Map<number, string>();
+
+      const recordingFs = {
+        ...fs,
+        openSync: (p: string, flags: string, mode?: number) => {
+          const fd = fs.openSync(p, flags as never, mode);
+          fdNames.set(fd, label(p));
+          events.push(`open:${label(p)}`);
+          return fd;
+        },
+        writeFileSync: (target: unknown, contents: string, encoding?: unknown) => {
+          const name = typeof target === 'number' ? fdNames.get(target) : label(target);
+          events.push(`write:${name}`);
+          return fs.writeFileSync(target as never, contents, encoding as never);
+        },
+        fsyncSync: (fd: number) => {
+          events.push(`fsync:${fdNames.get(fd)}`);
+          return fs.fsyncSync(fd);
+        },
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(file, keyA, undefined, 'curator', {
+          replaceSignatures: true,
+          fs: recordingFs,
+        })
+      );
+      assert.equal(result.success, true, result.error);
+
+      // Everything the backup needs must be finished before a single byte of the source moves.
+      const sourceWrite = events.indexOf('write:source');
+      assert.notEqual(sourceWrite, -1, 'the source must actually be written');
+      for (const required of ['open:backup', 'write:backup', 'fsync:backup']) {
+        const at = events.indexOf(required);
+        assert.notEqual(at, -1, `expected ${required} in ${events.join(' -> ')}`);
+        assert.ok(
+          at < sourceWrite,
+          `${required} must precede the source write: ${events.join(' -> ')}`
+        );
+      }
+      // The directory entry is synced too, so a crash cannot leave the backup nameless.
+      const dirSync = events.indexOf('fsync:dir');
+      assert.ok(
+        dirSync !== -1 && dirSync < sourceWrite,
+        `dir sync must precede the source write: ${events.join(' -> ')}`
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('writeBackup', () => {
   test('writes the exact bytes to the first free name', () => {
@@ -138,14 +255,52 @@ describe('writeBackup', () => {
     }
   });
 
-  test('falls back to the default mode when the source cannot be stat-ed', () => {
-    // Guessing at something more permissive than the source is the failure worth avoiding; refusing to
-    // write the backup at all would be worse, since the document is about to be overwritten regardless.
+  test('refuses when the source cannot be stat-ed, rather than writing a default-mode copy', () => {
+    // With no mode and no ownership to reproduce, the only alternative is a world-readable copy of a
+    // document that may have been deliberately restricted — the exact disclosure this guards against.
+    // Refusing costs the operator a flag; the fallback would cost them the restriction.
     const dir = makeTempDir();
     try {
       const file = join(dir, 'gone.json');
-      const written = writeBackup(fs, file, 'CONTENT');
-      assert.equal(readFileSync(written, 'utf-8'), 'CONTENT');
+      assert.throws(
+        () => writeBackup(fs, file, 'CONTENT'),
+        /Cannot read the permissions[\s\S]*--output/
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses, and leaves nothing behind, when ownership cannot be reproduced', () => {
+    // A 0640 alice:curators playlist re-signed by someone in another primary group yields a
+    // 0640 bob:users copy: the mode is preserved and the access is still wider. That is the failure a
+    // mode-only copy hides, so a chown that cannot be performed is a refusal, not a warning.
+    const dir = makeTempDir();
+    try {
+      const file = join(dir, 'playlist.json');
+      writeFileSync(file, '{}', 'utf-8');
+      const real = statSync(file);
+
+      const ownedByAnother = {
+        ...fs,
+        // Report the source as belonging to a different uid/gid, so the chown branch is taken.
+        statSync: (p: string) => {
+          const stats = fs.statSync(p);
+          if (p === file) {
+            return { ...stats, mode: stats.mode, uid: real.uid + 1, gid: real.gid + 1 };
+          }
+          return stats;
+        },
+        fchownSync: () => {
+          throw Object.assign(new Error('operation not permitted'), { code: 'EPERM' });
+        },
+      };
+
+      assert.throws(() => writeBackup(ownedByAnother, file, '{}'), /same owner[\s\S]*--output/);
+      // No half-made backup may survive: a copy that exists looks like a safe one.
+      assert.equal(existsSync(`${file}.before-resign.json`), false);
+      // And the source is untouched.
+      assert.equal(readFileSync(file, 'utf-8'), '{}');
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
