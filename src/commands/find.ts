@@ -5,6 +5,7 @@ import { parseFindInput, resolveTokenInfos } from '@feralfile/source-resolver';
 import type { TokenCoords } from '@feralfile/source-resolver';
 import type { Playlist } from '../types';
 import { createPrompt, promptYesNo } from './helpers/prompt';
+import { selectFeedServer } from './helpers/feed-server';
 import { resolveFeralFileToken } from '../utilities/ff-marketplace';
 import { resolveObjktAlias } from '../utilities/objkt-marketplace';
 import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
@@ -733,62 +734,22 @@ async function doPublish(
   const { publishPlaylist } = await import('../utilities/playlist-publisher.js');
 
   const feedConfig = getFeedConfig();
-  if (!feedConfig.baseURLs || feedConfig.baseURLs.length === 0) {
-    console.error(chalk.red('No feed servers configured.'));
-    console.error(chalk.yellow('  Add feed server URLs to config.json: feed.baseURLs'));
+  // One implementation of the server rule for every write path (see helpers/feed-server.ts): --server is
+  // validated whatever the server count, and an ambiguous choice fails loudly rather than defaulting.
+  const selection = await selectFeedServer(feedConfig.baseURLs, {
+    serverArg,
+    nonInteractive,
+  });
+  if (!selection.ok) {
+    console.error(chalk.red(selection.error));
+    if (selection.detail) {
+      console.error(selection.detail);
+    }
     process.exitCode = 1;
     return;
   }
 
-  // Validate --server regardless of server count. parseInt('0abc') would
-  // silently truncate to 0 and route to a different server; with a single
-  // server configured the old code skipped --server validation entirely and
-  // accepted any garbage value while publishing to baseURLs[0].
-  let serverIndex = 0;
-  if (serverArg !== undefined) {
-    const n = Number(serverArg);
-    if (!Number.isInteger(n) || n < 0 || n >= feedConfig.baseURLs.length) {
-      console.error(
-        chalk.red(
-          `Invalid --server value: ${serverArg} (expected integer in 0..${feedConfig.baseURLs.length - 1})`
-        )
-      );
-      process.exitCode = 1;
-      return;
-    }
-    serverIndex = n;
-  } else if (feedConfig.baseURLs.length > 1) {
-    if (nonInteractive) {
-      console.error(
-        chalk.red(
-          `Multiple feed servers configured (${feedConfig.baseURLs.length}); pass --server <index> when running with --yes.`
-        )
-      );
-      process.exitCode = 1;
-      return;
-    }
-    console.log(chalk.yellow(`Multiple feed servers configured:`));
-    feedConfig.baseURLs.forEach((url, i) => {
-      console.log(chalk.cyan(`  ${i}: ${url}`));
-    });
-    const prompt = createPrompt();
-    const answer = await prompt.ask('Select server (0-based index): ');
-    prompt.close();
-    console.log();
-    const n = Number(answer);
-    if (!Number.isInteger(n) || n < 0 || n >= feedConfig.baseURLs.length) {
-      console.error(
-        chalk.red(
-          `Invalid selection: ${answer} (expected integer in 0..${feedConfig.baseURLs.length - 1})`
-        )
-      );
-      process.exitCode = 1;
-      return;
-    }
-    serverIndex = n;
-  }
-
-  const serverUrl = feedConfig.baseURLs[serverIndex];
+  const serverUrl = selection.url;
 
   const result = await publishPlaylist(savedPath, serverUrl);
   if (result.success) {

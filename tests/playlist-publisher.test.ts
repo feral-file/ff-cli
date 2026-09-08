@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, test } from 'node:test';
 
-import { publishPlaylist } from '../src/utilities/playlist-publisher';
+import { publishPlaylist, replacePlaylist } from '../src/utilities/playlist-publisher';
 import { signPlaylist } from '../src/utilities/playlist-signer';
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
@@ -22,6 +22,52 @@ function makePrivateKeyBase64(): string {
 }
 
 describe('publishPlaylist validation contract', () => {
+  // Valid JSON is not yet a document. These parse cleanly and then fail on the first property read, and
+  // that read happens in a helper outside both entry points' try/catch — so before this guard a stray
+  // file answered with a TypeError instead of the PublishResult the caller asked for.
+  for (const [label, contents] of [
+    ['null', 'null'],
+    ['an array', '[]'],
+    ['a string', '"just some text"'],
+    ['a number', '42'],
+  ] as const) {
+    test(`returns a failure, not a throw, when the file holds ${label}`, async () => {
+      const dir = makeTempDir();
+      try {
+        const path = join(dir, 'not-a-playlist.json');
+        writeFileSync(path, contents, 'utf-8');
+
+        // Port 1 refuses connections: reaching it at all would mean the guard let this through.
+        const published = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+        assert.equal(published.success, false);
+        assert.match(String(published.error), /does not contain a playlist document/i);
+        assert.match(String(published.message), /JSON object/i);
+
+        const replaced = await replacePlaylist(path, 'http://127.0.0.1:1/api/v1');
+        assert.equal(replaced.success, false);
+        assert.match(String(replaced.error), /does not contain a playlist document/i);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test('still separates malformed JSON from a well-formed non-document', async () => {
+    // The two failures have different fixes — repair the syntax, or point at the right file — so they
+    // must not collapse into one message.
+    const dir = makeTempDir();
+    try {
+      const path = join(dir, 'broken.json');
+      writeFileSync(path, '{ "dpVersion": ', 'utf-8');
+
+      const result = await publishPlaylist(path, 'http://127.0.0.1:1/api/v1');
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /Invalid JSON in playlist file/i);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('rejects a structurally invalid playlist before upload', async () => {
     const dir = makeTempDir();
     try {

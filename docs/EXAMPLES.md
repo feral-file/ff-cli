@@ -347,9 +347,33 @@ npm run dev -- publish playlist.json
 # Direct: publish to specific server (server index 0)
 npm run dev -- publish playlist.json -s 0
 
+# Replace a playlist already stored under this document id
+npm run dev -- publish playlist.json --replace -s 0
+
 # Show help
 npm run dev -- publish --help
 ```
+
+A bare Enter at the interactive prompt selects nothing either, and fails with the list. The prompt has no
+default by design: it is being asked precisely because the CLI cannot tell which feed was meant, and
+`Number('')` is `0` — the first server, usually production.
+
+**With more than one server configured and no `-s`, a non-interactive session fails rather than
+choosing.** Under a pipe, a cron job, or a CI step there is no terminal to answer the prompt, and
+defaulting to the first server would write to production for a script that meant the other one:
+
+```
+$ ff-cli publish playlist.json < /dev/null; echo "exit=$?"
+
+Publish playlist
+
+Multiple feed servers configured (2); pass --server <index>
+  0: https://feed.feralfile.com/api/v1
+  1: http://localhost:8787
+exit=1
+```
+
+The same rule applies to `unpublish`. With a single server configured, `-s` stays optional everywhere.
 
 ### Flow
 
@@ -518,6 +542,181 @@ only way to add one is to replace the document. Publishing is what makes that pe
 
 `find` and `build` sign as `curator` automatically, since they declare the key themselves. This applies to
 documents you sign by hand, where `playlist.role` (default `agent`) decides the role.
+
+## Replace or Delete a Published Playlist
+
+A feed's `PUT` and `DELETE` are **owner-bound**, and neither accepts an API key. Both carry a short-lived
+signed **intent** — `ff-cli` builds it, signs it with the configured key in the `curator` role, and sends
+it alongside (replace) or as (delete) the request body. Only a key the **stored** playlist names in
+`curators[]` can authorize either. This is the whole reason `publish` refuses a document with no
+owner-role signature: once such a playlist is created it can never be replaced or deleted.
+
+### Replace
+
+```bash
+# 1. Start from the PUBLISHED document, not a rebuilt one.
+ff-cli fetch <id> -o playlist.json -s 0
+
+# 2. Edit it. `id`, `slug`, `created` and the curators[] owner set must all stay as published.
+
+# 3. Re-sign FRESH. This flag is required here — see below.
+ff-cli sign playlist.json -r curator --replace-signatures
+
+# 4. Replace.
+ff-cli publish playlist.json --replace -s 0
+```
+
+**Step 3 needs `--replace-signatures`.** The document you fetched carries the curator's signature and
+the feed's own, both taken over the content as published. Editing it moves bytes those signatures cover,
+and `sign` **appends** rather than replaces — so a plain re-sign produces an envelope holding two stale
+entries and one good one, which `sign` then refuses to write:
+
+```
+$ ff-cli sign playlist.json -r curator
+
+Sign playlist
+
+Sign failed: Signed playlist verification failed: signed playlist is not verifiable
+
+If you edited this playlist after it was signed, the existing signatures no longer
+  cover it, and signing again cannot repair them — signing appends. Sign fresh instead:
+    ff-cli sign playlist.json -r curator --replace-signatures
+  That discards every existing entry, including any feed signature, and signs the
+  document as it stands now. It is the path a feed replace expects.
+```
+
+Signing fresh drops the feed's entry along with the curator's, which is correct: it covers the pre-edit
+content too, and the feed appends a new one of its own after it verifies the replacement.
+
+```
+$ ff-cli sign playlist.json -r curator --replace-signatures
+
+Sign playlist
+
+✓ Playlist signed and saved to: /path/to/playlist.json
+
+Playlist signed
+  Replaced 2 existing signatures
+  Signatures: 1
+```
+
+Appending stays the default, because it is right whenever the content has not changed — a second curator
+co-signing an unedited playlist keeps the first endorsement, and the payload hash excludes `signatures`
+so the earlier entry stays valid.
+
+```
+$ ff-cli publish playlist.json --replace -s 0
+
+Replace playlist
+
+Replaced
+  Playlist ID: 97595a2f-a790-477c-aa42-b4f2ec9f1e3b
+  Server: https://feed.feralfile.com/api/v1
+  Status: Replaced on feed server
+```
+
+`--replace` is never applied on your behalf. A plain `publish` of an id the feed already holds still
+fails with a conflict, because creating and overwriting are different intentions and only one of them is
+recoverable.
+
+Re-running `find` or `build` does **not** produce a replacement: each run mints a new `id`, `slug`, and
+`created`, and the feed compares all three against the stored row. `ff-cli` checks them locally and names
+the fields that moved, because the feed's own answer is a bare `400`:
+
+```
+Replace failed
+  The document changes fields a replace may not change.
+
+A replace keeps identity and ownership fixed: id, slug, and created must equal the stored
+  document's, and the curators[] owner set is immutable.
+    slug: stored "snowfro-send-receive", document "a-completely-new-slug"
+    created: stored "2026-09-07T23:32:39.660Z", document "2026-09-08T01:02:03.000Z"
+```
+
+### Delete
+
+```bash
+# id, slug, or a feed URL — all resolve to the same playlist.
+ff-cli unpublish 97595a2f-a790-477c-aa42-b4f2ec9f1e3b -s 0
+ff-cli unpublish https://feed.feralfile.com/api/v1/playlists/97595a2f-a790-477c-aa42-b4f2ec9f1e3b -s 0
+```
+
+```
+$ ff-cli unpublish 97595a2f-a790-477c-aa42-b4f2ec9f1e3b -s 0 -y
+
+Unpublish playlist
+
+Unpublished
+  Playlist ID: 97595a2f-a790-477c-aa42-b4f2ec9f1e3b
+  Slug: snowfro-send-receive
+  Server: https://feed.feralfile.com/api/v1
+  Status: Deleted from feed server (the id is now tombstoned and cannot be reused)
+```
+
+Without `-y`, `unpublish` shows the title and the server and asks, defaulting to **no**. The delete
+tombstones the id: the playlist cannot be restored, and a later publish naming that id is refused. Build
+a new playlist instead of trying to recreate it.
+
+### When ownership cannot be proved
+
+A key counts as an owner only when the **stored** playlist names it in `curators[]` **and** carries its
+valid `curator`-role signature. Being named is a claim; signing in the owner role is the proof, and the
+CLI checks both against the stored document before it signs an intent.
+
+That distinction has one large real population: playlists published while the default signing role was
+`agent`. They declare a curator and carry only that key's `agent` signature, so nothing can ever
+authorize a write to them — not even the holder of the declared key, because adding the missing proof
+would itself be a replace:
+
+```
+Unpublish failed
+  No key has proved ownership of this playlist, so none can delete it.
+
+A key counts as an owner only when it is named in curators[] AND signed the document as
+  "curator". This playlist names a curator and carries no valid curator signature
+  from that key — the shape of a playlist published while the default signing role was
+  "agent".
+  Declared:
+    did:key:z6Mkv7qJ...
+  Nothing can repair it, including holding one of those keys: adding the missing signature
+  would be a replace, and a replace needs the very proof that is missing. Publish a corrected
+  playlist under a new id instead.
+```
+
+This is why `publish` refuses to create such a document in the first place: the refusal at publish time
+is recoverable, and this one is not.
+
+### When the key is not an owner
+
+`ff-cli` reads the stored playlist before it signs anything, so this is refused locally and nothing is
+sent. The feed's own answer would be a bare `403`, naming neither the identity you offered nor the ones
+that would have worked:
+
+```
+$ ff-cli unpublish 885b2ea6-74e2-44fe-96d0-e8728f6bba9c -s 0 -y
+
+Unpublish playlist
+
+Unpublish failed
+  The configured signing key is not an owner of this playlist, so it cannot delete it.
+
+Only a key the stored playlist names in curators[] can authorize a delete; the feed derives
+  ownership from the stored document, not from a local copy.
+  Your configured identity:
+    did:key:z6MkoX8i2dynyvLh4hUHZt8b42q9uAwwCWxM4NSX4YDfMtaC
+  Stored owners:
+    did:key:z6MkoDkq5YXsFGXPiD6HDUVfze5mvhU5QF4hTy59pVVPYg82
+  Point playlist.privateKey at a key listed above (confirm any key's identity with
+  "ff-cli status --key <private key>"). Ownership cannot be granted after the fact: the owner set
+  is immutable, so a playlist signed by the wrong key stays that way.
+```
+
+Ownership cannot be granted after the fact — the owner set is immutable, and only an owner could change
+it — so the only fix is to hold a declared key. A playlist whose stored `curators[]` is **empty** is a
+harder case with the same shape: nobody owns it, no signature can ever authorize a write, and `ff-cli`
+says so rather than sending you after a key that does not exist. That is the state every playlist
+published without an owner-role signature is frozen in, and it is what the `publish` owner-role gate
+above exists to prevent.
 
 ## Complete Flow (build → validate → sign → play → publish)
 
