@@ -178,6 +178,7 @@ substituted for a chain the row already named.
 ### Delivery
 
 - `play` (handles playlist files, playlist URLs, and media URLs)
+- `fetch`
 - `publish` (`--replace` sends an owner-bound replacement instead of a create)
 - `unpublish`
 
@@ -202,8 +203,10 @@ create a document whose declared curator did not sign in the `curator` role: tha
 recoverable and the resulting stored playlist would not be. A delete tombstones the id, so the operation
 is final and the id is not reusable.
 
-Editing a published playlist therefore has a required shape: fetch the stored document, change it,
-re-sign with `sign --replace-signatures`, then `publish --replace`. Signing appends by default, which is
+Editing a published playlist therefore has a required shape: `fetch` the stored document, change it,
+re-sign with `sign --replace-signatures`, then `publish --replace`. `fetch` exists because every other
+way of producing that starting file is wrong: `find` and `build` mint a new identity, and `verify` only
+reports on a document rather than saving one. Signing appends by default, which is
 correct only while the signed content is unchanged; an edit invalidates every entry the document
 carries, including the feed's own co-signature, and the envelope check refuses to persist a mix of stale
 and fresh. The fresh mode drops them all — the feed re-appends its signature after it verifies the

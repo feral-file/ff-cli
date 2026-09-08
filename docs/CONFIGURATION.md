@@ -133,17 +133,22 @@ DP‑1 Feed API configuration.
 Endpoints used by the CLI:
 
 - `GET /api/v1/playlists` (supports `limit`, `offset`, and sorting)
-- `GET /api/v1/playlists/{id}`
+- `GET /api/v1/playlists/{id}` (`fetch`)
 - `POST /api/v1/playlists` (`publish`)
 - `PUT /api/v1/playlists/{id}` (`publish --replace`)
 - `DELETE /api/v1/playlists/{id}` (`unpublish`)
 
-No credential is configured for any of these. The feed has no API key: writes are authorized by the
-signatures in the request body, so `playlist.privateKey` is the only setting a publish, replace, or
-delete depends on. An `apiKey` left in an existing config is ignored.
+No credential is configured for any of these. The feed has no API key: every write is authorized by
+signatures in the request body, and an `apiKey` left in an existing config is ignored.
 
-**Choosing between several configured servers.** Commands that write to a feed (`publish`, `unpublish`,
-`find --publish`) take `-s, --server <index>`, a 0-based index into the list above. With one server
+`playlist.privateKey` is needed only where the CLI itself has to sign at request time — `publish
+--replace` and `unpublish`, which sign the owner-bound intent that authorizes the write. A plain
+`publish` signs nothing: it uploads the `signatures[]` envelope the document already carries, so it
+works with no key configured at all (the document must have been signed at some point, by
+`ff-cli sign` or by whoever produced it, but not by this command).
+
+**Choosing between several configured servers.** Commands that address a feed (`publish`, `unpublish`,
+`fetch`, `find --publish`) take `-s, --server <index>`, a 0-based index into the list above. With one server
 configured it is optional. With more than one and no `-s`, an interactive session asks; a session with no
 terminal — a pipe, a cron job, a CI step — exits non-zero and prints the list rather than guessing, since
 defaulting to index 0 would silently write to whichever feed happens to be first.

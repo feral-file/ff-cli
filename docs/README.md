@@ -111,6 +111,8 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
   - Options: `-s, --server <index>` (server index if multiple configured), `--replace` (replace the playlist already stored under this document id instead of creating a new one)
+- `fetch <id-or-url>` – Save a published playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. The document goes to `-o` when given and to stdout otherwise (status lines always go to stderr, so `ff-cli fetch <id> > playlist.json` works). This is the starting point for `publish --replace`, which requires the stored `id`, `slug`, and `created`
+  - Options: `-s, --server <index>`, `-o, --output <file>`
 - `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the configured key to be an owner of the stored playlist, and confirms before deleting
   - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
@@ -336,7 +338,7 @@ neither replaced nor deleted, ever.
 
 ```bash
 # Edit a published playlist: fetch it, change the file, re-sign fresh, then replace.
-curl -s https://feed.example.com/api/v1/playlists/<id> -o playlist.json
+ff-cli fetch <id> -o playlist.json -s 0
 #   ...edit the title, items, or metadata...
 ff-cli sign playlist.json -r curator --replace-signatures
 ff-cli publish playlist.json --replace -s 0

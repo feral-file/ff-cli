@@ -555,7 +555,7 @@ owner-role signature: once such a playlist is created it can never be replaced o
 
 ```bash
 # 1. Start from the PUBLISHED document, not a rebuilt one.
-curl -s https://feed.feralfile.com/api/v1/playlists/<id> -o playlist.json
+ff-cli fetch <id> -o playlist.json -s 0
 
 # 2. Edit it. `id`, `slug`, `created` and the curators[] owner set must all stay as published.
 
