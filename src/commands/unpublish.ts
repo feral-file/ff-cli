@@ -43,16 +43,28 @@ export const unpublishCommand = new Command('unpublish')
         process.exit(1);
       }
 
-      // Validate the signing credential before anything else touches the network or the operator.
+      // Resolve the signing credential ONCE, before anything else touches the network or the operator,
+      // and carry the material itself forward.
       //
-      // Deriving it here rather than inside unpublishPlaylist means a malformed or empty --key fails
-      // before the lookup and before the confirmation prompt — otherwise someone was shown a playlist,
-      // asked to approve destroying it, and only then told their key was unusable. Nothing but the
-      // did:key comes back, so the material cannot reach the output from this path.
+      // Deriving it here means a malformed or empty --key fails before the lookup and before the
+      // confirmation prompt — otherwise someone was shown a playlist, asked to approve destroying it,
+      // and only then told their key was unusable.
+      //
+      // Passing the resolved material on, rather than letting unpublishPlaylist resolve again, closes a
+      // narrower gap: the prompt can stay open indefinitely, and a second resolution would re-read
+      // config.json at send time. A config edited in that window would sign the delete under an
+      // identity other than the one the operator saw and approved — and a delete tombstones the id.
+      // The DID displayed below and the key that signs are now the same value.
+      //
+      // Only the did:key is ever printed; the material never reaches the output from this path.
       const { mutationSignerIdentity } = await import('../utilities/feed-mutation.js');
       let signerDidKey: string;
+      let signingKey: string;
       try {
-        signerDidKey = mutationSignerIdentity(options.key, 'delete').didKey;
+        ({ privateKey: signingKey, didKey: signerDidKey } = mutationSignerIdentity(
+          options.key,
+          'delete'
+        ));
       } catch (error) {
         console.error(chalk.red('\nCannot sign the delete'));
         console.error(chalk.red(`  ${(error as Error).message}`));
@@ -100,7 +112,17 @@ export const unpublishCommand = new Command('unpublish')
         }
       }
 
-      const result = await unpublishPlaylist(idOrUrl, selection.url, { privateKey: options.key });
+      // `Signing as` is printed on both paths, not only before the prompt: under -y it is the only
+      // record of which identity performed an irreversible delete, and it is what the assertion in the
+      // tests ties to the signature on the wire.
+      if (options.yes) {
+        console.log(chalk.dim(`  Signing as: ${signerDidKey}`));
+      }
+
+      const result = await unpublishPlaylist(idOrUrl, selection.url, {
+        privateKey: signingKey,
+        keySource: options.key !== undefined ? 'supplied' : 'configured',
+      });
 
       if (result.success) {
         console.log(chalk.green('Unpublished'));

@@ -343,6 +343,163 @@ describe('unpublish validates the key before it asks anything', () => {
   });
 });
 
+describe('refusals point at the key the operator actually used', () => {
+  test('a supplied --key is not described as configured, and the retry names --key', async () => {
+    // Telling someone who passed --key to edit playlist.privateKey sends them to a file this run never
+    // read, and reads as though their flag had been ignored — the exact doubt not to raise right after
+    // an empty --key was silently falling back to the configured key.
+    const ownerKey = makePrivateKeyBase64();
+    const otherKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored);
+    const run = await runCli(feed.baseUrl, ownerKey, [
+      'unpublish',
+      String(stored.id),
+      '-y',
+      '--key',
+      otherKey,
+    ]);
+    try {
+      assert.notEqual(run.status, 0);
+      assert.match(run.output, /The key you passed with --key is not an owner/);
+      assert.match(run.output, /The identity you passed with --key:/);
+      assert.match(run.output, /Run it again with an owner key: --key/);
+      // It must not send them to config.json, which this run did not read.
+      assert.doesNotMatch(run.output, /Point playlist\.privateKey/);
+      assert.doesNotMatch(run.output, /Your configured identity/);
+      assertNoKeyLeak(run.output, ownerKey, otherKey);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a configured key is still described as configured', async () => {
+    // Non-vacuity pair: the wording has to track where the key came from, not simply change.
+    const ownerKey = makePrivateKeyBase64();
+    const configuredKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+    const feed = await startFeed(stored);
+    const run = await runCli(feed.baseUrl, configuredKey, ['unpublish', String(stored.id), '-y']);
+    try {
+      assert.notEqual(run.status, 0);
+      assert.match(run.output, /The configured signing key is not an owner/);
+      assert.match(run.output, /Your configured identity:/);
+      assert.match(run.output, /Point playlist\.privateKey/);
+      assert.doesNotMatch(run.output, /you passed with --key/);
+      assertNoKeyLeak(run.output, ownerKey, configuredKey);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});
+
+describe('the identity shown is the identity that signs', () => {
+  test('a config rewritten mid-run cannot change who signs the delete', async () => {
+    // The command resolves the key once and carries the material forward. Resolving again at send time
+    // would re-read config.json — and with an interactive prompt that window is as long as the operator
+    // takes to answer, so a config edited in between would sign the delete under an identity other than
+    // the one they saw and approved. A tombstone cannot be taken back from.
+    //
+    // The rewrite is triggered from the feed's GET handler, which runs after resolution and before the
+    // DELETE is signed: the same ordering the prompt occupies, reachable without a terminal.
+    const ownerKey = makePrivateKeyBase64();
+    const intruderKey = makePrivateKeyBase64();
+    const stored = await storedPlaylist(ownerKey);
+
+    const recorded: { method?: string; body?: string } = {};
+    let rewriteConfig: (() => void) | null = null;
+    const server = createServer((req, res) => {
+      let body = '';
+      req.setEncoding('utf-8');
+      req.on('data', (chunk) => {
+        body += chunk;
+      });
+      req.on('end', () => {
+        if (req.method === 'GET') {
+          rewriteConfig?.();
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(stored));
+          return;
+        }
+        recorded.method = req.method;
+        recorded.body = body;
+        res.writeHead(204);
+        res.end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const address = server.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('Failed to start test feed');
+    }
+    const baseUrl = `http://127.0.0.1:${address.port}/api/v1`;
+
+    const dir = mkdtempSync(join(tmpdir(), 'ff1-identity-'));
+    const configPath = join(dir, 'config.json');
+    const writeConfig = (key: string) =>
+      writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            defaultDuration: 10,
+            playlist: { privateKey: key, role: 'curator' },
+            feedServers: [{ baseUrl }],
+          },
+          null,
+          2
+        )}\n`,
+        'utf-8'
+      );
+    writeConfig(ownerKey);
+    rewriteConfig = () => writeConfig(intruderKey);
+
+    try {
+      const child = spawn(
+        process.execPath,
+        [tsxCli, cliEntry, 'unpublish', String(stored.id), '-y'],
+        {
+          cwd: dir,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          env: { ...process.env, XDG_CONFIG_HOME: dir, PLAYLIST_PRIVATE_KEY: '' },
+        }
+      );
+      child.stdin.end();
+      let stdout = '';
+      let stderr = '';
+      child.stdout.setEncoding('utf-8');
+      child.stderr.setEncoding('utf-8');
+      child.stdout.on('data', (c) => {
+        stdout += c;
+      });
+      child.stderr.on('data', (c) => {
+        stderr += c;
+      });
+      const status = await new Promise<number | null>((r) => child.on('close', (c) => r(c)));
+      const output = `${stdout}${stderr}`;
+
+      assert.equal(status, 0, output);
+      // The config really was replaced while the command was running.
+      assert.match(readFileSync(configPath, 'utf-8'), new RegExp(intruderKey.slice(0, 24)));
+
+      // The identity reported, and the one on the wire, must both be the one resolved at the start.
+      const ownerDid = playlistSigningDidKey(ownerKey);
+      assert.match(output, new RegExp(`Signing as: ${ownerDid}`));
+      assert.equal(recorded.method, 'DELETE');
+      const body = JSON.parse(String(recorded.body)) as {
+        signatures: Array<{ kid: string }>;
+      };
+      assert.equal(body.signatures[0].kid, ownerDid);
+      assert.notEqual(body.signatures[0].kid, playlistSigningDidKey(intruderKey));
+      assertNoKeyLeak(output, ownerKey, intruderKey);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      server.close();
+    }
+  });
+});
+
 describe('publish --replace --key', () => {
   test('an explicit owner key signs the authorization intent', async () => {
     const ownerKey = makePrivateKeyBase64();

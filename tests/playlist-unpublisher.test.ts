@@ -168,7 +168,6 @@ describe('unpublish intent', () => {
     // body minus `signatures` (JCS) and checks the digest, so a signature taken over anything else —
     // the whole body, or a re-serialized copy — verifies here and fails there.
     const privateKey = makePrivateKeyBase64();
-    const did = playlistSigningDidKey(privateKey);
     const feed = await startFeed({ stored: await storedPlaylist(privateKey) });
 
     try {
@@ -196,7 +195,6 @@ describe('unpublish intent', () => {
     // `target.slug` must equal the stored row, and nothing the user types carries it — hence the GET.
     // A CLI that derived the slug from the title or the id would fail every delete with a bare 400.
     const privateKey = makePrivateKeyBase64();
-    const did = playlistSigningDidKey(privateKey);
     const stored = await storedPlaylist(privateKey, { slug: 'a-slug-nobody-could-guess' });
     const feed = await startFeed({ stored });
 
@@ -393,7 +391,6 @@ describe('unpublish feed error mapping', () => {
   for (const testCase of cases) {
     test(`maps ${testCase.name}`, async () => {
       const privateKey = makePrivateKeyBase64();
-      const did = playlistSigningDidKey(privateKey);
       const feed = await startFeed({
         stored: await storedPlaylist(privateKey),
         deleteStatus: testCase.status,
