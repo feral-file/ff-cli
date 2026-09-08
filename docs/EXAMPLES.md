@@ -588,12 +588,13 @@ If you edited this playlist after it was signed, the existing signatures no long
 Signing fresh drops the feed's entry along with the curator's, which is correct: it covers the pre-edit
 content too, and the feed appends a new one of its own after it verifies the replacement.
 
-**On a co-curated playlist this loses the other curators' signatures** — a signature covers the content,
-so once the content changes they are void and cannot be carried forward. The command verifies every
-discarded entry against the document as it now stands and names each one, so you can see whose signature
-to ask for, and in which role, before you publish the replacement. Entries that still verify (which is
-all of them if you have not actually edited anything) are reported as removed rather than void; keep the
-previous file if you want them back.
+**On a co-curated playlist this drops the other curators' signatures too.** The command verifies every
+discarded entry against the document as it now stands and names each one, so you can see whose
+signatures will not be on what you publish. Entries that still verify — all of them, if you have not
+actually edited anything — are reported as removed; keep the previous file if you want them back.
+Entries that do not verify are reported as exactly that, with no explanation attached: this command sees
+only the document as it stands, so it cannot tell a changed document from a signature that was never
+valid.
 
 ```
 $ ff-cli sign playlist.json -r curator --replace-signatures
@@ -603,41 +604,43 @@ Sign playlist
 ✓ Playlist signed and saved to: /path/to/playlist.json
 
 Playlist signed
-  Replaced 2 existing signatures:
-    - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
-    - another key's signature (feed, ...a2doK4Xr) — void, the content changed
-  1 other signature is now void — a signature covers the content, and the content changed.
-  Only their holders can restore them, by signing the edited document:
-    ask ...a2doK4Xr to sign again as feed
-  Signing appends, so they can add to this file without disturbing your signature.
-  A feed appends its own signature again after it verifies a replacement.
-  Signatures: 1
-```
-
-Every non-self entry is reported the same way, including one carrying `role: "feed"`. Any key can emit
-that role and the CLI holds no feed identity to check a `kid` against, so it is not assumed to return on
-its own — that a feed re-appends its signature after verifying a replacement is stated separately, as
-the general fact it is.
-
-On a playlist another curator had signed, the list is the part to read before publishing:
-
-```
-Playlist signed
   Replaced 3 existing signatures:
     - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
-    - another key's signature (curator, ...7qJ2mVdW) — void, the content changed
-    - another key's signature (feed, ...a2doK4Xr) — void, the content changed
-  2 other signatures are now void — a signature covers the content, and the content changed.
-  Only their holders can restore them, by signing the edited document:
-    ask ...7qJ2mVdW to sign again as curator
-    ask ...a2doK4Xr to sign again as feed
-  Signing appends, so they can add to this file without disturbing your signature.
+    - another key's signature (curator, ...7qJ2mVdW) — removed; could not be verified against this document
+    - another key's signature (feed, ...a2doK4Xr) — removed; could not be verified against this document
+  2 other signatures could not be verified against this document:
+    ...7qJ2mVdW (curator)
+    ...a2doK4Xr (feed)
+  That is consistent with the content having changed since they were made, and
+  equally with their never having been valid — this command only has the document
+  as it stands, so it cannot tell which. If you want those signatures on what you
+  publish, their holders have to sign this document; signing appends, so they can
+  add to this file without disturbing yours.
   A feed appends its own signature again after it verifies a replacement.
   Signatures: 1
 ```
 
-Each loss is addressed in **its own role**: `agent`, `institution` and `licensor` are valid DP-1 roles,
-so telling every holder to come back as `curator` would be wrong.
+Three things that report deliberately does **not** say.
+
+It does not call an entry *void*. That would assert it verified against the previous content and no
+longer does — and the previous content was edited in place, so it exists nowhere by the time `sign`
+runs. A failed verification is equally consistent with an edit, with a tampered entry, and with one
+that was never valid; the command reports what it checked and offers both explanations.
+
+It does not treat `role: "feed"` as the feed's own. Any key can emit that role and the CLI holds no
+feed identity to check a `kid` against. That a feed re-appends its signature after verifying a
+replacement is a general fact, printed as one, not a claim about the entry above it.
+
+It does not rewrite anyone's role. `agent`, `institution` and `licensor` are valid DP-1 roles, so each
+entry is named with the role it actually carries.
+
+A flat legacy `signature` gets its own line, because it carries no `kid` and no `role` and the
+multi-signature verifier has nothing to check it with:
+
+```
+    - a legacy flat signature (no kid, no role) — removed; not checkable here
+  A legacy flat signature carries no kid or role, so nothing here can judge it.
+```
 
 Running the flag on a document you have **not** edited is a different report, because nothing was
 invalidated — the signing payload excludes `signatures`, so the discarded entries still cover the
@@ -647,7 +650,7 @@ content:
 Playlist signed
   Replaced 2 existing signatures:
     - your own earlier signature (curator, ...GpbnnEGt) — replaced by this signing
-    - another key's signature (curator, ...7qJ2mVdW) — removed, still valid over this content
+    - another key's signature (curator, ...7qJ2mVdW) — removed; still valid over this content
   1 other signature still verified over this content and was removed anyway.
   Keep a copy of the previous file if you want it back — nothing invalidated it.
   Signatures: 1
@@ -722,8 +725,13 @@ ff-cli publish playlist.json --replace -s 0 --key <private key for a stored owne
 ```
 
 `ff-cli status --key <private key>` reports which identity a key carries, which is how you check it
-against the `Stored owners:` list in a refusal. `unpublish` also prints `Signing as:` in its
-confirmation, so the identity is visible before you approve the delete.
+against the `Stored owners:` list in a refusal. `unpublish` also prints `Signing as:`, both in its
+confirmation and under `-y`, so the identity that performs an irreversible delete is always in the
+record. It resolves that key once, before the lookup and before the prompt, and signs with the same
+material — editing `config.json` while a confirmation is open cannot change who the delete runs as.
+
+A refusal names the key you actually used. If it came from `--key`, the retry says `--key`; it will not
+send you to `playlist.privateKey` for a run that never read it.
 
 An empty `--key` is **rejected**, not ignored:
 
