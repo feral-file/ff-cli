@@ -204,7 +204,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // to the input by the time it is written, so the refusal below never fires and the write follows
     // the link into the input while the report calls it untouched. A descriptor cannot be re-pointed.
     //
-    // Only ever truncate bytes this command has inspected.
+    // Overwrite only a document this command has read.
     //
     // Every earlier version answered "is the output the input?" with file identity — inode, name,
     // realpath — and every one of them lost to the same shape of race: a path can be re-pointed
@@ -222,6 +222,11 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // its target created, and adds O_RDWR because the destination now has to be read back.
     //
     // No O_TRUNC anywhere: nothing is destroyed before the decision.
+    // Whether the operator already asked for a different destination, which changes what a refusal
+    // can usefully tell them.
+    const wroteElsewhere =
+      outputPath !== undefined && path.resolve(outputPath) !== path.resolve(playlistPath);
+
     let fd;
     try {
       fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
@@ -254,6 +259,12 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       let overwroteAnother = false;
 
       if (!createdOutput) {
+        // This narrows the race; it does not close it. Between reading the destination here and
+        // truncating it below, another process can write to the same descriptor's file, and nothing
+        // available in userspace prevents that — file locking is not portable, and no command in this
+        // CLI attempts it. Every tool that edits a file in place carries the same window; `enrich`
+        // says so at its own equivalent check. A fresh --output name is the write that cannot collide,
+        // because nothing is there to lose.
         const outputBytes = readAllFrom(fs, fd);
         const outputDigest = digestOf(outputBytes);
         inPlace = outputDigest === sourceDigest;
@@ -274,10 +285,27 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
           );
           if (unrecoverable.length > 0) {
             const count = unrecoverable.length;
+            const signatures = `${count} still-valid signature${count === 1 ? '' : 's'} from other keys`;
+            // Telling someone who already passed --output to "write it elsewhere" is not advice. They
+            // did; the file there holds the same document, which without identity is indistinguishable
+            // from an alias of the input — and identity is gone by design, because it could never
+            // answer the question anyway. So say what is true and what to do about it.
+            //
+            // --force deliberately does not reach here. It exists to replace a DIFFERENT document,
+            // where the only thing at risk is something the operator chose to discard. It is not a way
+            // to destroy a signature only its holder could reproduce.
             throw new Error(
-              `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from ` +
-                'other keys. Write the result elsewhere so the original stays:\n' +
-                `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+              wroteElsewhere
+                ? `${output} holds the same document as the input, so writing there would discard ` +
+                  `${signatures} exactly as writing in place would. --force does not override this: ` +
+                  'it replaces a different document, never a signature only its holder could make ' +
+                  'again.\n' +
+                  `    If ${output} is a separate copy you no longer need, delete it and re-run — a ` +
+                  'name that does not exist is written with no check at all — or choose another ' +
+                  '--output name.'
+                : `This would discard ${signatures}. Write the result elsewhere so the original ` +
+                  'stays:\n' +
+                  `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
             );
           }
         } else if (!empty && !force) {

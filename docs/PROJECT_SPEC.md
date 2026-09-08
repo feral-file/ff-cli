@@ -216,6 +216,20 @@ ACLs are not constrained by the mask, and Windows mode bits constrain nothing at
 that copy was a way to disclose the document. The refusal assumes nothing about the filesystem, so the
 invariant — a still-valid endorsement is never overwritten in place — holds identically everywhere.
 
+Which document a destination holds is decided by content, not by file identity. The destination is read
+back through the descriptor that will write it and compared with the document being signed; a
+destination holding anything else is refused unless `--force` says otherwise. Identity cannot answer
+this — a name can be re-pointed between any two system calls, so no comparison of paths or inodes
+describes what a later write will land on — while the bytes behind a descriptor can. It narrows the
+race and does not close it: the read and the overwrite are two operations, and an editor writing in the
+same instant can still lose its change, as with any tool that edits in place. A `--output` name that
+does not yet exist is the write that cannot collide.
+
+A destination holding the *same* document as the input is refused on the same grounds as an in-place
+run, since without identity a copy and a second name for the input are indistinguishable. `--force`
+does not reach that branch by design: it authorizes replacing a different document, never destroying a
+signature only its holder could reproduce.
+
 Editing a published playlist therefore has a required shape: `fetch` the stored document, change it,
 re-sign with `sign --replace-signatures`, then `publish --replace`. `fetch` exists because every other
 way of producing that starting file is wrong: `find` and `build` mint a new identity, and `verify` only

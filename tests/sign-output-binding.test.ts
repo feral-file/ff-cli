@@ -690,6 +690,88 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
+  test('a byte-identical copy at --output is refused, with advice that fits', async () => {
+    // Without identity a copy and an alias are the same thing — the bytes are all there is — so the
+    // refusal has to stand. What can change is the advice: telling someone who already passed --output
+    // to "write it elsewhere" is not advice, it is what they did.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const copy = join(dir, 'out.json');
+      const originalBytes = await writeCoSigned(input, own, makeKey());
+      // A separate file, same bytes: a plain `cp`.
+      writeFileSync(copy, originalBytes, 'utf-8');
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, copy, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /holds the same document as the input/);
+      // The two ways out, both of which work.
+      assert.match(String(result.error), /delete it and re-run/);
+      assert.match(String(result.error), /another\s+--output name/);
+      // And the one that does not.
+      assert.match(String(result.error), /--force does not override this/);
+
+      // Neither file is touched.
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(readFileSync(copy, 'utf-8'), originalBytes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('--force does not override the same-document refusal', async () => {
+    // The line between the two refusals. --force replaces a document the operator has decided to
+    // discard; it is not a way to destroy a signature only its holder could make again, and a flag
+    // that did both would be indistinguishable from the second at the moment it mattered.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const copy = join(dir, 'out.json');
+      const originalBytes = await writeCoSigned(input, own, makeKey());
+      writeFileSync(copy, originalBytes, 'utf-8');
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, copy, 'curator', { replaceSignatures: true, force: true })
+      );
+
+      assert.equal(result.success, false, 'force must not reach this branch');
+      assert.match(String(result.error), /holds the same document as the input/);
+      assert.equal(readFileSync(copy, 'utf-8'), originalBytes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('deleting the copy is advice that works', async () => {
+    // The remedy is asserted, not just printed: a name that does not exist takes the O_EXCL path and
+    // is written with no check at all.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const copy = join(dir, 'out.json');
+      const originalBytes = await writeCoSigned(input, own, makeKey());
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, copy, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, true, result.error);
+      assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+      assert.equal(
+        (JSON.parse(readFileSync(copy, 'utf-8')) as { signatures: unknown[] }).signatures.length,
+        1
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('--force is what allows overwriting a document that was never read', async () => {
     // Without it the destination is left alone and the operator picks a name; with it the overwrite is
     // deliberate, and the report names the file, because that line is the only record the other

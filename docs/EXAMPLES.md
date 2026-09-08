@@ -690,7 +690,7 @@ The refusal is narrow: it is about what cannot be recovered, not about how many 
 in-place run still proceeds when the only entries dropped are **your own** — sign again to add any of
 them back — or ones that **no longer verify**, which the input could not restore either.
 
-**`sign` only ever overwrites bytes it has read.** Before writing, it reads the destination back and
+**`sign` overwrites only a document it has read.** Before writing, it reads the destination back and
 compares it with the document being signed. Equal means this is that document, wherever the name now
 points, and the rule above applies to it. Different means the destination holds something never
 inspected, and the run is refused:
@@ -706,6 +706,18 @@ one: no comparison of paths or inodes can promise that the file about to be trun
 was read, because a name can be re-pointed between any two system calls — but comparing the bytes
 through the descriptor being written can. A destination that already exists needs read permission for
 that reason.
+
+**It narrows the race; it does not close it.** The read and the overwrite are two operations, and an
+editor writing in the same instant can still lose its change — every tool that edits a file in place
+carries this, and nothing in userspace removes it portably. A fresh `--output` name is the write that
+cannot collide, because nothing is there to lose.
+
+If the destination turns out to hold the **same** document as the input — a copy taken with `cp`, say —
+the run is refused for the reason above, because without file identity a copy and a second name for the
+input are the same thing. `--force` deliberately does **not** override that: it is for replacing a
+different document, never for destroying a signature only its holder could make again. Delete the copy
+and re-run, or pick another `--output` name; a name that does not exist is written with no check at
+all.
 
 The rule holds on every platform and assumes nothing about the filesystem. An earlier version kept a
 copy of the input instead; that requires reproducing the source's access, which is not portable — POSIX
