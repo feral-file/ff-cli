@@ -50,17 +50,7 @@ function normalize(text: string): string[] {
   assert.notEqual(start, -1, `no "Playlist signed" summary in:\n${text}`);
   return lines
     .slice(start)
-    .map((line) =>
-      line
-        .replace(/\.\.\.[A-Za-z0-9]{8}/g, '...KID')
-        // The backup path is absolute and resolved — it has to be, since it may not sit beside the
-        // name the operator typed — so it differs per machine while its presence and wording do not.
-        .replace(
-          /Backup written to \S+\.before-resign\.json/,
-          'Backup written to <PATH>.before-resign.json'
-        )
-        .trimEnd()
-    )
+    .map((line) => line.replace(/\.\.\.[A-Za-z0-9]{8}/g, '...KID').trimEnd())
     .filter((line) => line.trim().length > 0);
 }
 

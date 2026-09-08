@@ -103,6 +103,47 @@ export function isSameFileForDirectWrite(
   }
 }
 
+/**
+ * isSameFileAsOpenDescriptor answers {@link isSameFileForDirectWrite} for an output already opened.
+ *
+ * Deciding from a path and then writing to that path is two lookups, and a shared directory is where
+ * they disagree: a `--output` that does not exist when it is checked can be a symlink to the input by
+ * the time it is written, so the preflight says "different file", nothing refuses, and the write
+ * follows the link straight through the input while the report calls it untouched. Binding the output
+ * to a descriptor first and judging *that* removes the window — the fd cannot be re-pointed.
+ *
+ * The output's stat comes from `fstat` on the bound descriptor; only the source is looked up by name,
+ * and it is the file this call is protecting rather than the one being written.
+ *
+ * @param outputStat - `fstatSync` of the descriptor the write will use
+ * @param outputPath - The name that descriptor was opened from, for the zero-inode fallback
+ * @param sourcePath - Path whose contents matter
+ * @param fsLike - Filesystem operations, for tests
+ * @returns True when writing through the descriptor lands on `sourcePath`
+ */
+export function isSameFileAsOpenDescriptor(
+  outputStat: { dev: number; ino: number },
+  outputPath: string,
+  sourcePath: string,
+  fsLike: SameFileFs = nodeFs as unknown as SameFileFs
+): boolean {
+  if (samePath(outputPath, sourcePath)) {
+    return true;
+  }
+  try {
+    const source = fsLike.statSync(sourcePath);
+    if (inodeUnavailable(outputStat, source)) {
+      // No usable inode, so fall back to names as the path-taking form does. This is the one branch
+      // that cannot benefit from the descriptor, and it is also the one platform where the symlink
+      // swap it guards against is least available.
+      return fsLike.realpathSync(outputPath) === fsLike.realpathSync(sourcePath);
+    }
+    return sameInode(outputStat, source);
+  } catch {
+    return false;
+  }
+}
+
 /** {@link isSameFileForDirectWrite}, for callers already working asynchronously. */
 export async function isSameFileForDirectWriteAsync(
   a: string,

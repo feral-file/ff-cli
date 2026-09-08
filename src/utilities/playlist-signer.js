@@ -6,7 +6,7 @@
 const { getPlaylistConfig } = require('../config');
 const { isDp1PlaylistSigningRole } = require('./playlist-signing-role');
 const { parsePlaylistPrivateKeyToKeyObject } = require('./ed25519-key-derive');
-const { isSameFileForDirectWrite } = require('./same-file');
+const { isSameFileAsOpenDescriptor } = require('./same-file');
 
 /**
  * Normalize any supported signing-key encoding to base64 PKCS#8 DER, the form
@@ -178,45 +178,85 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     }
 
     const output = outputPath || playlistPath;
-    // Filesystem identity, not path equality: an --output pointing at a symlink or a hard link of the
-    // input is the same inode, and a string comparison would call it a different file — letting the
-    // refusal below be sidestepped by a name while the write went straight through to the input.
-    const inPlace = isSameFileForDirectWrite(output, playlistPath);
 
-    // Refuse rather than overwrite a signature only its holder could reproduce.
+    // Bind the output to a descriptor BEFORE deciding whether it is the input, and write through that
+    // same descriptor. Checking a path and then writing to it is two lookups, and in a shared
+    // directory they can disagree: an --output that does not exist when it is checked can be a symlink
+    // to the input by the time it is written, so the refusal below never fires and the write follows
+    // the link into the input while the report calls it untouched. A descriptor cannot be re-pointed.
     //
-    // The invariant is simply that a still-valid endorsement from another key is never destroyed by an
-    // in-place run. An earlier version kept a copy instead, which sounds kinder and is much harder to
-    // get right: a copy has to reproduce the source's access, and it cannot — POSIX ACLs grant what
-    // mode bits do not describe, macOS extended ACLs ignore the mask entirely, and Windows mode bits
-    // constrain nothing. Every one of those is a way for the copy to disclose the document. Refusing
-    // makes the guarantee hold on every platform, assumes nothing about the filesystem, and leaves the
-    // operator with the file they already had.
+    // O_CREAT|O_EXCL first, so a success tells us this call created the file — needed to clean up
+    // after a refusal without a racy existsSync. O_EXCL refuses to follow a symlink, which is exactly
+    // the case we want to fall through: the plain O_RDWR retry follows it and binds the real target,
+    // which is the file the write would have hit.
     //
-    // Only for another key's signature. Your own entry is replaced by this run, an unverified one is
-    // not recoverable from the input either, and --output leaves the input where it is.
-    const unrecoverable = dropped.filter(
-      (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
-    );
-    if (inPlace && unrecoverable.length > 0) {
-      const count = unrecoverable.length;
-      throw new Error(
-        `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from other keys. ` +
-          'Write the result elsewhere so the original stays:\n' +
-          `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
-      );
+    // No O_TRUNC anywhere: the input must not lose a byte before the decision is made.
+    let fd;
+    let createdOutput = false;
+    try {
+      fd = fs.openSync(output, fs.constants.O_RDWR | fs.constants.O_CREAT | fs.constants.O_EXCL);
+      createdOutput = true;
+    } catch (openError) {
+      if (!openError || openError.code !== 'EEXIST') {
+        throw openError;
+      }
+      fd = fs.openSync(output, fs.constants.O_RDWR);
     }
 
-    fs.writeFileSync(output, JSON.stringify(signedPlaylist, null, 2), 'utf-8');
+    let wrote = false;
+    try {
+      const inPlace = isSameFileAsOpenDescriptor(fs.fstatSync(fd), output, playlistPath, fs);
 
-    console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
+      // Refuse rather than overwrite a signature only its holder could reproduce.
+      //
+      // The invariant is simply that a still-valid endorsement from another key is never destroyed by an
+      // in-place run. An earlier version kept a copy instead, which sounds kinder and is much harder to
+      // get right: a copy has to reproduce the source's access, and it cannot — POSIX ACLs grant what
+      // mode bits do not describe, macOS extended ACLs ignore the mask entirely, and Windows mode bits
+      // constrain nothing. Every one of those is a way for the copy to disclose the document. Refusing
+      // makes the guarantee hold on every platform, assumes nothing about the filesystem, and leaves the
+      // operator with the file they already had.
+      //
+      // Only for another key's signature. Your own entry is replaced by this run, an unverified one is
+      // not recoverable from the input either, and --output leaves the input where it is.
+      const unrecoverable = dropped.filter(
+        (entry) => entry.kind !== 'replaced' && entry.verified && !entry.sameKey
+      );
+      if (inPlace && unrecoverable.length > 0) {
+        const count = unrecoverable.length;
+        throw new Error(
+          `This would discard ${count} still-valid signature${count === 1 ? '' : 's'} from other ` +
+            'keys. Write the result elsewhere so the original stays:\n' +
+            `    ff-cli sign ${playlistPath} -r ${role} --replace-signatures --output <new file>`
+        );
+      }
 
-    return {
-      success: true,
-      playlist: signedPlaylist,
-      dropped,
-      inPlace,
-    };
+      // Truncate only now, past every refusal, and through the descriptor already judged.
+      fs.ftruncateSync(fd, 0);
+      fs.writeSync(fd, JSON.stringify(signedPlaylist, null, 2), 0, 'utf-8');
+      wrote = true;
+
+      console.log(`✓ Playlist signed and saved to: ${path.resolve(output)}`);
+
+      return {
+        success: true,
+        playlist: signedPlaylist,
+        dropped,
+        inPlace,
+      };
+    } finally {
+      fs.closeSync(fd);
+      // A refusal must leave nothing behind. If the empty file exists only because this call created
+      // it while binding the output, remove it — an operator who was told "write it elsewhere" should
+      // not find a zero-byte playlist waiting at the name they were refused.
+      if (!wrote && createdOutput) {
+        try {
+          fs.rmSync(output, { force: true });
+        } catch {
+          // Nothing further to try; the error being thrown is the one that matters.
+        }
+      }
+    }
   } catch (error) {
     return {
       success: false,
