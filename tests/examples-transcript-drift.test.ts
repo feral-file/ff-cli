@@ -29,6 +29,7 @@ const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
 const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
 const examplesPath = join(projectRoot, 'docs/EXAMPLES.md');
+const isWindows = process.platform === 'win32';
 
 function makeKey(): string {
   return generateKeyPairSync('ed25519')
@@ -131,7 +132,9 @@ describe('EXAMPLES transcripts match the command', () => {
     }
   });
 
-  test('the unchanged-document report is what the docs show', async () => {
+  test('the unchanged-document report is what the docs show', { skip: isWindows }, async () => {
+    // Skipped on Windows: that scenario writes an owner-only backup, which cannot be promised there, so
+    // the command refuses instead. The documented transcript is the POSIX one, and the docs say so.
     const dir = mkdtempSync(join(tmpdir(), 'ff1-doc-drift-'));
     try {
       const own = makeKey();

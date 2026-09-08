@@ -137,6 +137,33 @@ async function startFeed(stored: Record<string, unknown>): Promise<{
   };
 }
 
+/**
+ * On Windows an in-place `--replace-signatures` that would discard a still-valid third-party signature
+ * refuses by design: mode bits do not constrain ACL inheritance there, so the backup cannot be promised
+ * owner-only, and writing one anyway would disclose the document while reporting that it is private.
+ *
+ * These tests assert the POSIX behaviour everywhere it exists and the refusal where it does not, rather
+ * than skipping — the refusal is a designed outcome and deserves coverage of its own.
+ *
+ * @param result - The spawned command's result
+ * @param backupPath - Where a backup would have gone
+ * @param sourcePath - The input, which must be left alone
+ * @param originalBytes - What the input held before the run
+ */
+function assertWindowsRefusal(
+  result: { status: number | null; stdout?: string | null; stderr?: string | null },
+  backupPath: string,
+  sourcePath: string,
+  originalBytes: string
+): void {
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+  assert.notEqual(result.status, 0, `the in-place run must refuse on Windows:\n${output}`);
+  assert.match(output, /owner-only on Windows/);
+  assert.match(output, /--output/);
+  assert.equal(existsSync(backupPath), false, 'no backup may be written when the run refuses');
+  assert.equal(readFileSync(sourcePath, 'utf-8'), originalBytes, 'the input must be untouched');
+}
+
 describe('edit a published playlist, re-sign, replace', () => {
   test('the documented workflow succeeds from the stored document', async () => {
     const dir = makeTempDir();
@@ -392,17 +419,19 @@ describe('edit a published playlist, re-sign, replace', () => {
       const sigB = await signPlaylist(document, keyB, 'curator');
       const path = join(dir, 'unchanged.json');
       // Written exactly as signed: no edit at all.
-      writeFileSync(
-        path,
-        JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2),
-        'utf-8'
-      );
+      const originalBytes = JSON.stringify({ ...document, signatures: [sigA, sigB] }, null, 2);
+      writeFileSync(path, originalBytes, 'utf-8');
 
       const result = spawnSync(
         process.execPath,
         [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
+
+      if (isWindows) {
+        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
+        return;
+      }
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
@@ -622,6 +651,11 @@ describe('edit a published playlist, re-sign, replace', () => {
         [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
+      if (isWindows) {
+        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
+        return;
+      }
+
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
 
       const backup = `${path}.before-resign.json`;
@@ -676,6 +710,18 @@ describe('edit a published playlist, re-sign, replace', () => {
         [tsxCli, cliEntry, 'sign', path, '-r', 'curator', '-k', keyA, '--replace-signatures'],
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
+
+      if (isWindows) {
+        // The refusal must leave the pre-existing backup alone too, and add nothing beside it.
+        const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+        assert.notEqual(result.status, 0, output);
+        assert.match(output, /owner-only on Windows/);
+        assert.match(output, /--output/);
+        assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), 'PRECIOUS');
+        assert.equal(existsSync(`${path}.before-resign.2.json`), false);
+        assert.equal(readFileSync(path, 'utf-8'), originalBytes);
+        return;
+      }
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       assert.equal(readFileSync(`${path}.before-resign.json`, 'utf-8'), 'PRECIOUS');
@@ -761,6 +807,11 @@ describe('edit a published playlist, re-sign, replace', () => {
           { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
         );
 
+        if (isWindows) {
+          assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
+          return;
+        }
+
         assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
         const out = `${result.stdout ?? ''}`;
         // The original must have been preserved before the write went through the link.
@@ -845,6 +896,11 @@ describe('edit a published playlist, re-sign, replace', () => {
         [tsxCli, cliEntry, 'sign', path, '-r', 'agent', '-k', keyA, '--replace-signatures'],
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
+
+      if (isWindows) {
+        assertWindowsRefusal(result, `${path}.before-resign.json`, path, originalBytes);
+        return;
+      }
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;
@@ -954,6 +1010,11 @@ describe('edit a published playlist, re-sign, replace', () => {
         [tsxCli, cliEntry, 'sign', link, '-r', 'curator', '-k', keyA, '--replace-signatures'],
         { cwd: dir, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
       );
+
+      if (isWindows) {
+        assertWindowsRefusal(result, `${target}.before-resign.json`, target, originalBytes);
+        return;
+      }
 
       assert.equal(result.status, 0, `${result.stdout ?? ''}${result.stderr ?? ''}`);
       const out = `${result.stdout ?? ''}`;

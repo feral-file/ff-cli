@@ -686,7 +686,8 @@ version" without checking that.
 
 On **Windows** the same run refuses rather than making a promise it cannot keep: mode bits do not
 constrain ACL inheritance there, so a `0600` create guarantees nothing. Use `-o, --output`, which leaves
-the input untouched and needs no backup at all. That signature cannot be reproduced
+the input untouched and needs no backup at all. The transcript below is therefore the POSIX one; on
+Windows that command exits non-zero with the refusal instead. That signature cannot be reproduced
 by this command — only its holder could — so the file that still carries it has to outlive the run.
 An existing `.before-resign.json` is never overwritten (it is somebody's only copy too); later runs are
 numbered `.before-resign.2.json` and so on.
