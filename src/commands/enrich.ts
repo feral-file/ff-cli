@@ -67,6 +67,31 @@ export async function writePlaylistAtomically(
     `.${basename(target)}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
   );
 
+  // What a replacement preserves, and what it cannot.
+  //
+  // Preserved: the permission mode (below and again after open), and the owner
+  // and group (further down, where a failed chown refuses the replacement
+  // outright). Those are what decide access for a file whose permissions are
+  // described by mode bits alone, which is the common case.
+  //
+  // NOT preserved: access-control lists. A replacement is a new inode, and a
+  // new inode's ACL comes from the directory's default ACL, not from the file
+  // being replaced — so named entries granting or denying specific users and
+  // groups are gone, and whatever the directory hands out is there instead.
+  // Mode bits cannot carry them across, because mode bits cannot describe a
+  // named entry at all: on Linux the group bits are the POSIX mask rather than
+  // the group's own permissions, macOS extended ACLs are evaluated ahead of the
+  // mode and ignore the mask entirely, and Windows ACLs are not mode bits in
+  // any sense. Node exposes no portable way to read an ACL, let alone reapply
+  // one, so this is a limit of the replacement strategy and not an oversight
+  // that a few more syscalls would close. Reading the mode and finding it
+  // unchanged proves nothing about whether access widened or narrowed.
+  //
+  // What to do when it matters: enrich to a fresh name with `--output`, in a
+  // directory whose access is what you want the result to have. That is a
+  // create rather than a replace, so nothing is silently reassigned — the new
+  // file simply has the access its directory gives it, visibly.
+  //
   // The destination's mode has to be known before the file exists, not after
   // it holds the contents. Creating at the default 0o666-minus-umask and
   // chmod'ing afterwards leaves the enriched playlist readable by other local

@@ -393,9 +393,12 @@ and nothing else. `enrich` is the repair path for those.
   destination's owner and group are carried across too, since a replacement is
   a new inode and would otherwise take this process's ownership — silently
   reassigning a shared playlist. Where that cannot be done, the in-place
-  replacement is refused and `--output` is offered instead. Extended ACLs are
-  not preserved, because Node exposes no portable way to read them; a playlist
-  carrying them should be enriched through `--output`.
+  replacement is refused and `--output` is offered instead. Access-control
+  lists are not preserved: a replacement is a new inode, so its ACL comes from
+  the directory's default rather than from the file being replaced, and mode
+  bits cannot carry named entries across on any platform — a playlist whose
+  access depends on an ACL should be enriched through `--output` to a fresh
+  name in a directory whose access is what the result should have.
 - `--output` names a file the caller expects to exist afterwards, so it is
   written even when nothing was enriched. A no-op without `--output` writes
   nothing rather than rewriting the input for no gain.
