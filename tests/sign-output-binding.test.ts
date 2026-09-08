@@ -117,10 +117,11 @@ describe('sign binds the output before deciding', () => {
     }
   });
 
-  test('a refusal removes an output this call created while binding it', async () => {
-    // Binding the output can create it, and a refusal must not leave a zero-byte playlist waiting at
-    // the name the operator was told to avoid. Here the create succeeds and the descriptor reports the
-    // input's identity, which is the shape a swap takes when it wins the race the other way.
+  test('a refusal leaves the output it created, and says so, rather than unlinking a name', async () => {
+    // The empty file a refusal leaves behind is litter, and removing it would mean unlinking by name —
+    // the one thing this function stopped trusting. Between closing the descriptor and the unlink the
+    // name can be a different file, and deleting somebody else's document to tidy up after ourselves
+    // is far worse than the litter. So it is left, and named, so nobody is surprised by it.
     const dir = makeTempDir();
     const own = makeKey();
     try {
@@ -129,12 +130,21 @@ describe('sign binds the output before deciding', () => {
       const originalBytes = await writeCoSigned(input, own, makeKey());
       const inputStat = fs.statSync(input);
 
+      const removals: string[] = [];
       const confused = {
         ...fs,
         fstatSync: (fd: number) => {
           const real = fs.fstatSync(fd);
           // Report the freshly created output as though it were the input.
           return real.size === 0 ? inputStat : real;
+        },
+        rmSync: (...args: unknown[]) => {
+          removals.push('rmSync');
+          return (fs.rmSync as (...a: unknown[]) => unknown)(...args);
+        },
+        unlinkSync: (...args: unknown[]) => {
+          removals.push('unlinkSync');
+          return (fs.unlinkSync as (...a: unknown[]) => unknown)(...args);
         },
       };
 
@@ -147,8 +157,36 @@ describe('sign binds the output before deciding', () => {
 
       assert.equal(result.success, false);
       assert.match(String(result.error), /would discard/);
-      assert.equal(existsSync(output), false, 'the file created while binding must be removed');
+      // Nothing is removed by name, ever.
+      assert.deepEqual(removals, [], 'no file may be unlinked by name on the failure path');
+      // The file it created is still there, empty, and the message says so.
+      assert.equal(existsSync(output), true);
+      assert.equal(readFileSync(output, 'utf-8'), '');
+      assert.match(String(result.error), /An incomplete output may remain at/);
+      assert.ok(String(result.error).includes(output));
+      // And the input is untouched.
       assert.equal(readFileSync(input, 'utf-8'), originalBytes);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a refusal on a pre-existing output makes no claim about leftovers', async () => {
+    // Nothing was created, so there is nothing to warn about — and saying so anyway would train people
+    // to ignore the sentence in the case where it matters.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      await writeCoSigned(input, own, makeKey());
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', { replaceSignatures: true })
+      );
+
+      assert.equal(result.success, false);
+      assert.match(String(result.error), /would discard/);
+      assert.doesNotMatch(String(result.error), /incomplete output may remain/);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -360,6 +398,98 @@ describe('sign binds the output before deciding', () => {
         readFileSync(input, 'utf-8'),
         '{"dpVersion":"1.1.0","title":"edited by someone else"}'
       );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a same-length rewrite is refused where timestamps are coarse', async () => {
+    // The case metadata cannot see, reproduced rather than approximated. Plenty of filesystems record
+    // mtime to the second, so an edit landing in the same second as the read is ordinary — and with
+    // the length unchanged, size and mtime both match while every byte has changed. The stats here are
+    // floored to the second to be that filesystem; the digest is the only thing left that can answer.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      const originalBytes = JSON.stringify({ ...document, signatures: [signature] }, null, 2);
+      writeFileSync(input, originalBytes, 'utf-8');
+
+      const rewritten = 'x'.repeat(originalBytes.length);
+      const toSecond = <T extends { mtimeMs: number }>(stat: T): T => ({
+        ...stat,
+        mtimeMs: Math.floor(stat.mtimeMs / 1000) * 1000,
+      });
+
+      let seen = 0;
+      const coarse = {
+        ...fs,
+        statSync: (p: string) => toSecond(fs.statSync(p)),
+        fstatSync: (fd: number) => {
+          seen += 1;
+          if (seen === 2) {
+            // Same length, same second, different bytes.
+            writeFileSync(input, rewritten, 'utf-8');
+          }
+          return toSecond(fs.fstatSync(fd));
+        },
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', {
+          replaceSignatures: true,
+          fs: coarse,
+        })
+      );
+
+      assert.equal(result.success, false, 'a same-length rewrite must not slip past');
+      assert.match(String(result.error), /changed while this ran/);
+      assert.equal(readFileSync(input, 'utf-8'), rewritten);
+
+      // The premise: on this filesystem the metadata is identical, so nothing but the contents could
+      // have told. Asserted rather than assumed, or the test would pass for the wrong reason.
+      assert.equal(coarse.statSync(input).size, originalBytes.length);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('an ordinary in-place sign works where the filesystem reports no identities', async () => {
+    // Refusing on a missing inode made `sign <file>` unusable on such a filesystem for every run, not
+    // only the dangerous ones. Nothing unrecoverable is discarded here, so the digest is the whole
+    // check and it has everything it needs.
+    const dir = makeTempDir();
+    const own = makeKey();
+    try {
+      const input = join(dir, 'playlist.json');
+      const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
+      const document = { ...base, curators: [{ name: 'You', key: playlistSigningDidKey(own) }] };
+      const signature = await signPlaylist(document, own, 'curator');
+      writeFileSync(
+        input,
+        JSON.stringify({ ...document, signatures: [signature] }, null, 2),
+        'utf-8'
+      );
+
+      const anonymous = {
+        ...fs,
+        fstatSync: (fd: number) => ({ ...fs.fstatSync(fd), dev: 0, ino: 0 }),
+        statSync: (p: string) => ({ ...fs.statSync(p), dev: 0, ino: 0 }),
+      };
+
+      const result = await quietly(() =>
+        signPlaylistFile(input, own, undefined, 'curator', {
+          replaceSignatures: true,
+          fs: anonymous,
+        })
+      );
+
+      assert.equal(result.success, true, result.error);
+      const onDisk = JSON.parse(readFileSync(input, 'utf-8')) as { signatures: unknown[] };
+      assert.equal(onDisk.signatures.length, 1);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

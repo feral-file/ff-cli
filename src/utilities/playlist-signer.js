@@ -135,6 +135,9 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
   // replacement in between lets a classification of one document authorize truncating another. The
   // descriptor pins the identity the rest of the call is reasoning about.
   let sourceFd;
+  const output = outputPath || playlistPath;
+  let createdOutput = false;
+  let wrote = false;
   try {
     sourceFd = fs.openSync(playlistPath, fs.constants.O_RDONLY);
   } catch (openError) {
@@ -152,7 +155,9 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     // replacement that reuses an inode, which a busy directory makes ordinary rather than exotic.
     const sourceSnapshot = fs.fstatSync(sourceFd);
 
-    const playlistContent = fs.readFileSync(sourceFd, 'utf-8');
+    const sourceBytes = readAllFrom(fs, sourceFd);
+    const sourceDigest = digestOf(sourceBytes);
+    const playlistContent = sourceBytes.toString('utf-8');
     const playlist = JSON.parse(playlistContent);
     const config = getPlaylistConfig();
     // Presence, not truthiness. `--key ""` is what an unset shell variable expands to; treating it as
@@ -196,8 +201,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       throw new Error(`Signed playlist verification failed: ${verification.error}`);
     }
 
-    const output = outputPath || playlistPath;
-
     // Bind the output to a descriptor BEFORE deciding whether it is the input, and write through that
     // same descriptor. Checking a path and then writing to it is two lookups, and in a shared
     // directory they can disagree: an --output that does not exist when it is checked can be a symlink
@@ -214,7 +217,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
     //
     // No O_TRUNC anywhere: the input must not lose a byte before the decision is made.
     let fd;
-    let createdOutput = false;
     try {
       fd = fs.openSync(output, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL);
       createdOutput = true;
@@ -225,7 +227,6 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       fd = fs.openSync(output, fs.constants.O_WRONLY);
     }
 
-    let wrote = false;
     try {
       const verdict = sameFileVerdict(fs.fstatSync(fd), output, sourceSnapshot, playlistPath);
       const inPlace = verdict === 'same';
@@ -273,7 +274,7 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
       // descriptor on the original inode while the PATH points somewhere new — invisible to the
       // descriptor, and the case where writing would apply one document's authorization to another's
       // bytes. So both are checked, and only where something is actually overwritten.
-      if (inPlace && !sourceUnchanged(fs, sourceFd, playlistPath, sourceSnapshot)) {
+      if (inPlace && !sourceUnchanged(fs, sourceFd, playlistPath, sourceSnapshot, sourceDigest)) {
         throw new Error(
           `${playlistPath} changed while this ran, so the signatures just prepared describe a ` +
             'document that is no longer there. Nothing was written. Run it again against the file as ' +
@@ -298,22 +299,23 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
         inPlace,
       };
     } finally {
+      // Close, and nothing else. An earlier version removed the empty file a refusal had created, by
+      // name — and a name is exactly what this whole function stopped trusting. Between the close and
+      // the unlink the name can be another file, and deleting somebody else's document to tidy up
+      // after ourselves is a far worse outcome than the litter it was avoiding. The failure path says
+      // what may be there instead, and leaves it.
       fs.closeSync(fd);
-      // A refusal must leave nothing behind. If the empty file exists only because this call created
-      // it while binding the output, remove it — an operator who was told "write it elsewhere" should
-      // not find a zero-byte playlist waiting at the name they were refused.
-      if (!wrote && createdOutput) {
-        try {
-          fs.rmSync(output, { force: true });
-        } catch {
-          // Nothing further to try; the error being thrown is the one that matters.
-        }
-      }
     }
   } catch (error) {
     return {
       success: false,
-      error: error.message,
+      // Said only when this call created the file, which O_EXCL told us for certain. Anything else
+      // would be a guess about a name we no longer hold open, and the point of saying it at all is so
+      // an operator is not surprised by a zero-byte playlist we deliberately did not remove.
+      error:
+        createdOutput && !wrote
+          ? `${error.message}\n  An incomplete output may remain at ${output}.`
+          : error.message,
     };
   } finally {
     try {
@@ -327,31 +329,72 @@ async function signPlaylistFile(playlistPath, privateKeyBase64, outputPath, role
 /**
  * sourceUnchanged reports whether the source is still, byte for byte, the file that was read.
  *
- * Two failures, two checks. A rewrite in place keeps the inode and changes the contents, which the
- * held descriptor sees as a different size or mtime. A replacement by rename leaves the descriptor on
- * the original inode — it cannot see that at all — and moves the PATH to a new one, which only a
- * fresh lookup by name reveals. Checking just one of them misses the other entirely.
+ * The contents are the answer, so the contents are what is compared: the bytes are re-read from the
+ * held descriptor and digested against the digest taken at read time. Metadata cannot stand in for
+ * this. A rewrite that keeps the length lands on a timestamp with one-second granularity often enough
+ * to be a real edit rather than a contrived one, and size and mtime would both match while every byte
+ * had changed.
+ *
+ * The name is checked too, but only where the filesystem reports inode identities. A replacement by
+ * rename leaves this descriptor on the original inode — the digest cannot see it, because the bytes
+ * behind the fd never changed — and moves the PATH to a new file, which the output descriptor was
+ * opened from. Only a fresh lookup by name reveals that. Where no identity is available the check is
+ * skipped rather than failed: refusing on a missing inode made ordinary in-place signing impossible on
+ * such a filesystem, and the digest still covers the case that damages a document there.
  *
  * @param {Object} fs - Node fs module
  * @param {number} sourceFd - Descriptor the source was read through
  * @param {string} sourcePath - The name it was opened from
  * @param {Object} snapshot - `fstat` taken at read time
+ * @param {string} digest - Digest of the bytes read at that time
  * @returns {boolean} True when the file about to be overwritten is the one that was read
  */
-function sourceUnchanged(fs, sourceFd, sourcePath, snapshot) {
-  const current = fs.fstatSync(sourceFd);
-  if (!sameOpenFile(current, snapshot)) {
+function sourceUnchanged(fs, sourceFd, sourcePath, snapshot, digest) {
+  if (digestOf(readAllFrom(fs, sourceFd)) !== digest) {
     return false;
   }
-  if (current.size !== snapshot.size || Number(current.mtimeMs) !== Number(snapshot.mtimeMs)) {
-    return false;
+
+  if (snapshot.ino === 0) {
+    return true;
   }
   try {
-    return sameOpenFile(fs.statSync(sourcePath), snapshot);
+    const current = fs.statSync(sourcePath);
+    // The name may now be on a filesystem that reports nothing; the digest above already spoke.
+    return current.ino === 0 || sameOpenFile(current, snapshot);
   } catch {
-    // The name is gone. Whatever the descriptor still holds, the file the operator named is not there.
+    // The name is gone. Whatever this descriptor still holds, the file the operator named is not there.
     return false;
   }
+}
+
+/**
+ * readAllFrom reads a descriptor from byte zero, without depending on or moving its file offset.
+ *
+ * Positioned reads are used throughout so the same descriptor can be read twice — once for the
+ * document and once to check it has not changed — with no seek between them.
+ *
+ * @param {Object} fs - Node fs module
+ * @param {number} fd - Descriptor open for reading
+ * @returns {Buffer} Everything the descriptor holds
+ */
+function readAllFrom(fs, fd) {
+  const chunks = [];
+  const buffer = Buffer.alloc(64 * 1024);
+  let position = 0;
+  for (;;) {
+    const bytes = fs.readSync(fd, buffer, 0, buffer.length, position);
+    if (!(bytes > 0)) {
+      break;
+    }
+    chunks.push(Buffer.from(buffer.subarray(0, bytes)));
+    position += bytes;
+  }
+  return Buffer.concat(chunks);
+}
+
+/** Content digest, the only comparison that answers "are these the same bytes". */
+function digestOf(buffer) {
+  return require('crypto').createHash('sha256').update(buffer).digest('hex');
 }
 
 /**
