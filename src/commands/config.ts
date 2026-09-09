@@ -1,6 +1,12 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
-import { createSampleConfig, getConfig, getConfigPaths, validateConfig } from '../config';
+import {
+  createSampleConfig,
+  getConfig,
+  getConfigPaths,
+  getFeedConfig,
+  validateConfig,
+} from '../config';
 
 // `config` is a single command with an action argument rather than a
 // commander subcommand group. Kept this way to preserve the existing
@@ -21,11 +27,18 @@ export const configCommand = new Command('config')
         const config = getConfig();
         console.log(chalk.blue('\nCurrent configuration\n'));
         console.log(chalk.bold('Default duration:'), chalk.white(config.defaultDuration + 's'));
-        const feedServers = config.feedServers || [];
-        if (feedServers.length > 0) {
-          console.log(chalk.bold('\nFeed servers:\n'));
-          feedServers.forEach((server) => {
-            console.log(`  ${chalk.dim(server.baseUrl)}`);
+        // The effective list, numbered. `-s <index>` on publish, fetch, replace
+        // and unpublish is an index into exactly this list — whichever of
+        // config.feedServers, the legacy feed.baseURLs, FEED_BASE_URLS, or the
+        // built-in default supplied it — so this is the one place an operator
+        // or an agent can read the number off before a write. Printing only
+        // config.feedServers, unnumbered, left the index undiscoverable for
+        // every other source.
+        const { baseURLs } = getFeedConfig();
+        if (baseURLs.length > 0) {
+          console.log(chalk.bold('\nFeed servers (index for -s):\n'));
+          baseURLs.forEach((url, index) => {
+            console.log(`  ${chalk.bold(String(index))}: ${chalk.dim(url)}`);
           });
         }
         const devices = config.ff1Devices?.devices || [];
