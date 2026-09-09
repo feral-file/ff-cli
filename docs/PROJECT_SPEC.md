@@ -192,7 +192,9 @@ created, signatures }`, with a `payloadHash` for replace — whose `created` mus
 freshness window; the intent exists because a document's own signatures are public via `GET` and could
 otherwise be replayed to roll a resource back. The CLI proves ownership before it signs anything: it
 `GET`s the stored playlist and requires the signing key — the configured `playlist.privateKey` unless
-`-k, --key` overrides it for that command — to be both named in the stored `curators[]` and the signer of
+`-k, --key` or `--key-file <path>` overrides it for that command, the latter keeping the key out of the
+shell history and the process list (`CONFIGURATION.md`, "Where the signing key can come from") — to be
+both named in the stored `curators[]` and the signer of
 a cryptographically valid `curator`-role signature over that stored document. Being
 named is a claim; the owner-role signature is the proof, and checking only the claim is what would let a
 legacy `agent`-signed document pass preflight and come back as a `403` reported as a missing

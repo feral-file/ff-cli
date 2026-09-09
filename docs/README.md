@@ -357,7 +357,10 @@ been disclosed cannot be rotated out of a playlist that already names it. See
 
 A feed's `PUT` and `DELETE` are owner-bound. Neither takes an API key, and neither is authorized by the
 document alone: both carry a short-lived **intent** that ff-cli signs in the `curator` role — with the
-configured `playlist.privateKey` by default, or with whatever `-k, --key` names for that one command. Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
+configured `playlist.privateKey` by default, or with whatever `-k, --key` or `--key-file <path>` names
+for that one command (see
+[Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from), which
+explains why the file is the safer of the two). Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
 why `publish` refuses to create a playlist that carries no owner-role signature — such a document can be
 neither replaced nor deleted, ever.
 
