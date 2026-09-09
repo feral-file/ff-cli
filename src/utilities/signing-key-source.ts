@@ -82,16 +82,16 @@ export function explicitSigningKeyFlag(options: SigningKeyOptions): SigningKeyFl
  * removed, and it is worse from a file, because a file that reads as empty (truncated, still being
  * written, the wrong path in a directory of similar names) looks nothing like a typo at the prompt.
  *
- * The material never appears in any error raised here. A key that reaches a terminal is in scrollback
- * and in whatever ships those logs onward, so the path is named and the contents never are.
+ * The material never appears in any error raised here — and neither does the argument, once it looks
+ * like key material rather than a path. A key that reaches a terminal is in scrollback and in whatever
+ * ships those logs onward.
  *
  * @param path - Value of `--key-file` exactly as the command received it
  * @returns Trimmed key material
- * @throws Error when the path is empty, the file cannot be read, or it holds no key material
+ * @throws Error when the path is empty, looks like a key, cannot be read, or holds no key material
  */
 export function readSigningKeyFile(path: string): string {
-  const trimmedPath = path.trim();
-  if (trimmedPath.length === 0) {
+  if (path.trim().length === 0) {
     throw new Error(
       'The --key-file path is empty. This usually means a shell variable did not expand (for example ' +
         '--key-file "$KEY_PATH" with KEY_PATH unset). Refusing rather than falling back to the ' +
@@ -99,17 +99,35 @@ export function readSigningKeyFile(path: string): string {
     );
   }
 
+  // Refuse a key-shaped argument BEFORE opening anything, and say nothing about its value.
+  //
+  // `--key-file "$SIGNING_KEY"` is one keystroke from `--key "$SIGNING_KEY"`, and it is the natural
+  // typo for someone moving off `--key`. Every failure below names the path it was given, so without
+  // this check the private key would be printed by the very flag that exists to keep it off the
+  // terminal — and the read failure guarantees it, since key material never names a real file.
+  if (looksLikeKeyMaterial(path)) {
+    throw new Error(
+      'The --key-file argument looks like a key, not a path, so it was not opened and is not repeated ' +
+        'here. Point --key-file at the file that holds the key. (If that really is the file name, ' +
+        'give it a directory: ./name.)'
+    );
+  }
+
+  // The path is used exactly as given, NOT trimmed. Trimming was only ever a convenience, and it is
+  // the wrong one here: it silently opens `owner.key` for `--key-file "owner.key "`, so a file that
+  // is not the one named decides what signs. The trim above answers a different question — whether
+  // anything was passed at all.
   let contents: string;
   try {
-    contents = readFileSync(trimmedPath, 'utf-8');
+    contents = readFileSync(path, 'utf-8');
   } catch (error) {
-    throw new Error(describeKeyFileReadFailure(trimmedPath, error));
+    throw new Error(describeKeyFileReadFailure(path, error));
   }
 
   const material = contents.trim();
   if (material.length === 0) {
     throw new Error(
-      `The key file at ${trimmedPath} holds no key material. Refusing rather than falling back to the ` +
+      `The key file at ${path} holds no key material. Refusing rather than falling back to the ` +
         'configured key: a signature made under an identity you did not choose is not something a ' +
         'publish or a delete can be taken back from.'
     );
@@ -118,11 +136,56 @@ export function readSigningKeyFile(path: string): string {
 }
 
 /**
+ * Whether a `--key-file` argument is a private key someone meant to pass to `--key`.
+ *
+ * Deliberately over-inclusive: a false positive costs one refusal that names the fix, while a false
+ * negative prints a private key. The tests below are the shapes a signing key actually takes — PEM, hex
+ * seed, base64 PKCS#8 — plus a length rule for anything else that is not path-shaped, since a name with
+ * no separator, no `~`, and no extension is not what people call their key files.
+ */
+function looksLikeKeyMaterial(argument: string): boolean {
+  const value = argument.trim();
+  // A PEM header, whole or pasted in part. Nothing path-shaped contains it.
+  if (value.includes('BEGIN')) {
+    return true;
+  }
+  // A path has no line breaks; a pasted PEM or a `$(cat key)` expansion does.
+  if (/[\r\n]/.test(value)) {
+    return true;
+  }
+  // A 32-byte seed, or a PKCS#8 body, as hex.
+  if (/^(0x)?[0-9a-fA-F]{64,}$/.test(value)) {
+    return true;
+  }
+  // Base64, decided by DECODED LENGTH rather than by charset alone. This test has to come before the
+  // path-shaped one below, because `/` and `+` are legal base64 and most real PKCS#8 keys contain a
+  // `/` — treating that as a directory separator would let the common case straight through to a
+  // failure that prints it. 32 bytes is a raw Ed25519 seed; 48 is PKCS#8 for one.
+  if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    const decodedLength = Buffer.from(value, 'base64').length;
+    if (decodedLength === 32 || decodedLength === 48) {
+      return true;
+    }
+  }
+  // Path-shaped: a directory separator, a home reference, or a filename extension.
+  if (/[/\\~]/.test(value) || /\.[A-Za-z0-9]{1,8}$/.test(value)) {
+    return false;
+  }
+  // Base64 PKCS#8 for Ed25519 is 64 characters. A bare, extension-less name that long is far more
+  // likely to be a key than a file someone typed.
+  return value.length > 40;
+}
+
+/**
  * Turn a read failure into a sentence that says what to do about it.
  *
  * The raw errno text ("EISDIR: illegal operation on a directory, read") reads like a bug in the CLI
  * rather than a wrong path, and it is the same three mistakes every time: the file is not there, it is
  * not readable, or the path names a directory.
+ *
+ * The underlying `Error.message` is never interpolated — only its `code`. Node builds that message by
+ * appending the path it was given, so passing it through would echo the argument a second time, in a
+ * form no caller here controls.
  */
 function describeKeyFileReadFailure(path: string, error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
@@ -130,12 +193,12 @@ function describeKeyFileReadFailure(path: string, error: unknown): string {
     return `No key file at ${path}.`;
   }
   if (code === 'EACCES' || code === 'EPERM') {
-    return `Cannot read the key file at ${path}: permission denied.`;
+    return `Cannot read the key file at ${path}: permission denied (${code}).`;
   }
   if (code === 'EISDIR') {
     return `${path} is a directory, not a key file.`;
   }
-  return `Cannot read the key file at ${path}: ${(error as Error).message}`;
+  return `Cannot read the key file at ${path} (${code ?? 'read failed'}).`;
 }
 
 /**

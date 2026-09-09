@@ -37,6 +37,28 @@ export const statusCommand = new Command('status')
       }
 
       const overrideKey = explicitKey?.material.trim();
+
+      // Presence, not truthiness — the same rule `sign` and the feed mutations enforce, and the reason
+      // it is enforced here too. `--key ""` is what `--key "$SIGNING_KEY"` becomes when the variable is
+      // unset, and falling through to the configured identity answers "whose key is this?" with a
+      // different key's did:key. Nothing about that answer looks wrong, so it would be copied into
+      // curators[], and a wrong declaration fails exactly like a missing one.
+      if (explicitKey !== undefined && !overrideKey) {
+        console.log(
+          chalk.red(
+            `The ${explicitKey.flag} value is empty. This usually means a shell variable did not ` +
+              `expand (for example ${explicitKey.flag} "$SIGNING_KEY" with SIGNING_KEY unset).`
+          )
+        );
+        console.log(
+          chalk.yellow(
+            '  Refusing rather than reporting the configured identity, which belongs to a different\n' +
+              '  key. Run "ff-cli status" with no key flag if that is the identity you wanted.'
+          )
+        );
+        process.exit(1);
+      }
+
       if (overrideKey) {
         try {
           console.log(

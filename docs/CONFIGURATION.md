@@ -104,7 +104,11 @@ The rules on both flags:
 - **A `--key-file` that is missing, unreadable, or holds no key material** is rejected the same way.
   Neither ever falls back to the configured key: signing under an identity you did not choose is not
   something a publish or a delete can be taken back from.
-- **The key is never echoed**, in any error, in any encoding.
+- **A `--key-file` argument that looks like a key rather than a path** — base64 PKCS#8, a hex seed, or
+  PEM — is refused without being opened, and its value is not repeated in the refusal. Typing the key
+  where the path goes is one keystroke from `--key`, and every other path error names the path.
+- **The key is never echoed**, in any error, in any encoding — nor is a `--key-file` argument that
+  looks like one.
 
 ### Generate an Ed25519 private key
 

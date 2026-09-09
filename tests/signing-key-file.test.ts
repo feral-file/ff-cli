@@ -568,3 +568,212 @@ describe('refusals name the flag the operator actually used', () => {
     }
   });
 });
+
+describe('a key passed to --key-file is never echoed', () => {
+  // `--key-file "$SIGNING_KEY"` is one keystroke from `--key "$SIGNING_KEY"`, and it is the natural
+  // typo for someone moving off `--key`. Key material never names a real file, so the read always
+  // fails — and every read failure names the path it was given. Without a shape check first, the flag
+  // whose entire purpose is keeping the key off the terminal would print it.
+  const commands: Array<[string, string[]]> = [
+    ['sign', ['sign', 'playlist.json', '-r', 'curator', '-o', 'signed.json']],
+    ['status', ['status']],
+    ['unpublish', ['unpublish', 'PLAYLIST_ID', '-y']],
+    ['publish --replace', ['publish', 'playlist.json', '--replace']],
+    // A plain publish refuses the flag before reading anything; it must not echo it either.
+    ['publish', ['publish', 'playlist.json']],
+  ];
+
+  for (const [label, args] of commands) {
+    test(`${label}: a key passed as the path is refused without printing it`, async () => {
+      const owner = makeKey();
+      const stored = await storedPlaylist(owner);
+      const feed = await startFeed(stored);
+      const run = await runCli(
+        feed.baseUrl,
+        owner.base64,
+        args
+          .map((arg) => (arg === 'PLAYLIST_ID' ? String(stored.id) : arg))
+          .concat(['--key-file', owner.base64]),
+        { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` }
+      );
+      try {
+        assert.notEqual(run.status, 0, run.output);
+        assert.equal(feed.recorded.method, undefined, 'nothing may be sent');
+        // The whole point: not one encoding of the key anywhere in stdout or stderr.
+        assertNoKeyLeak(run.output, owner);
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+
+  for (const [label, encoding] of [
+    ['a hex seed', 'seedHex'],
+    ['base64 PKCS#8', 'base64'],
+  ] as const) {
+    test(`${label} passed as the path is named as a key, not looked up`, async () => {
+      const owner = makeKey();
+      const feed = await startFeed(await storedPlaylist(owner));
+      const run = await runCli(feed.baseUrl, owner.base64, [
+        'status',
+        '--key-file',
+        owner[encoding],
+      ]);
+      try {
+        assert.notEqual(run.status, 0, run.output);
+        assert.match(run.output, /looks like a key, not a path/);
+        // It must not have been treated as a filename: no "No key file at ..." line.
+        assert.doesNotMatch(run.output, /No key file at/);
+        assertNoKeyLeak(run.output, owner);
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+
+  test('a PEM key passed as the path is refused without printing it', async () => {
+    const owner = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, ['status', '--key-file', owner.pem]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /looks like a key, not a path/);
+      assertNoKeyLeak(run.output, owner);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('an ordinary path is still named in the refusal', async () => {
+    // Non-vacuity: the shape check must not swallow every path into one opaque message. A real path
+    // that is wrong has to say which one, or the operator cannot find their typo.
+    const owner = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, [
+      'status',
+      '--key-file',
+      'keys/owner.key',
+    ]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /No key file at keys\/owner\.key/);
+      assert.doesNotMatch(run.output, /looks like a key/);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a read failure does not pass the raw errno text through', async () => {
+    // Node builds an ENOENT message by appending the path it was given, so interpolating
+    // `error.message` would echo the argument a second time in a form this code does not control.
+    const owner = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, ['status', '--key-file', 'missing.key']);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /No key file at missing\.key/);
+      assert.doesNotMatch(run.output, /ENOENT|no such file or directory/);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});
+
+describe('the path is used exactly as given', () => {
+  // Trimming the path silently opened `owner.key` for `--key-file "owner.key "`, so a file that is not
+  // the one named decided what signs. Trimming answers only "was anything passed at all".
+  const trailingSpaceSupported = process.platform !== 'win32';
+
+  test(
+    'a file name with a trailing space is read, not silently redirected',
+    {
+      skip: trailingSpaceSupported ? false : 'Windows normalizes trailing spaces out of file names',
+    },
+    async () => {
+      const named = makeKey();
+      const configured = makeKey();
+      const feed = await startFeed(await storedPlaylist(named));
+      const run = await runCli(
+        feed.baseUrl,
+        configured.base64,
+        ['status', '--key-file', 'owner '],
+        {
+          'owner ': `${named.base64}\n`,
+        }
+      );
+      try {
+        assert.equal(run.status, 0, run.output);
+        assert.ok(run.output.includes(named.did), run.output);
+        assertNoKeyLeak(run.output, named, configured);
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    }
+  );
+
+  test(
+    'a trailing space does not fall back to the untrimmed name',
+    {
+      skip: trailingSpaceSupported ? false : 'Windows normalizes trailing spaces out of file names',
+    },
+    async () => {
+      // `owner.key` exists and `owner.key ` does not. Trimming would sign with a key the operator did
+      // not name — the same class as falling back to the configured one.
+      const other = makeKey();
+      const configured = makeKey();
+      const feed = await startFeed(await storedPlaylist(other));
+      const run = await runCli(
+        feed.baseUrl,
+        configured.base64,
+        ['status', '--key-file', 'owner.key '],
+        { 'owner.key': `${other.base64}\n` }
+      );
+      try {
+        assert.notEqual(run.status, 0, run.output);
+        assert.match(run.output, /No key file at/);
+        assert.equal(run.output.includes(other.did), false, 'it must not read the untrimmed name');
+        assert.equal(run.output.includes(configured.did), false);
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    }
+  );
+});
+
+describe('status refuses an explicit but empty key', () => {
+  // The #122 class, in the one command that had it left: `--key ""` is falsy, the override was skipped,
+  // and status answered "whose key is this?" with the CONFIGURED key's did:key. Nothing about that
+  // answer looks wrong, so it would be copied into curators[] — and a wrong declaration fails exactly
+  // like a missing one.
+  for (const [label, value] of [
+    ['empty', ''],
+    ['whitespace', '   '],
+  ] as const) {
+    test(`status --key ${label} is refused and prints no identity`, async () => {
+      const configured = makeKey();
+      const feed = await startFeed(await storedPlaylist(configured));
+      const run = await runCli(feed.baseUrl, configured.base64, ['status', '--key', value]);
+      try {
+        assert.notEqual(run.status, 0, run.output);
+        assert.match(run.output, /--key value is empty/);
+        assert.match(run.output, /did not expand/);
+        assert.doesNotMatch(run.output, /did:key/);
+        assert.equal(
+          run.output.includes(configured.did),
+          false,
+          'it must not answer with the configured identity'
+        );
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+});
