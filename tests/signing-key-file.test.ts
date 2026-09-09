@@ -21,9 +21,10 @@ import assert from 'node:assert/strict';
 import { generateKeyPairSync } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { createServer, type Server } from 'node:http';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { describe, test } from 'node:test';
 
 import { signPlaylist } from '../src/utilities/playlist-signer';
@@ -156,7 +157,11 @@ async function runCli(
     'utf-8'
   );
   for (const [name, contents] of Object.entries(files)) {
-    writeFileSync(join(dir, name), contents, 'utf-8');
+    // Nested names are supported so a test can build a path whose DIRECTORIES carry a misleading
+    // shape — `BEGIN/secrets/owner.key` is the one that used to be refused unopened.
+    const full = join(dir, name);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, contents, 'utf-8');
   }
 
   const child = spawn(process.execPath, [tsxCli, cliEntry, ...args], {
@@ -628,7 +633,7 @@ describe('a key passed to --key-file is never echoed', () => {
     ['a hex seed', 'seedHex'],
     ['base64 PKCS#8', 'base64'],
   ] as const) {
-    test(`${label} passed as the path is named as a key, not looked up`, async () => {
+    test(`${label} passed as the path is named as a key, not as a missing file`, async () => {
       const owner = makeKey();
       const feed = await startFeed(await storedPlaylist(owner));
       const run = await runCli(feed.baseUrl, owner.base64, [
@@ -638,8 +643,11 @@ describe('a key passed to --key-file is never echoed', () => {
       ]);
       try {
         assert.notEqual(run.status, 0, run.output);
-        assert.match(run.output, /looks like a key, not a path/);
-        // It must not have been treated as a filename: no "No key file at ..." line.
+        // Either classification is correct here and both keep the guarantee: a bare key with no `/`
+        // gets the named mistake, and one whose own base64 contains a `/` has path structure, so it
+        // is opened like any path and the failure is described rather than printed. What must never
+        // happen is an ordinary missing-file report, which prints the argument.
+        assert.match(run.output, /looks like a key rather than a path|not repeated here/);
         assert.doesNotMatch(run.output, /No key file at/);
         assertNoKeyLeak(run.output, owner);
       } finally {
@@ -655,7 +663,8 @@ describe('a key passed to --key-file is never echoed', () => {
     const run = await runCli(feed.baseUrl, owner.base64, ['status', '--key-file', owner.pem]);
     try {
       assert.notEqual(run.status, 0, run.output);
-      assert.match(run.output, /looks like a key, not a path/);
+      assert.match(run.output, /looks like a key rather than a path|not repeated here/);
+      assert.doesNotMatch(run.output, /No key file at/);
       assertNoKeyLeak(run.output, owner);
     } finally {
       run.cleanup();
@@ -1016,6 +1025,98 @@ describe('setup --key-file', () => {
     try {
       assert.notEqual(run.status, 0, run.output);
       assertNoKeyLeak(run.output, provisioned, configured);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});
+
+describe('a real path is opened, whatever it looks like', () => {
+  // The refusal used to run before the open, on shape alone, and shape is a bad proxy for intent: a
+  // directory can be called BEGIN, and a key file can be named after a content hash. Both were
+  // unusable, with no way to say otherwise — `./name` did not help, because the prefix was stripped
+  // before the test. Opening is free; only printing is not, so only printing is gated now.
+  test('a directory named BEGIN does not make the path unopenable', async () => {
+    const owner = makeKey();
+    const configured = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(
+      feed.baseUrl,
+      configured.base64,
+      ['status', '--key-file', 'run/BEGIN/secrets/owner.key'],
+      { 'run/BEGIN/secrets/owner.key': `${owner.base64}\n` }
+    );
+    try {
+      assert.equal(run.status, 0, run.output);
+      assert.ok(run.output.includes(owner.did), run.output);
+      assertNoKeyLeak(run.output, owner, configured);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  for (const [label, prefix] of [
+    ['bare', ''],
+    ['with ./', './'],
+  ] as const) {
+    test(`a key file named after a 64-hex digest works ${label}`, async () => {
+      // Content-addressed names are ordinary in a secrets store, and 64 hex characters is also
+      // exactly the shape of a raw Ed25519 seed. Existence is the only thing that separates them,
+      // which is why the open has to be attempted rather than guessed at.
+      const owner = makeKey();
+      const configured = makeKey();
+      const digestName = createHash('sha256').update('a stored key').digest('hex');
+      const feed = await startFeed(await storedPlaylist(owner));
+      const run = await runCli(
+        feed.baseUrl,
+        configured.base64,
+        ['status', '--key-file', `${prefix}${digestName}`],
+        { [digestName]: `${owner.base64}\n` }
+      );
+      try {
+        assert.equal(run.status, 0, run.output);
+        assert.ok(run.output.includes(owner.did), run.output);
+        assertNoKeyLeak(run.output, owner, configured);
+      } finally {
+        run.cleanup();
+        feed.close();
+      }
+    });
+  }
+
+  test('a bare key that names no file is still refused and still not echoed', async () => {
+    // The pair to the test above: same shape, no such file. The answer names the mistake rather than
+    // reporting a missing path, which would print the key.
+    const owner = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, ['status', '--key-file', owner.seedHex]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /looks like a key rather than a path/);
+      assertNoKeyLeak(run.output, owner);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a prefixed key opens, fails, and is described rather than printed', async () => {
+    // `./<key>` has path structure, so it is opened like any path. The failure cannot name it: the
+    // print gate refuses anything that long, which is what keeps the guarantee once the open gate is
+    // gone.
+    const owner = makeKey();
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, [
+      'status',
+      '--key-file',
+      `./${owner.base64}`,
+    ]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /not repeated here/);
+      assertNoKeyLeak(run.output, owner);
     } finally {
       run.cleanup();
       feed.close();

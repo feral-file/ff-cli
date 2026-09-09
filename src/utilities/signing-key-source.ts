@@ -82,13 +82,17 @@ export function explicitSigningKeyFlag(options: SigningKeyOptions): SigningKeyFl
  * removed, and it is worse from a file, because a file that reads as empty (truncated, still being
  * written, the wrong path in a directory of similar names) looks nothing like a typo at the prompt.
  *
- * The material never appears in any error raised here — and neither does the argument, once it looks
- * like key material rather than a path. A key that reaches a terminal is in scrollback and in whatever
- * ships those logs onward.
+ * Every argument is opened. Deciding in advance that something "looks like a key" and refusing to try
+ * cost real paths — `/run/BEGIN/secrets/owner.key`, a content-addressed 64-hex filename — and bought
+ * nothing, because opening a wrong path is free. What is not free is *printing* one: a private key
+ * that reaches a terminal is in scrollback and in whatever ships those logs onward, and it cannot be
+ * rotated out of a document that already names it. So the guarantee lives entirely in what may be said
+ * about a failure; see `safePathLabel`. Existence is also the only thing separating a key typed into
+ * the path from a file genuinely named after a hex digest, and that cannot be known without looking.
  *
  * @param path - Value of `--key-file` exactly as the command received it
  * @returns Trimmed key material
- * @throws Error when the path is empty, looks like a key, cannot be read, or holds no key material
+ * @throws Error when the path is empty, cannot be read, or holds no key material
  */
 export function readSigningKeyFile(path: string): string {
   if (path.trim().length === 0) {
@@ -96,20 +100,6 @@ export function readSigningKeyFile(path: string): string {
       'The --key-file path is empty. This usually means a shell variable did not expand (for example ' +
         '--key-file "$KEY_PATH" with KEY_PATH unset). Refusing rather than falling back to the ' +
         'configured key, which would sign under an identity you did not choose.'
-    );
-  }
-
-  // Refuse a key-shaped argument BEFORE opening anything, and say nothing about its value.
-  //
-  // `--key-file "$SIGNING_KEY"` is one keystroke from `--key "$SIGNING_KEY"`, and it is the natural
-  // typo for someone moving off `--key`. Every failure below names the path it was given, so without
-  // this check the private key would be printed by the very flag that exists to keep it off the
-  // terminal — and the read failure guarantees it, since key material never names a real file.
-  if (looksLikeKeyMaterial(path)) {
-    throw new Error(
-      'The --key-file argument looks like a key, not a path, so it was not opened and is not repeated ' +
-        'here. Point --key-file at the file that holds the key. (If that really is the file name, ' +
-        'give it a directory: ./name.)'
     );
   }
 
@@ -135,36 +125,26 @@ export function readSigningKeyFile(path: string): string {
   return material;
 }
 
-/** The last path segment of an argument — what a directory prefix hides from a whole-value test. */
-function lastSegment(value: string): string {
-  const segments = value.split(/[/\\]/);
-  return segments[segments.length - 1] ?? value;
-}
-
 /**
- * Whether a value has the shape of Ed25519 key material, judged on its own with no path context.
+ * Whether a value is, on its own, a complete Ed25519 key encoding.
  *
- * Split out from `looksLikeKeyMaterial` because it has to be applied twice: to the whole argument, and
- * to its last segment. `--key-file "./$SIGNING_KEY"` is a real shell habit, and prefixing a key with
- * `./` breaks every whole-value test here — the `.` and `/` fail base64 and hex alike — while the `/`
- * then reads as "this is a path". The key was one segment away the entire time.
+ * Complete is the whole point. An earlier version treated any `BEGIN` substring and any key-shaped
+ * last segment as reason enough to refuse before opening, which made `/run/BEGIN/secrets/owner.key`
+ * and a content-addressed 64-hex filename unusable — real paths, refused for looking like something
+ * they were not, with no way to say otherwise. The shapes below are the forms a whole key takes and
+ * nothing else: a PEM block carries both its header AND the line breaks a real block has, a hex seed
+ * is 64 characters of nothing but hex, and base64 is judged by what it decodes to.
  */
-function hasKeyShape(value: string): boolean {
-  // A PEM header, whole or pasted in part. Nothing path-shaped contains it.
-  if (value.includes('BEGIN')) {
+function isWholeKeyEncoding(value: string): boolean {
+  if (value.includes('BEGIN') && /[\r\n]/.test(value)) {
     return true;
   }
-  // A path has no line breaks; a pasted PEM or a `$(cat key)` expansion does.
-  if (/[\r\n]/.test(value)) {
-    return true;
-  }
-  // A 32-byte seed, or a PKCS#8 body, as hex.
   if (/^(0x)?[0-9a-fA-F]{64,}$/.test(value)) {
     return true;
   }
-  // Base64, decided by DECODED LENGTH rather than by charset alone: `/` and `+` are legal base64 and
-  // most real PKCS#8 keys contain a `/`, so a charset test that read that as a directory separator
-  // would let the common case through. 32 bytes is a raw Ed25519 seed; 48 is PKCS#8 for one.
+  // Decided by DECODED LENGTH rather than by charset alone: `/` and `+` are legal base64 and most
+  // real PKCS#8 keys contain a `/`, so a charset test that read that as a directory separator would
+  // let the common case through. 32 bytes is a raw Ed25519 seed; 48 is PKCS#8 for one.
   if (/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
     const decodedLength = Buffer.from(value, 'base64').length;
     if (decodedLength === 32 || decodedLength === 48) {
@@ -174,53 +154,34 @@ function hasKeyShape(value: string): boolean {
   return false;
 }
 
-/**
- * Whether a `--key-file` argument is a private key someone meant to pass to `--key`.
- *
- * Deliberately over-inclusive: a false positive costs one refusal that names the fix, while a false
- * negative prints a private key. The shape tests are the forms a signing key actually takes — PEM, hex
- * seed, base64 PKCS#8 — applied to the whole argument and to its last segment, plus a length rule for
- * anything else that is not path-shaped, since a name with no separator, no `~`, and no extension is
- * not what people call their key files.
- *
- * This cannot be the only defence, and is not. A key whose own base64 contains a `/` defeats the
- * segment test by being split across two segments, so every message that would name a path goes
- * through `safePathLabel` as well.
- */
-function looksLikeKeyMaterial(argument: string): boolean {
-  const value = argument.trim();
-  if (hasKeyShape(value)) {
-    return true;
-  }
-  const segment = lastSegment(value);
-  if (segment !== value && hasKeyShape(segment)) {
-    return true;
-  }
-  // Path-shaped: a directory separator, a home reference, or a filename extension.
-  if (/[/\\~]/.test(value) || /\.[A-Za-z0-9]{1,8}$/.test(value)) {
-    return false;
-  }
-  // Base64 PKCS#8 for Ed25519 is 64 characters. A bare, extension-less name that long is far more
-  // likely to be a key than a file someone typed.
-  return value.length > 40;
+/** Whether the argument is a bare key: a complete encoding with no path structure around it. */
+function isBareKeyMaterial(value: string): boolean {
+  return !/[/\\]/.test(value) && isWholeKeyEncoding(value);
+}
+
+/** Whether any path segment is a complete key encoding — a key with a directory prefix on it. */
+function anySegmentIsKeyEncoding(value: string): boolean {
+  return value.split(/[/\\]/).some((segment) => isWholeKeyEncoding(segment));
 }
 
 /**
  * How to refer to a `--key-file` argument in a message, without ever printing key material.
  *
- * The shape tests above decide whether to *open* the argument; this decides whether to *print* it, and
- * it is the stricter of the two on purpose. A key that contains a `/` in its own base64 — roughly half
- * of all PKCS#8 keys — splits across segments and passes every shape test when prefixed with `./`, so
- * shape alone cannot be trusted at the point where a value reaches the terminal. Length settles it: no
- * private key encoding is under 40 characters, and a path that long is rare enough that describing it
- * instead of printing it costs an operator one `ls`.
+ * This is the guarantee, and it is deliberately separate from the decision to open. Opening a wrong
+ * path costs nothing; printing one can disclose a private key that cannot be rotated out of a document
+ * that already names it. So everything is opened, and this decides what may be said afterwards.
+ *
+ * Length carries most of it: no complete key encoding is under 40 characters — a 32-byte seed is 64
+ * hex or 44 base64 characters — so a short argument cannot be a whole key, and a partial one is not a
+ * key. The segment test then covers a key wearing a directory prefix, which length alone would pass
+ * only for something already too long to print.
  *
  * @param path - Value of `--key-file` exactly as the command received it
  * @returns The path itself when it is provably safe to print, or a description of it
  */
 function safePathLabel(path: string): string {
   const value = path.trim();
-  if (value.length < 40 && !hasKeyShape(lastSegment(value))) {
+  if (value.length < 40 && !anySegmentIsKeyEncoding(value)) {
     return path;
   }
   return 'the path given (not repeated here, in case it is key material)';
@@ -239,6 +200,21 @@ function safePathLabel(path: string): string {
  */
 function describeKeyFileReadFailure(path: string, error: unknown): string {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  const value = path.trim();
+
+  // A bare, complete key with nothing of a path about it, and no file of that name. `--key-file
+  // "$SIGNING_KEY"` is one keystroke from `--key "$SIGNING_KEY"`, and it is the natural typo for
+  // someone moving off `--key`, so say what the mistake was. Existence is what separates this from a
+  // file someone genuinely named after a hex digest — which is why the open is attempted first rather
+  // than guessed at.
+  if (isBareKeyMaterial(value)) {
+    return (
+      'The --key-file argument looks like a key rather than a path, and no file of that name exists. ' +
+      'It is not repeated here. Point --key-file at the file that holds the key, or pass the key ' +
+      'itself with --key.'
+    );
+  }
+
   const label = safePathLabel(path);
 
   // When the argument cannot be printed, the errno is the whole message. Naming which failure it was
@@ -247,8 +223,7 @@ function describeKeyFileReadFailure(path: string, error: unknown): string {
   if (label !== path) {
     return (
       `The --key-file argument could not be read (${code ?? 'read failed'}) and is not repeated ` +
-      'here: it is long enough, or shaped enough like a key, that printing it could disclose ' +
-      'private key material. Check the path you passed.'
+      'here: it may be key material rather than a path. Check the path you passed.'
     );
   }
 
