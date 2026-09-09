@@ -27,8 +27,8 @@ Flow:
 2) ff-cli config validate
 3) Build playlist (ff-cli has no chat — you are the natural-language layer; translate the request into one of these yourself):
    - for a single artwork or a collection from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json -y` (add `--play` to build and play in one step). `-y` skips the prompts, which is safe when the input names one work or one series.
-   - for a wallet address, do not pass `-y`: when the wallet holds several works `-y` makes `find` take the first one without asking. Ask the user which work they mean and run `find` on that work's URL or coordinate instead; use the wallet form only when they want everything the wallet holds (with `-l <n>`).
-   - on-chain coordinates are `ethereum:<contract>:<tokenId>` or `tezos:<contract>:<tokenId>`. A coordinate resolves to its whole series, and a large series indexes for minutes. Always pass `-l <n>` unless the user asked for the whole series.
+   - `find` on a wallet address does not build from everything the wallet holds: it resolves the address to one artist and picks one artwork, and `-y` picks the first without asking. Ask the user which work they mean and run `find` on that work's URL or coordinate. When they want a playlist of what a wallet holds, use `build` with a `query_address` requirement (`{"type": "query_address", "ownerAddress": "<address>", "quantity": <n>}`), which is what that requirement is for.
+   - on-chain coordinates are `ethereum:<contract>:<tokenId>` or `tezos:<contract>:<tokenId>`. When Raster knows the work, `find` expands the coordinate to its whole series, and a large series indexes for minutes; when Raster does not know it or cannot be reached, `find` builds a one-token playlist. Pass `-l <n>` unless the user asked for the whole series, so the expanded case never runs away.
    - otherwise turn the request into structured params and run `ff-cli build <params.json> -o playlist.json -v`
    - `find` and `build` sign the playlist as `curator` with the configured key and declare it in `curators[]`; that is what lets the feed accept it and what lets you take it back later.
 4) `ff-cli validate playlist.json`
