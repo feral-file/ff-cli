@@ -192,7 +192,9 @@ created, signatures }`, with a `payloadHash` for replace — whose `created` mus
 freshness window; the intent exists because a document's own signatures are public via `GET` and could
 otherwise be replayed to roll a resource back. The CLI proves ownership before it signs anything: it
 `GET`s the stored playlist and requires the signing key — the configured `playlist.privateKey` unless
-`-k, --key` overrides it for that command — to be both named in the stored `curators[]` and the signer of
+`-k, --key` or `--key-file <path>` overrides it for that command, the latter keeping the key out of the
+shell history and the process list (`CONFIGURATION.md`, "Where the signing key can come from") — to be
+both named in the stored `curators[]` and the signer of
 a cryptographically valid `curator`-role signature over that stored document. Being
 named is a claim; the owner-role signature is the proof, and checking only the claim is what would let a
 legacy `agent`-signed document pass preflight and come back as a `403` reported as a missing
@@ -392,10 +394,17 @@ and nothing else. `enrich` is the repair path for those.
   a curator-restricted playlist is never briefly world-readable mid-write. The
   destination's owner and group are carried across too, since a replacement is
   a new inode and would otherwise take this process's ownership — silently
-  reassigning a shared playlist. Where that cannot be done, the in-place
-  replacement is refused and `--output` is offered instead. Extended ACLs are
-  not preserved, because Node exposes no portable way to read them; a playlist
-  carrying them should be enriched through `--output`.
+  reassigning a shared playlist. Two things clear set-user-ID and set-group-ID
+  — the chown, and an unprivileged write to a regular file — so the mode is
+  restored and verified against the inode after each of them, the second time
+  with nothing left before the rename that could change it. Where the ownership
+  or the mode cannot be reproduced, the in-place replacement is refused and
+  `--output` is offered instead. Access-control
+  lists are not preserved: a replacement is a new inode, so its ACL comes from
+  the directory's default rather than from the file being replaced, and mode
+  bits cannot carry named entries across on any platform — a playlist whose
+  access depends on an ACL should be enriched through `--output` to a fresh
+  name in a directory whose access is what the result should have.
 - `--output` names a file the caller expects to exist afterwards, so it is
   written even when nothing was enriched. A no-op without `--output` writes
   nothing rather than rewriting the input for no gain.

@@ -194,7 +194,11 @@ export async function fetchStoredPlaylist(
 }
 
 /**
- * Resolve the key that signs an owner-bound intent, honouring an explicit `--key`.
+ * Resolve the key that signs an owner-bound intent, honouring an explicit key from the command line.
+ *
+ * `--key-file` material arrives here already read and trimmed by `signing-key-source`, which rejects an
+ * empty file there rather than here: the message below is about shell expansion, which is the right
+ * diagnosis for a value typed at the prompt and the wrong one for a file that turned out to be empty.
  *
  * **Presence, never truthiness.** `--key ""` — the shape an unset shell variable takes,
  * `--key "$SIGNING_KEY"` with nothing in it — is an override that FAILED, not an absent one. Treating it
@@ -228,7 +232,8 @@ export function resolveMutationSigningKey(
   if (!configured) {
     throw new Error(
       `No playlist signing key is configured. A ${action} is authorized by a signature, so one is ` +
-        'required: run "ff-cli setup", set playlist.privateKey in config.json, or pass --key.'
+        'required: run "ff-cli setup", set playlist.privateKey in config.json, or pass --key / ' +
+        '--key-file for this run.'
     );
   }
   return configured;
@@ -329,24 +334,40 @@ export async function storedOwnership(stored: StoredPlaylist): Promise<StoredOwn
  * A refusal has to point at the thing the operator can actually change. Telling someone who passed
  * `--key` to edit `playlist.privateKey` sends them to a file this run never read, and it reads as if
  * their flag was ignored — which, after the empty-`--key` fallback, is exactly the doubt not to raise.
+ *
+ * The supplied cases are spelled as the flags themselves rather than as one "supplied" value, so every
+ * refusal is built by interpolation and can never name a flag the operator did not type. Telling
+ * someone who passed `--key-file` to "run it again with --key" points at a different mechanism than the
+ * one they used, which is the same wrong turn as pointing them at config.json.
  */
-export type KeySource = 'configured' | 'supplied';
+export type KeySource = 'configured' | '--key' | '--key-file';
+
+/** How a private key is named as the argument to the flag it arrived on. */
+function flagArgument(keySource: '--key' | '--key-file'): string {
+  return keySource === '--key-file' ? 'file holding the private key' : 'private key';
+}
 
 /** How to describe the identity in a refusal, given where it came from. */
 function identityLabel(keySource: KeySource): string {
-  return keySource === 'supplied'
-    ? 'The identity you passed with --key:'
-    : 'Your configured identity:';
+  return keySource === 'configured'
+    ? 'Your configured identity:'
+    : `The identity you passed with ${keySource}:`;
 }
 
 /** What to do about it, given where it came from. */
 function retryAdvice(keySource: KeySource, plural: boolean): string {
   const which = plural ? 'one of the keys listed above' : 'the key listed above';
-  return keySource === 'supplied'
-    ? `  Run it again with an owner key: --key <private key for ${which}>.\n` +
-        `  (Confirm which identity a key carries with "ff-cli status --key <private key>".)`
-    : `  Point playlist.privateKey at ${which}, or pass one for this run with --key (confirm any\n` +
-        `  key's identity with "ff-cli status --key <private key>").`;
+  if (keySource === 'configured') {
+    return (
+      `  Point playlist.privateKey at ${which}, or pass one for this run with --key (confirm any\n` +
+      `  key's identity with "ff-cli status --key <private key>").`
+    );
+  }
+  const argument = flagArgument(keySource);
+  return (
+    `  Run it again with an owner key: ${keySource} <${argument} for ${which}>.\n` +
+    `  (Confirm which identity a key carries with "ff-cli status ${keySource} <${argument}>".)`
+  );
 }
 
 /**
@@ -431,7 +452,9 @@ export async function ownershipPreflight(
   }
 
   const source =
-    keySource === 'supplied' ? 'The key you passed with --key is' : 'The configured signing key is';
+    keySource === 'configured'
+      ? 'The configured signing key is'
+      : `The key you passed with ${keySource} is`;
   return {
     error: `${source} not an owner of this playlist, so it cannot ${verb} it.`,
     message:
@@ -504,8 +527,8 @@ export function describeFeedMutationError(
       error: `${verb} refused: the feed saw no signatures on the request.`,
       message:
         `Every mutating request is authorized by the signatures in its body — there is no API key.\n` +
-        (keySource === 'supplied'
-          ? `  The key passed with --key produced no signature the feed could read, which should not\n` +
+        (keySource !== 'configured'
+          ? `  The key passed with ${keySource} produced no signature the feed could read, which should not\n` +
             `  happen once it has been accepted locally — please report this.\n`
           : `  This usually means no signing key is configured: run "ff-cli status" to check, and\n` +
             `  "ff-cli setup" to generate one.\n`) +
@@ -520,9 +543,9 @@ export function describeFeedMutationError(
   // owner set. Say that the feed refused, and that the local check disagreed.
   if (status === 403) {
     const which =
-      keySource === 'supplied'
-        ? 'the key you passed with --key is'
-        : 'the configured signing key is';
+      keySource === 'configured'
+        ? 'the configured signing key is'
+        : `the key you passed with ${keySource} is`;
     return {
       error: `${verb} refused by the feed: it did not accept the signing key as an owner.`,
       message:

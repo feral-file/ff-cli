@@ -6,6 +6,7 @@ import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-der
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
 import { playlistSigningDidKey } from '../utilities/signing-identity';
 import { configuredFF1Devices } from '../utilities/config-placeholders';
+import { resolveExplicitSigningKey } from '../utilities/signing-key-source';
 
 export const statusCommand = new Command('status')
   .description('Show configuration status')
@@ -17,9 +18,47 @@ export const statusCommand = new Command('status')
     '-k, --key <privateKey>',
     'Report the signing identity for this key instead of the configured one'
   )
-  .action(async (options: { key?: string }) => {
+  .option(
+    '--key-file <path>',
+    'Read the key to report on from this file instead of the command line'
+  )
+  .action(async (options: { key?: string; keyFile?: string }) => {
     try {
-      const overrideKey = options.key?.trim();
+      // An unusable key file is reported here rather than allowed to fall through. This command's whole
+      // job is to answer "which identity is this?", so silently answering about the configured key
+      // instead — which an empty file would do, since the check below is truthiness — would hand back a
+      // did:key that belongs to something else and looks exactly like the right answer.
+      let explicitKey: ReturnType<typeof resolveExplicitSigningKey>;
+      try {
+        explicitKey = resolveExplicitSigningKey(options);
+      } catch (error) {
+        console.log(chalk.red((error as Error).message));
+        process.exit(1);
+      }
+
+      const overrideKey = explicitKey?.material.trim();
+
+      // Presence, not truthiness — the same rule `sign` and the feed mutations enforce, and the reason
+      // it is enforced here too. `--key ""` is what `--key "$SIGNING_KEY"` becomes when the variable is
+      // unset, and falling through to the configured identity answers "whose key is this?" with a
+      // different key's did:key. Nothing about that answer looks wrong, so it would be copied into
+      // curators[], and a wrong declaration fails exactly like a missing one.
+      if (explicitKey !== undefined && !overrideKey) {
+        console.log(
+          chalk.red(
+            `The ${explicitKey.flag} value is empty. This usually means a shell variable did not ` +
+              `expand (for example ${explicitKey.flag} "$SIGNING_KEY" with SIGNING_KEY unset).`
+          )
+        );
+        console.log(
+          chalk.yellow(
+            '  Refusing rather than reporting the configured identity, which belongs to a different\n' +
+              '  key. Run "ff-cli status" with no key flag if that is the identity you wanted.'
+          )
+        );
+        process.exit(1);
+      }
+
       if (overrideKey) {
         try {
           console.log(
@@ -28,7 +67,9 @@ export const statusCommand = new Command('status')
           console.log(chalk.dim("  declare this in the playlist's curators[] before signing"));
           return;
         } catch (error) {
-          console.log(chalk.red(`--key unusable: ${(error as Error).message}`));
+          console.log(
+            chalk.red(`${explicitKey?.flag ?? '--key'} unusable: ${(error as Error).message}`)
+          );
           process.exit(1);
         }
       }

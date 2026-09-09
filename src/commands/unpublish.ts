@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { selectFeedServer } from './helpers/feed-server';
 import { createPrompt, promptYesNo } from './helpers/prompt';
+import type { KeySource } from '../utilities/feed-mutation';
 
 /**
  * `ff-cli unpublish <id-or-url>` — delete a playlist this key owns from a feed.
@@ -11,6 +12,14 @@ import { createPrompt, promptYesNo } from './helpers/prompt';
  * server first, and defaults to no. `-y` skips it for scripts; without a terminal and without `-y` the
  * command refuses rather than assuming consent.
  */
+/** Parsed options for `unpublish`. */
+interface UnpublishCommandOptions {
+  server?: string;
+  yes?: boolean;
+  key?: string;
+  keyFile?: string;
+}
+
 export const unpublishCommand = new Command('unpublish')
   .description('Delete a playlist from a feed server (signed delete; owner key required)')
   .argument('<id-or-url>', 'Playlist id, slug, or feed URL')
@@ -20,7 +29,11 @@ export const unpublishCommand = new Command('unpublish')
     '-k, --key <privateKey>',
     'Ed25519 private key that signs the delete authorization (overrides config)'
   )
-  .action(async (idOrUrl: string, options: { server?: string; yes?: boolean; key?: string }) => {
+  .option(
+    '--key-file <path>',
+    'Read the key that signs the delete authorization from this file, not the command line'
+  )
+  .action(async (idOrUrl: string, options: UnpublishCommandOptions) => {
     try {
       console.log(chalk.blue('\nUnpublish playlist\n'));
 
@@ -48,12 +61,20 @@ export const unpublishCommand = new Command('unpublish')
       // The DID displayed below and the key that signs are now the same value.
       //
       // Only the did:key is ever printed; the material never reaches the output from this path.
+      //
+      // `--key-file` is read here too, in the same step and before the same milestones: a key file that
+      // is missing, unreadable, or empty is a credential failure like any other, and it must not be
+      // discovered after the operator has approved a delete.
       const { mutationSignerIdentity } = await import('../utilities/feed-mutation.js');
+      const { resolveExplicitSigningKey } = await import('../utilities/signing-key-source.js');
       let signerDidKey: string;
       let signingKey: string;
+      let keySource: KeySource = 'configured';
       try {
+        const explicitKey = resolveExplicitSigningKey(options);
+        keySource = explicitKey?.flag ?? 'configured';
         ({ privateKey: signingKey, didKey: signerDidKey } = mutationSignerIdentity(
-          options.key,
+          explicitKey?.material,
           'delete'
         ));
       } catch (error) {
@@ -126,7 +147,7 @@ export const unpublishCommand = new Command('unpublish')
 
       const result = await unpublishPlaylist(idOrUrl, selection.url, {
         privateKey: signingKey,
-        keySource: options.key !== undefined ? 'supplied' : 'configured',
+        keySource,
       });
 
       if (result.success) {

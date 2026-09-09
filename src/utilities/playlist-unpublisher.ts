@@ -44,7 +44,7 @@ export interface UnpublishOptions {
   privateKey?: string;
   /**
    * Where `privateKey` came from, so a refusal points at something the operator can change: the config
-   * file, or the `--key` they just passed.
+   * file, or the `--key` / `--key-file` they just passed.
    */
   keySource?: KeySource;
 }
@@ -95,7 +95,7 @@ export async function unpublishPlaylist(
   // the feed — names the key the operator actually used rather than a config file this run may not
   // have read.
   const keySource: KeySource =
-    options.keySource ?? (options.privateKey !== undefined ? 'supplied' : 'configured');
+    options.keySource ?? (options.privateKey !== undefined ? '--key' : 'configured');
 
   // Resolve and validate together: `--key ""` is a failed override, not an absent one, and must never
   // fall through to the configured key on an operation that tombstones an id.

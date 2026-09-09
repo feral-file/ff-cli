@@ -19,6 +19,19 @@ npm i -g @feralfile/cli
 ff-cli setup
 ```
 
+Unattended provisioning takes the same flags without prompting. Pass an existing signing key with
+`--key-file <path>` rather than `--key`, which puts the key in the process list of a machine nobody is
+watching and in whatever shell or CI log recorded the command:
+
+```bash
+ff-cli setup --non-interactive --key-file /run/secrets/ff-signing.key \
+  --role curator --device-host http://192.168.1.50:1111 --device-name studio
+```
+
+`--key` and `--key-file` together is an error, and an empty or unreadable key file is refused rather
+than quietly generating a new identity for the machine. See
+[Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from).
+
 See the full configuration reference here: `./CONFIGURATION.md`.
 
 During setup, you can pick FF1 devices to add. Use `ff-cli device add` to add more devices later, and `ff-cli device list` to see what's configured. The first device is the default for `play` commands (override with `-d`).
@@ -97,7 +110,8 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `validate <file-or-url>` – Validate playlist structure only
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
-  - Options: `-k, --key <privateKey>`, `-r, --role <role>`, `-o, --output <file>`, `--replace-signatures`, `--force`
+  - Options: `-k, --key <privateKey>`, `--key-file <path>`, `-r, --role <role>`, `-o, --output <file>`, `--replace-signatures`, `--force`
+  - `--key-file <path>` reads the key from a file instead of the command line, which is where `--key` leaves it in your shell history and in the process list. Same key encodings, same normalization; keep the file private, since the CLI does not check its permissions. `--key` and `--key-file` together is an error, and an empty or unreadable key file is refused rather than falling back to the configured key
   - **It overwrites only a document it has read.** Before writing, the destination is read back and compared with the document being signed; if it holds something else, the run is refused rather than destroying a file the command never inspected. `--force` allows that overwrite, and the report names the file it replaced. A destination holding the *same* document — a copy of the input — is treated as an in-place run, so it is refused only when it would discard a still-valid signature from another key, and `--force` does not override that one. The read and the overwrite are not atomic, so an editor writing in the same instant can still lose its change, as with any in-place tool — a fresh `--output` name is the write that cannot collide. A destination that already exists needs read permission
   - Signing **appends** by default, so repeated runs accumulate endorsements. That is only correct while the signed content is unchanged: editing a signed playlist moves bytes the earlier signatures cover, and the envelope check then refuses to write the result. `--replace-signatures` discards every existing entry — including a feed's own co-signature — and signs the document as it stands. It is the required step before `publish --replace`
   - **An in-place run refuses when it would discard a still-valid signature from another key**, since only its holder could make that signature again: write the result elsewhere with `-o, --output`, which leaves the original where it is. The refusal is about what cannot be recovered — an in-place run still proceeds when the only entries dropped are your own, or ones that no longer verify
@@ -113,12 +127,12 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
-  - Options: `-s, --server <index>` (server index if multiple configured), `--replace` (replace the playlist already stored under this document id instead of creating a new one), `-k, --key <privateKey>` (signs the replace authorization; `--replace` only)
-  - `--key` is refused on a plain `publish`, which signs nothing at request time — it uploads the `signatures[]` envelope the document already carries. Sign the file with `ff-cli sign --key` instead
+  - Options: `-s, --server <index>` (server index if multiple configured), `--replace` (replace the playlist already stored under this document id instead of creating a new one), `-k, --key <privateKey>` (signs the replace authorization; `--replace` only), `--key-file <path>` (the same key, read from a file)
+  - `--key` and `--key-file` are both refused on a plain `publish`, which signs nothing at request time — it uploads the `signatures[]` envelope the document already carries. Sign the file with `ff-cli sign --key-file` instead
 - `fetch <id-or-url>` – Save a published playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. The document goes to `-o` when given and to stdout otherwise (status lines always go to stderr, so `ff-cli fetch <id> > playlist.json` works). This is the starting point for `publish --replace`, which requires the stored `id`, `slug`, and `created`
   - Options: `-s, --server <index>`, `-o, --output <file>`. There is no `--key`: a fetch is a plain read and signs nothing
 - `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the signing key to be an owner of the stored playlist, and confirms before deleting
-  - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation), `-k, --key <privateKey>` (signs the delete authorization)
+  - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation), `-k, --key <privateKey>` (signs the delete authorization), `--key-file <path>` (the same key, read from a file)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
 - `device list` – List all configured FF1 devices
@@ -319,6 +333,13 @@ If you sign with `sign --key <privateKey>`, read that key's identity with
 and `build` need none of this: they declare the key and sign it as `curator` for you when a signing key
 is configured. An `apiKey` left over in an existing config is ignored.
 
+`--key-file <path>` is the same key from a file, on `sign`, `status`, `unpublish`, and
+`publish --replace` alike — so `ff-cli status --key-file signing.key` reports the identity
+`ff-cli sign --key-file signing.key` will assert. Prefer it: `--key` writes your private key into your
+shell history and exposes it in the process list for the length of the run, and a signing key that has
+been disclosed cannot be rotated out of a playlist that already names it. See
+[Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from).
+
 ```json
 {
   "feedServers": [
@@ -336,7 +357,10 @@ is configured. An `apiKey` left over in an existing config is ignored.
 
 A feed's `PUT` and `DELETE` are owner-bound. Neither takes an API key, and neither is authorized by the
 document alone: both carry a short-lived **intent** that ff-cli signs in the `curator` role — with the
-configured `playlist.privateKey` by default, or with whatever `-k, --key` names for that one command. Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
+configured `playlist.privateKey` by default, or with whatever `-k, --key` or `--key-file <path>` names
+for that one command (see
+[Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from), which
+explains why the file is the safer of the two). Only a key the *stored* playlist names in `curators[]` can authorize either one, which is
 why `publish` refuses to create a playlist that carries no owner-role signature — such a document can be
 neither replaced nor deleted, ever.
 
@@ -363,10 +387,12 @@ you published — re-running `find` or `build` mints a fresh id, slug, and `crea
 playlist rather than a replacement. A `publish` without `--replace` is never silently upgraded to a
 replace; an id the feed already holds fails with a conflict, as before.
 
-The configured `playlist.privateKey` is only the default. `-k, --key` overrides it on both commands —
-for the intent signature and for the local ownership check alike — the way `ff-cli sign --key` and
-`ff-cli status --key` already do. A `--key` that is
-present but empty (what `--key "$SIGNING_KEY"` becomes when the variable is unset) is **rejected**, never
+The configured `playlist.privateKey` is only the default. `-k, --key` and `--key-file <path>` override
+it on both commands — for the intent signature and for the local ownership check alike — the way
+`ff-cli sign` and `ff-cli status` already accept them. Passing both is an error rather than a precedence
+rule, since a precedence rule silently ignores one of the two keys you supplied. A `--key` that is
+present but empty (what `--key "$SIGNING_KEY"` becomes when the variable is unset), and a `--key-file`
+that is missing, unreadable, or holds nothing, are all **rejected**, never
 treated as absent: falling back to the configured key would authorize the write under an identity you did
 not choose, and a delete cannot be taken back. `unpublish` derives the identity before it looks the
 playlist up, so a bad credential fails before you are asked to confirm anything, and it prints
