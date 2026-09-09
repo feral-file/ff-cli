@@ -59,6 +59,22 @@ function makeKey(): TestKey {
   };
 }
 
+/**
+ * A key whose base64 contains `needle`.
+ *
+ * `/` appears in a 64-character base64 key more often than not, so this loop almost always returns on
+ * its first try — but the test that needs it must be deterministic, not usually-right.
+ */
+function makeKeyContaining(needle: string): TestKey {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const key = makeKey();
+    if (key.base64.includes(needle)) {
+      return key;
+    }
+  }
+  throw new Error(`could not generate a base64 key containing "${needle}"`);
+}
+
 /** A stored playlist owned by `owner`: declared in curators[] and signed as curator. */
 async function storedPlaylist(owner: TestKey): Promise<Record<string, unknown>> {
   const base = JSON.parse(readFileSync(fixturePath, 'utf-8')) as Record<string, unknown>;
@@ -776,4 +792,91 @@ describe('status refuses an explicit but empty key', () => {
       }
     });
   }
+});
+
+describe('a key with a directory prefix is still a key', () => {
+  // `--key-file "./$SIGNING_KEY"` is a real shell habit, and the prefix breaks every whole-value shape
+  // test: the `.` and `/` fail base64 and hex alike, and the `/` then reads as "this is a path". The
+  // key was one segment away the entire time.
+  const commands: Array<[string, string[]]> = [
+    ['sign', ['sign', 'playlist.json', '-r', 'curator', '-o', 'signed.json']],
+    ['status', ['status']],
+    ['unpublish', ['unpublish', 'PLAYLIST_ID', '-y']],
+    ['publish --replace', ['publish', 'playlist.json', '--replace']],
+    ['publish', ['publish', 'playlist.json']],
+  ];
+
+  /** Build the prefixed forms a key actually gets typed with. */
+  function prefixedForms(key: TestKey): Array<[string, string]> {
+    return [
+      ['./<base64>', `./${key.base64}`],
+      ['../<base64>', `../${key.base64}`],
+      ['/tmp/<hex64>', `/tmp/${key.seedHex}`],
+      ['./0x<hex64>', `./0x${key.seedHex}`],
+    ];
+  }
+
+  for (const [label, args] of commands) {
+    test(`${label}: a prefixed key is refused without printing it`, async () => {
+      const owner = makeKey();
+      const stored = await storedPlaylist(owner);
+      for (const [form, argument] of prefixedForms(owner)) {
+        const feed = await startFeed(stored);
+        const run = await runCli(
+          feed.baseUrl,
+          owner.base64,
+          args
+            .map((arg) => (arg === 'PLAYLIST_ID' ? String(stored.id) : arg))
+            .concat(['--key-file', argument]),
+          { 'playlist.json': `${JSON.stringify(stored, null, 2)}\n` }
+        );
+        try {
+          assert.notEqual(run.status, 0, `${form}: ${run.output}`);
+          assert.equal(feed.recorded.method, undefined, `${form}: nothing may be sent`);
+          assertNoKeyLeak(run.output, owner);
+        } finally {
+          run.cleanup();
+          feed.close();
+        }
+      }
+    });
+  }
+
+  test('a key whose own base64 contains a slash is not printed either', async () => {
+    // The segment test cannot catch this one: split on `/`, the key is two fragments and neither has
+    // the shape of a whole key. Length is what stops it — no key encoding is under 40 characters, so
+    // the message layer refuses to print an argument that long regardless of shape.
+    const owner = makeKeyContaining('/');
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, [
+      'status',
+      '--key-file',
+      `./${owner.base64}`,
+    ]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /not repeated here/);
+      assertNoKeyLeak(run.output, owner);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a long but ordinary path is described rather than printed', async () => {
+    // The length rule is blunt on purpose, and this is the cost: a genuinely long path is not echoed
+    // back. Named here so the trade-off is visible rather than discovered.
+    const owner = makeKey();
+    const longPath = `keys/${'nested/'.repeat(6)}owner.key`;
+    const feed = await startFeed(await storedPlaylist(owner));
+    const run = await runCli(feed.baseUrl, owner.base64, ['status', '--key-file', longPath]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /not repeated here/);
+      assert.equal(run.output.includes(longPath), false);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
 });
