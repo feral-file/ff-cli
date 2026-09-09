@@ -71,8 +71,14 @@ Three sources, in this order of precedence:
 
 1. **`-k, --key <privateKey>` or `--key-file <path>`** on the command line — `sign`, `status`,
    `unpublish`, and `publish --replace` all take both.
-2. **`PLAYLIST_PRIVATE_KEY`** in the environment or in `.env`.
-3. **`playlist.privateKey`** in `config.json`.
+2. **`playlist.privateKey`** in `config.json`.
+3. **`PLAYLIST_PRIVATE_KEY`** in the environment or in `.env`.
+
+The file beats the environment, matching the repo-wide `config.json` > `.env` > defaults rule — with
+one exception: a `playlist.privateKey` that is empty or still holds a `YOUR_`/`your_` sample
+placeholder is treated as **unset**, so `PLAYLIST_PRIVATE_KEY` is used instead. Without that, an
+untouched `config init` would beat a perfectly good environment key and every signing path would fail
+on a key you never chose.
 
 An explicit key wins for that one run only; nothing is written back. All three accept the same
 encodings listed above, and the CLI normalizes whichever you supply before signing, so a key file is a
