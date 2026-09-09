@@ -34,13 +34,13 @@ Flow:
 5) If requested, run:
    - send: `ff-cli play playlist.json` (or with `-d "Device Name"`)
    - if it fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), report the exact failing command and error and that the Art Computer is unreachable from this network — do not suggest tunnels, IP changes, or network debugging
-   - publish: `ff-cli publish playlist.json -s 0`. With more than one feed server configured the command prompts for one, and a prompt cannot be driven by an agent; always pass `-s <index>` (`ff-cli status` lists the servers in order). Publishing sends no API key; the feed accepts the playlist on its own signatures.
+   - publish: `ff-cli publish playlist.json -s <index>`. Run `ff-cli config show` first; it lists the feed servers with their 0-based index. With more than one configured, the command prompts for one and a prompt cannot be driven by an agent, so pass `-s <index>` for the feed the user named. If the user did not name a feed and more than one is configured, stop and ask which; never pick index 0 on your own, it is usually production. Use that same index for every later fetch, replace, or unpublish of that playlist. Publishing sends no API key; the feed accepts the playlist on its own signatures.
    - if both are requested: send first, then publish
 
 Changing or removing something already published (owner-bound: only the key that signed it as `curator` can do this):
-- `ff-cli fetch <id-or-url> -s 0 -o playlist.json` saves the stored document.
-- edit it, then `ff-cli sign playlist.json -r curator --replace-signatures` (plain `sign` appends and refuses on an edited document), then `ff-cli publish --replace playlist.json -s 0`.
-- `ff-cli unpublish <id-or-url> -s 0 -y` deletes it. Deletion is permanent; the id is tombstoned and cannot be reused.
+- `ff-cli fetch <id-or-url> -s <index> -o playlist.json` saves the stored document (same index the playlist was published to).
+- edit it, then `ff-cli sign playlist.json -r curator --replace-signatures` (plain `sign` appends and refuses on an edited document), then `ff-cli publish --replace playlist.json -s <index>`.
+- `ff-cli unpublish <id-or-url> -s <index> -y` deletes it. Deletion is permanent; the id is tombstoned and cannot be reused. Confirm the feed index with the user before deleting anything.
 - A refusal that says the playlist declares no owners, or that no key has proved ownership, is terminal: nothing can mutate that playlist. Publish a corrected one under a new id instead.
 
 If any step fails, do not hide it.
