@@ -142,20 +142,47 @@ async function runCli(
   args: string[],
   files: Record<string, string> = {}
 ): Promise<CliRun> {
-  const dir = mkdtempSync(join(tmpdir(), 'ff1-keyfile-'));
-  writeFileSync(
-    join(dir, 'config.json'),
-    `${JSON.stringify(
-      {
-        defaultDuration: 10,
-        playlist: { privateKey: configuredKey, role: 'curator', curatorName: 'Configured' },
-        feedServers: [{ baseUrl }],
-      },
-      null,
-      2
-    )}\n`,
-    'utf-8'
-  );
+  return runCliIn(mkdtempSync(join(tmpdir(), 'ff1-keyfile-')), baseUrl, configuredKey, args, files);
+}
+
+/**
+ * Run the CLI in a temp cwd with NO config file at all.
+ *
+ * `setup` is the one command that creates config state, so the question "did this run write
+ * anything?" can only be asked where nothing was there to begin with.
+ */
+async function runCliWithoutConfig(args: string[], files: Record<string, string> = {}) {
+  const dir = mkdtempSync(join(tmpdir(), 'ff1-keyfile-bare-'));
+  return runCliIn(dir, undefined, undefined, args, files);
+}
+
+/** Paths `ensureConfigFile()` can create: the local one, and the XDG one under this run's HOME. */
+function configPaths(dir: string): string[] {
+  return [join(dir, 'config.json'), join(dir, 'ff-cli', 'config.json')];
+}
+
+async function runCliIn(
+  dir: string,
+  baseUrl: string | undefined,
+  configuredKey: string | undefined,
+  args: string[],
+  files: Record<string, string> = {}
+): Promise<CliRun> {
+  if (baseUrl !== undefined && configuredKey !== undefined) {
+    writeFileSync(
+      join(dir, 'config.json'),
+      `${JSON.stringify(
+        {
+          defaultDuration: 10,
+          playlist: { privateKey: configuredKey, role: 'curator', curatorName: 'Configured' },
+          feedServers: [{ baseUrl }],
+        },
+        null,
+        2
+      )}\n`,
+      'utf-8'
+    );
+  }
   for (const [name, contents] of Object.entries(files)) {
     // Nested names are supported so a test can build a path whose DIRECTORIES carry a misleading
     // shape — `BEGIN/secrets/owner.key` is the one that used to be refused unopened.
@@ -1120,6 +1147,103 @@ describe('a real path is opened, whatever it looks like', () => {
     } finally {
       run.cleanup();
       feed.close();
+    }
+  });
+});
+
+describe('setup writes nothing until the credential is accepted', () => {
+  // ensureConfigFile() creates a sample config when none exists, and it used to run before the key
+  // was resolved. So a run that could never succeed — a missing key file, both flags at once, a key
+  // that does not parse — still left config state behind. On a machine being provisioned that is the
+  // difference between "nothing happened, fix the flag" and a half-configured host the next run has
+  // to reason about.
+  const deviceArgs = [
+    '--device-host',
+    'http://192.168.1.50:1111',
+    '--device-name',
+    'studio',
+    '--role',
+    'curator',
+  ];
+
+  const rejected: Array<[string, string[], Record<string, string>]> = [
+    ['a missing key file', ['--key-file', 'missing.key'], {}],
+    ['an unreadable key file', ['--key-file', 'keys'], { 'keys/placeholder': 'x' }],
+    ['an empty key file', ['--key-file', 'empty.key'], { 'empty.key': '   \n' }],
+    ['an invalid --key', ['--key', 'not-a-key-at-all'], {}],
+    ['an empty --key', ['--key', ''], {}],
+  ];
+
+  for (const [label, keyArgs, files] of rejected) {
+    test(`${label} leaves no config behind`, async () => {
+      const run = await runCliWithoutConfig(
+        ['setup', '--non-interactive', ...keyArgs, ...deviceArgs],
+        files
+      );
+      try {
+        assert.notEqual(run.status, 0, run.output);
+        for (const path of configPaths(run.dir)) {
+          assert.throws(
+            () => readFileSync(path, 'utf-8'),
+            `no config may exist at ${path} after a refused run: ${run.output}`
+          );
+        }
+      } finally {
+        run.cleanup();
+      }
+    });
+  }
+
+  test('both key flags leave no config behind', async () => {
+    const provisioned = makeKey();
+    const run = await runCliWithoutConfig(
+      [
+        'setup',
+        '--non-interactive',
+        '--key',
+        provisioned.base64,
+        '--key-file',
+        'provision.key',
+        ...deviceArgs,
+      ],
+      { 'provision.key': `${provisioned.base64}\n` }
+    );
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /--key and --key-file both name a signing key/);
+      for (const path of configPaths(run.dir)) {
+        assert.throws(() => readFileSync(path, 'utf-8'), `no config may exist at ${path}`);
+      }
+      assertNoKeyLeak(run.output, provisioned);
+    } finally {
+      run.cleanup();
+    }
+  });
+
+  test('an accepted key file still creates the config', async () => {
+    // Non-vacuity: the reorder must not have turned setup into a command that writes nothing.
+    const provisioned = makeKey();
+    const run = await runCliWithoutConfig(
+      ['setup', '--non-interactive', '--key-file', 'provision.key', ...deviceArgs],
+      { 'provision.key': `${provisioned.base64}\n` }
+    );
+    try {
+      assert.equal(run.status, 0, run.output);
+      const written = configPaths(run.dir)
+        .map((path) => {
+          try {
+            return JSON.parse(readFileSync(path, 'utf-8'));
+          } catch {
+            return null;
+          }
+        })
+        .find((config) => config !== null);
+      assert.ok(written, `setup must create a config: ${run.output}`);
+      assert.equal(written.playlist.privateKey, provisioned.base64);
+      assert.equal(written.playlist.role, 'curator');
+      assertNoKeyLeak(run.output, provisioned);
+    } finally {
+      run.cleanup();
     }
   });
 });

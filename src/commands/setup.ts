@@ -63,21 +63,13 @@ export const setupCommand = new Command('setup')
     // Lazily open the prompt so non-interactive runs never touch stdin.
     const getAsk = () => (prompt ??= createPrompt()).ask;
     try {
-      const { path: configPath, created } = await ensureConfigFile();
-      if (created) {
-        console.log(chalk.green(`Created ${configPath}`));
-      }
-
-      const config = await readConfigFile(configPath);
-
-      console.log(chalk.blue(`\nff-cli setup${nonInteractive ? ' (non-interactive)' : ''}\n`));
-
-      const currentKey = config.playlist?.privateKey || '';
-      const currentRole = config.playlist?.role || '';
-      let signingKey = currentKey;
-      let signingRole = currentRole;
-
-      // Resolve an explicit key from either flag, once, before anything is written.
+      // Resolve and validate an explicit key BEFORE anything touches disk.
+      //
+      // ensureConfigFile() writes a sample config when none exists, so resolving afterwards meant a
+      // run that could never succeed — a missing key file, an unreadable one, both flags at once, a
+      // key that does not parse — still left a config.json behind. On a machine being provisioned
+      // that is the difference between "nothing happened, fix the flag" and a half-configured host
+      // whose state the next run has to reason about.
       //
       // Provisioning is exactly where `--key` hurts most: an unattended run puts the key in the
       // process list of a machine nobody is watching, and in whatever shell or CI log recorded the
@@ -88,7 +80,6 @@ export const setupCommand = new Command('setup')
       // a question the operator has already answered, and answering it for them by ignoring the flag
       // is the quiet lie this CLI keeps removing.
       const explicitKey = resolveExplicitSigningKey(options);
-
       if (explicitKey !== undefined) {
         // Validate eagerly so a bad key fails here with a clear message rather
         // than later inside dp1-js during signing.
@@ -105,6 +96,24 @@ export const setupCommand = new Command('setup')
               'Expected base64 PKCS#8 DER, a 32-byte raw seed as hex/base64, or PEM.'
           );
         }
+      }
+
+      const { path: configPath, created } = await ensureConfigFile();
+      if (created) {
+        console.log(chalk.green(`Created ${configPath}`));
+      }
+
+      const config = await readConfigFile(configPath);
+
+      console.log(chalk.blue(`\nff-cli setup${nonInteractive ? ' (non-interactive)' : ''}\n`));
+
+      const currentKey = config.playlist?.privateKey || '';
+      const currentRole = config.playlist?.role || '';
+      let signingKey = currentKey;
+      let signingRole = currentRole;
+
+      // Already resolved and validated above, before any file was created.
+      if (explicitKey !== undefined) {
         signingKey = explicitKey.material;
       } else if (nonInteractive) {
         // Key precedence with no explicit key: --generate-key, then keep an
