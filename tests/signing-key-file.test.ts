@@ -880,3 +880,145 @@ describe('a key with a directory prefix is still a key', () => {
     }
   });
 });
+
+describe('setup --key-file', () => {
+  const deviceArgs = [
+    '--device-host',
+    'http://192.168.1.50:1111',
+    '--device-name',
+    'studio',
+    '--role',
+    'curator',
+  ];
+
+  test('provisions the same config --key would, without the key on the command line', async () => {
+    const provisioned = makeKey();
+    const configured = makeKey();
+
+    // One feed for both runs: setup never contacts it, but its URL lands in each config, so two
+    // loopback ports would make the two files differ for a reason that has nothing to do with keys.
+    const feed = await startFeed(await storedPlaylist(provisioned));
+    const viaFlag = await runCli(
+      feed.baseUrl,
+      configured.base64,
+      ['setup', '--non-interactive', '--key', provisioned.base64, ...deviceArgs],
+      {}
+    );
+    const viaFile = await runCli(
+      feed.baseUrl,
+      configured.base64,
+      ['setup', '--non-interactive', '--key-file', 'provision.key', ...deviceArgs],
+      { 'provision.key': `${provisioned.base64}\n` }
+    );
+
+    try {
+      assert.equal(viaFlag.status, 0, viaFlag.output);
+      assert.equal(viaFile.status, 0, viaFile.output);
+
+      const fromFlag = JSON.parse(readFileSync(join(viaFlag.dir, 'config.json'), 'utf-8'));
+      const fromFile = JSON.parse(readFileSync(join(viaFile.dir, 'config.json'), 'utf-8'));
+      assert.deepEqual(fromFile, fromFlag, 'the two flags must provision identically');
+      assert.equal(fromFile.playlist.privateKey, provisioned.base64);
+      assert.equal(fromFile.playlist.role, 'curator');
+
+      // The point of the flag: the key is in the file and the config, never in the output.
+      assertNoKeyLeak(viaFile.output, provisioned, configured);
+    } finally {
+      viaFlag.cleanup();
+      viaFile.cleanup();
+      feed.close();
+    }
+  });
+
+  test('refuses both flags and writes no key', async () => {
+    const provisioned = makeKey();
+    const configured = makeKey();
+    const feed = await startFeed(await storedPlaylist(provisioned));
+    const run = await runCli(
+      feed.baseUrl,
+      configured.base64,
+      [
+        'setup',
+        '--non-interactive',
+        '--key',
+        provisioned.base64,
+        '--key-file',
+        'provision.key',
+        ...deviceArgs,
+      ],
+      { 'provision.key': `${provisioned.base64}\n` }
+    );
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /--key and --key-file both name a signing key/);
+      const written = JSON.parse(readFileSync(join(run.dir, 'config.json'), 'utf-8'));
+      assert.equal(written.playlist.privateKey, configured.base64, 'config must be untouched');
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('refuses an empty key file rather than generating a new identity', async () => {
+    // The provisioning shape of the #122 class: falling through would give the machine a signing
+    // identity nobody chose, and the operator would not learn it from a successful "Setup complete".
+    const configured = makeKey();
+    const feed = await startFeed(await storedPlaylist(configured));
+    const run = await runCli(
+      feed.baseUrl,
+      configured.base64,
+      ['setup', '--non-interactive', '--key-file', 'provision.key', ...deviceArgs],
+      { 'provision.key': '   \n' }
+    );
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /holds no key material/);
+      const written = JSON.parse(readFileSync(join(run.dir, 'config.json'), 'utf-8'));
+      assert.equal(written.playlist.privateKey, configured.base64, 'config must be untouched');
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('refuses an empty --key rather than generating a new identity', async () => {
+    const configured = makeKey();
+    const feed = await startFeed(await storedPlaylist(configured));
+    const run = await runCli(feed.baseUrl, configured.base64, [
+      'setup',
+      '--non-interactive',
+      '--key',
+      '',
+      ...deviceArgs,
+    ]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assert.match(run.output, /Invalid --key/);
+      const written = JSON.parse(readFileSync(join(run.dir, 'config.json'), 'utf-8'));
+      assert.equal(written.playlist.privateKey, configured.base64, 'config must be untouched');
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('a key passed as the key-file path is refused without printing it', async () => {
+    const provisioned = makeKey();
+    const configured = makeKey();
+    const feed = await startFeed(await storedPlaylist(provisioned));
+    const run = await runCli(feed.baseUrl, configured.base64, [
+      'setup',
+      '--non-interactive',
+      '--key-file',
+      provisioned.base64,
+      ...deviceArgs,
+    ]);
+    try {
+      assert.notEqual(run.status, 0, run.output);
+      assertNoKeyLeak(run.output, provisioned, configured);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+});

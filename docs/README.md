@@ -19,6 +19,19 @@ npm i -g @feralfile/cli
 ff-cli setup
 ```
 
+Unattended provisioning takes the same flags without prompting. Pass an existing signing key with
+`--key-file <path>` rather than `--key`, which puts the key in the process list of a machine nobody is
+watching and in whatever shell or CI log recorded the command:
+
+```bash
+ff-cli setup --non-interactive --key-file /run/secrets/ff-signing.key \
+  --role curator --device-host http://192.168.1.50:1111 --device-name studio
+```
+
+`--key` and `--key-file` together is an error, and an empty or unreadable key file is refused rather
+than quietly generating a new identity for the machine. See
+[Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from).
+
 See the full configuration reference here: `./CONFIGURATION.md`.
 
 During setup, you can pick FF1 devices to add. Use `ff-cli device add` to add more devices later, and `ff-cli device list` to see what's configured. The first device is the default for `play` commands (override with `-d`).

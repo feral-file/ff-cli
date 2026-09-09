@@ -10,6 +10,7 @@ import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
 import { configuredFF1Devices } from '../utilities/config-placeholders';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
+import { resolveExplicitSigningKey } from '../utilities/signing-key-source';
 import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
@@ -18,6 +19,7 @@ import {
 interface SetupOptions {
   nonInteractive?: boolean;
   key?: string;
+  keyFile?: string;
   generateKey?: boolean;
   role?: string;
   deviceHost?: string;
@@ -39,6 +41,10 @@ export const setupCommand = new Command('setup')
   .option(
     '--key <privateKey>',
     'Signing key material (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM)'
+  )
+  .option(
+    '--key-file <path>',
+    'Read the signing key from this file instead of the command line (preferred for provisioning)'
   )
   .option('--generate-key', 'Generate a new Ed25519 signing key')
   .option('--role <role>', `Signing role (${DP1_PLAYLIST_SIGNING_ROLES.join(', ')})`)
@@ -71,22 +77,39 @@ export const setupCommand = new Command('setup')
       let signingKey = currentKey;
       let signingRole = currentRole;
 
-      if (nonInteractive) {
-        // Key precedence: explicit --key, then --generate-key, then keep an
+      // Resolve an explicit key from either flag, once, before anything is written.
+      //
+      // Provisioning is exactly where `--key` hurts most: an unattended run puts the key in the
+      // process list of a machine nobody is watching, and in whatever shell or CI log recorded the
+      // command. `--key-file` reads it from a file the provisioner already had to place.
+      //
+      // It is honoured on the interactive path too, not only under --non-interactive. A key on the
+      // command line is an instruction; prompting past it — "Keep existing signing key?" — would ask
+      // a question the operator has already answered, and answering it for them by ignoring the flag
+      // is the quiet lie this CLI keeps removing.
+      const explicitKey = resolveExplicitSigningKey(options);
+
+      if (explicitKey !== undefined) {
+        // Validate eagerly so a bad key fails here with a clear message rather
+        // than later inside dp1-js during signing.
+        //
+        // Presence, not truthiness: `--key ""` is what an unset shell variable expands to, and it
+        // used to fall through to "generate a new key" — provisioning a machine with an identity
+        // nobody chose, silently, which is the whole hazard this flag family exists around. It now
+        // fails the same validation any other unusable value does.
+        try {
+          parsePlaylistPrivateKeyToKeyObject(explicitKey.material);
+        } catch (error) {
+          throw new Error(
+            `Invalid ${explicitKey.flag}: ${(error as Error).message}. ` +
+              'Expected base64 PKCS#8 DER, a 32-byte raw seed as hex/base64, or PEM.'
+          );
+        }
+        signingKey = explicitKey.material;
+      } else if (nonInteractive) {
+        // Key precedence with no explicit key: --generate-key, then keep an
         // existing usable key, otherwise generate one so signing works.
-        if (options.key) {
-          // Validate eagerly so a bad key fails here with a clear message rather
-          // than later inside dp1-js during signing.
-          try {
-            parsePlaylistPrivateKeyToKeyObject(options.key);
-          } catch (error) {
-            throw new Error(
-              `Invalid --key: ${(error as Error).message}. ` +
-                'Expected base64 PKCS#8 DER, a 32-byte raw seed as hex/base64, or PEM.'
-            );
-          }
-          signingKey = options.key;
-        } else if (options.generateKey || isMissingConfigValue(currentKey)) {
+        if (options.generateKey || isMissingConfigValue(currentKey)) {
           signingKey = generateSigningKeyBase64();
           console.log(chalk.dim('Generated a new Ed25519 signing key.'));
         }
