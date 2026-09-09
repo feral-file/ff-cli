@@ -394,11 +394,12 @@ and nothing else. `enrich` is the repair path for those.
   a curator-restricted playlist is never briefly world-readable mid-write. The
   destination's owner and group are carried across too, since a replacement is
   a new inode and would otherwise take this process's ownership — silently
-  reassigning a shared playlist. The mode is applied again after that chown,
-  which clears set-user-ID and set-group-ID, and the result is verified against
-  the inode before any bytes are written. Where the ownership or the mode
-  cannot be reproduced, the in-place replacement is refused and `--output` is
-  offered instead. Access-control
+  reassigning a shared playlist. Two things clear set-user-ID and set-group-ID
+  — the chown, and an unprivileged write to a regular file — so the mode is
+  restored and verified against the inode after each of them, the second time
+  with nothing left before the rename that could change it. Where the ownership
+  or the mode cannot be reproduced, the in-place replacement is refused and
+  `--output` is offered instead. Access-control
   lists are not preserved: a replacement is a new inode, so its ACL comes from
   the directory's default rather than from the file being replaced, and mode
   bits cannot carry named entries across on any platform — a playlist whose

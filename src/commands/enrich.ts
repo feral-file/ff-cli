@@ -100,12 +100,13 @@ export async function writePlaylistAtomically(
   // What a replacement preserves, and what it cannot.
   //
   // Preserved: the permission mode — applied before the file holds anything,
-  // re-applied after the chown that would otherwise clear its set-user-ID and
-  // set-group-ID bits, and then verified against the inode — and the owner and
-  // group, where a failed chown refuses the replacement outright. Those are
-  // what decide access for a file whose permissions are described by mode bits
-  // alone, which is the common case. Where any of it cannot be reproduced the
-  // write is refused rather than completed with different access.
+  // then restored and verified against the inode after each of the two things
+  // that clear set-user-ID and set-group-ID, which are the chown and the write
+  // itself — and the owner and group, where a failed chown refuses the
+  // replacement outright. Those are what decide access for a file whose
+  // permissions are described by mode bits alone, which is the common case.
+  // Where any of it cannot be reproduced the write is refused rather than
+  // completed with different access.
   //
   // NOT preserved: access-control lists. A replacement is a new inode, and a
   // new inode's ACL comes from the directory's default ACL, not from the file
@@ -174,14 +175,8 @@ export async function writePlaylistAtomically(
         // must not survive changing hands, since it would then run as its new
         // owner. Correct in general, and wrong for this one case: the file is
         // not changing hands, it is being restored to the hands it was already
-        // in. So the mode is re-applied after the chown, not only before it.
-        //
-        // The chmod before the chown still has to happen: it is what keeps the
-        // enriched contents from being briefly world-readable, and this second
-        // one runs before any bytes are written too.
-        if (mode !== undefined) {
-          await handle.chmod(mode);
-        }
+        // in. The restore happens just below, in the same step that verifies
+        // it.
       }
 
       // Verify against the inode rather than trusting the calls above.
@@ -193,16 +188,25 @@ export async function writePlaylistAtomically(
       // original had — and the whole reason the ownership branch refuses is
       // that completing such a write silently is worse than not writing.
       //
-      // Checked before writeFile, so a refusal costs nothing already on disk.
-      if (mode !== undefined) {
-        const written = await handle.stat();
-        if ((written.mode & 0o7777) !== mode) {
-          await filesystem.rm(temporary, { force: true }).catch(() => undefined);
-          throw new OwnershipError(target, 'permissions');
-        }
-      }
+      // Checked here so a refusal costs nothing already on disk, and again
+      // after the write below, which can undo it.
+      await requirePreservedMode(handle, mode, temporary, target, filesystem);
 
       await handle.writeFile(contents);
+
+      // Write clears set-user-ID and set-group-ID too, for the same reason
+      // chown does: POSIX permits it on any write to a regular file by a
+      // process without appropriate privileges, and Linux does it. So the
+      // check above was necessary and not sufficient — a mode that passed it
+      // could still be renamed into place as 0o0750 where the original was
+      // 0o6750. Restore and verify once more, with nothing left that can
+      // change it: after this point the file is only synced and renamed.
+      //
+      // The earlier chmod still cannot move here. It is what keeps the
+      // enriched contents from being briefly world-readable, and that window
+      // opens the moment bytes exist.
+      await requirePreservedMode(handle, mode, temporary, target, filesystem);
+
       // rename() is atomic against concurrent readers but says nothing about
       // power loss: the directory entry can reach disk before the data it
       // points at. Without this a crash mid-write can leave the playlist
@@ -251,6 +255,50 @@ class OwnershipError extends Error {
   ) {
     super(`cannot preserve ${kind} of ${target}`);
     this.name = 'OwnershipError';
+  }
+}
+
+/**
+ * requirePreservedMode re-applies the destination's mode to the replacement and
+ * proves it took.
+ *
+ * Called twice, because two different operations clear set-user-ID and
+ * set-group-ID and both sit between the first chmod and the rename: chown does
+ * it, and so does an unprivileged write to a regular file. POSIX permits the
+ * clearing in both cases and Linux performs it, so a mode verified before the
+ * write can still reach the destination as something narrower.
+ *
+ * Verified against the inode rather than inferred from the calls, because a
+ * chmod can report success and still not take: restoring set-group-ID needs the
+ * caller to be in the file's group, and a filesystem may decline the bit
+ * outright. Every one of those endings is the same fact — this replacement
+ * would not carry the access the original had — and completing such a write
+ * silently is precisely what the ownership refusal exists to prevent.
+ *
+ * A destination that did not exist has no mode to preserve, so this is a no-op.
+ *
+ * @param handle - Open temporary file that will be renamed over the destination
+ * @param mode - Permission bits the destination carried, or undefined
+ * @param temporary - Path of the temporary file, removed on refusal
+ * @param target - Destination, named in the refusal
+ * @param filesystem - Filesystem in use
+ * @throws OwnershipError when the mode cannot be reproduced
+ */
+async function requirePreservedMode(
+  handle: AtomicWriteHandle,
+  mode: number | undefined,
+  temporary: string,
+  target: string,
+  filesystem: AtomicWriteFs
+): Promise<void> {
+  if (mode === undefined) {
+    return;
+  }
+  await handle.chmod(mode);
+  const written = await handle.stat();
+  if ((written.mode & 0o7777) !== mode) {
+    await filesystem.rm(temporary, { force: true }).catch(() => undefined);
+    throw new OwnershipError(target, 'permissions');
   }
 }
 

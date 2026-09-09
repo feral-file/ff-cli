@@ -63,6 +63,10 @@ function fakeFilesystem(sourceMode: number, chmodMask = 0o7777): FakeRun {
     },
     async writeFile() {
       run.calls.push('writeFile');
+      // POSIX permits a write to a regular file by an unprivileged process to
+      // clear set-user-ID and set-group-ID, and Linux does it. Same clearing as
+      // chown, at the other end of the sequence.
+      temporaryMode &= ~0o6000;
     },
     async sync() {
       run.calls.push('sync');
@@ -85,8 +89,17 @@ function fakeFilesystem(sourceMode: number, chmodMask = 0o7777): FakeRun {
     },
     async open(_path: string, flags: string, mode?: number) {
       if (flags === 'r') {
-        // syncDirectory; not part of the sequence under test.
-        return { ...handle, chmod: async () => {}, chown: async () => {} } as never;
+        // syncDirectory opening the containing directory. Deliberately records nothing: it happens
+        // after the rename and is best-effort, so letting it into the sequence would only make the
+        // assertion below describe something other than the permission dance it is about.
+        return {
+          chmod: async () => {},
+          chown: async () => {},
+          stat: async () => ({ mode: 0 }),
+          writeFile: async () => {},
+          sync: async () => {},
+          close: async () => {},
+        } as never;
       }
       temporaryMode = mode ?? 0;
       return handle as never;
@@ -125,19 +138,38 @@ describe('an atomic replacement restores the mode a chown clears', () => {
       );
 
       assert.equal(written, true);
-      // The first chmod precedes the chown — that one is the disclosure window — and a second follows
-      // it to put back what the chown cleared.
-      const permissionCalls = run.calls.filter((call) => !call.startsWith('stat'));
-      assert.deepEqual(permissionCalls.slice(0, 3), [
-        `chmod:${sourceMode.toString(8)}`,
+
+      // The whole sequence, in order. Two operations clear the setuid bits — the chown and the write
+      // — and each has to be followed by a restore and a check against the inode. The first chmod
+      // cannot move: it is what keeps the contents from being briefly world-readable, and that
+      // window opens the moment bytes exist.
+      const chmod = `chmod:${sourceMode.toString(8)}`;
+      assert.deepEqual(run.calls, [
+        chmod,
         'chown:4242:4243',
-        `chmod:${sourceMode.toString(8)}`,
+        chmod,
+        'stat',
+        'writeFile',
+        chmod,
+        'stat',
+        'sync',
+        'close',
+        'rename',
       ]);
-      // Nothing is written until the permissions are settled and verified.
+
+      // Said again as the two properties the order exists for, so a future reshuffle that keeps the
+      // sequence plausible but breaks the point fails on something legible.
       assert.ok(
         run.calls.indexOf('stat') < run.calls.indexOf('writeFile'),
-        `mode must be verified before any bytes: ${run.calls.join(', ')}`
+        `the mode must be verified before any bytes: ${run.calls.join(', ')}`
       );
+      const afterWrite = run.calls.slice(run.calls.indexOf('writeFile') + 1);
+      assert.deepEqual(
+        afterWrite.slice(0, 2),
+        [chmod, 'stat'],
+        `the write clears the bits too, so it must be followed by a restore and a check: ${afterWrite.join(', ')}`
+      );
+
       // And the mode that actually reached the destination is the source's, setuid bits included.
       assert.equal(run.renamedMode, sourceMode);
     }
