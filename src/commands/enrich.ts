@@ -28,6 +28,35 @@ interface EnrichOptions {
   verbose: boolean;
 }
 
+/** The open file the atomic write drives. Structural, so a real `FileHandle` satisfies it. */
+export interface AtomicWriteHandle {
+  chmod(mode: number): Promise<void>;
+  chown(uid: number, gid: number): Promise<void>;
+  stat(): Promise<{ mode: number }>;
+  writeFile(data: string): Promise<void>;
+  sync(): Promise<void>;
+  close(): Promise<void>;
+}
+
+/**
+ * The filesystem surface `writePlaylistAtomically` uses.
+ *
+ * Injected only so tests can reach the permission sequence. The interesting
+ * case — a chown that SUCCEEDS and clears the set-user-ID and set-group-ID
+ * bits — cannot be produced on a real filesystem without root, and a test that
+ * needs root is a test that does not run. Everything else in this file still
+ * goes through the real `fs`.
+ */
+export interface AtomicWriteFs {
+  lstat(path: string): Promise<{ isSymbolicLink(): boolean }>;
+  realpath(path: string): Promise<string>;
+  stat(path: string): Promise<{ mode: number; uid: number; gid: number }>;
+  open(path: string, flags: string, mode?: number): Promise<AtomicWriteHandle>;
+  rm(path: string, options: { force: boolean }): Promise<void>;
+  readFile(path: string): Promise<Buffer>;
+  rename(from: string, to: string): Promise<void>;
+}
+
 /**
  * writePlaylistAtomically replaces a file only once the new bytes are safely on
  * disk.
@@ -51,15 +80,16 @@ interface EnrichOptions {
 export async function writePlaylistAtomically(
   destination: string,
   contents: string,
-  expectedDigest?: string
+  expectedDigest?: string,
+  filesystem: AtomicWriteFs = fs
 ): Promise<boolean> {
   // Follow a symlink to its target before replacing anything. rename() would
   // replace the link itself, silently detaching a playlist that other paths
   // reach through that name while reporting success.
   let target = destination;
-  const existing = await fs.lstat(destination).catch(() => null);
+  const existing = await filesystem.lstat(destination).catch(() => null);
   if (existing?.isSymbolicLink()) {
-    target = await fs.realpath(destination);
+    target = await filesystem.realpath(destination);
   }
 
   const temporary = join(
@@ -69,10 +99,13 @@ export async function writePlaylistAtomically(
 
   // What a replacement preserves, and what it cannot.
   //
-  // Preserved: the permission mode (below and again after open), and the owner
-  // and group (further down, where a failed chown refuses the replacement
-  // outright). Those are what decide access for a file whose permissions are
-  // described by mode bits alone, which is the common case.
+  // Preserved: the permission mode — applied before the file holds anything,
+  // re-applied after the chown that would otherwise clear its set-user-ID and
+  // set-group-ID bits, and then verified against the inode — and the owner and
+  // group, where a failed chown refuses the replacement outright. Those are
+  // what decide access for a file whose permissions are described by mode bits
+  // alone, which is the common case. Where any of it cannot be reproduced the
+  // write is refused rather than completed with different access.
   //
   // NOT preserved: access-control lists. A replacement is a new inode, and a
   // new inode's ACL comes from the directory's default ACL, not from the file
@@ -97,17 +130,19 @@ export async function writePlaylistAtomically(
   // chmod'ing afterwards leaves the enriched playlist readable by other local
   // users for the length of the write — short, but a disclosure window on a
   // file the curator deliberately restricted.
-  const current = await fs.stat(target).catch(() => null);
+  const current = await filesystem.stat(target).catch(() => null);
   const mode = current ? current.mode & 0o7777 : undefined;
 
   try {
     // 'wx' fails rather than truncating if the name somehow exists, so a
     // collision can never destroy another process's work in progress.
-    const handle = await fs.open(temporary, 'wx', mode);
+    const handle = await filesystem.open(temporary, 'wx', mode);
     try {
       // open() applies the mode through umask, which can strip bits the
       // destination had. chmod is not subject to umask, so this restores the
-      // exact mode — still before any bytes are written.
+      // exact mode — still before any bytes are written. It runs here, before
+      // the chown below, so the disclosure window stays closed even though
+      // chown will undo part of it.
       if (mode !== undefined) {
         await handle.chmod(mode);
       }
@@ -130,10 +165,43 @@ export async function writePlaylistAtomically(
         try {
           await handle.chown(current.uid, current.gid);
         } catch {
-          await fs.rm(temporary, { force: true }).catch(() => undefined);
-          throw new OwnershipError(target);
+          await filesystem.rm(temporary, { force: true }).catch(() => undefined);
+          throw new OwnershipError(target, 'ownership');
+        }
+        // chown clears set-user-ID and set-group-ID. POSIX requires it of any
+        // chown by a process without appropriate privileges, and Linux does it
+        // for an executable regardless — the whole point is that a setuid file
+        // must not survive changing hands, since it would then run as its new
+        // owner. Correct in general, and wrong for this one case: the file is
+        // not changing hands, it is being restored to the hands it was already
+        // in. So the mode is re-applied after the chown, not only before it.
+        //
+        // The chmod before the chown still has to happen: it is what keeps the
+        // enriched contents from being briefly world-readable, and this second
+        // one runs before any bytes are written too.
+        if (mode !== undefined) {
+          await handle.chmod(mode);
         }
       }
+
+      // Verify against the inode rather than trusting the calls above.
+      //
+      // Both chmod calls can report success and still leave a different mode:
+      // restoring set-group-ID needs the caller to be in the file's group, and
+      // a filesystem may decline the bit outright. Every one of those endings
+      // is the same fact — this replacement would not carry the access the
+      // original had — and the whole reason the ownership branch refuses is
+      // that completing such a write silently is worse than not writing.
+      //
+      // Checked before writeFile, so a refusal costs nothing already on disk.
+      if (mode !== undefined) {
+        const written = await handle.stat();
+        if ((written.mode & 0o7777) !== mode) {
+          await filesystem.rm(temporary, { force: true }).catch(() => undefined);
+          throw new OwnershipError(target, 'permissions');
+        }
+      }
+
       await handle.writeFile(contents);
       // rename() is atomic against concurrent readers but says nothing about
       // power loss: the directory entry can reach disk before the data it
@@ -155,18 +223,18 @@ export async function writePlaylistAtomically(
     // out entirely, which is the safe path when a file is being actively
     // edited.
     if (expectedDigest !== undefined) {
-      const current = await fs.readFile(target).catch(() => null);
+      const current = await filesystem.readFile(target).catch(() => null);
       const digest = current && createHash('sha256').update(current).digest('hex');
       if (digest !== expectedDigest) {
-        await fs.rm(temporary, { force: true }).catch(() => undefined);
+        await filesystem.rm(temporary, { force: true }).catch(() => undefined);
         return false;
       }
     }
-    await fs.rename(temporary, target);
-    await syncDirectory(dirname(target));
+    await filesystem.rename(temporary, target);
+    await syncDirectory(dirname(target), filesystem);
     return true;
   } catch (error) {
-    await fs.rm(temporary, { force: true }).catch(() => undefined);
+    await filesystem.rm(temporary, { force: true }).catch(() => undefined);
     throw error;
   }
 }
@@ -177,8 +245,11 @@ export async function writePlaylistAtomically(
  * bare errno.
  */
 class OwnershipError extends Error {
-  constructor(readonly target: string) {
-    super(`cannot preserve ownership of ${target}`);
+  constructor(
+    readonly target: string,
+    readonly kind: 'ownership' | 'permissions' = 'ownership'
+  ) {
+    super(`cannot preserve ${kind} of ${target}`);
     this.name = 'OwnershipError';
   }
 }
@@ -192,9 +263,9 @@ class OwnershipError extends Error {
  * the rename, so the worst case here is the old name surviving a crash, not a
  * corrupt file.
  */
-async function syncDirectory(directory: string): Promise<void> {
+async function syncDirectory(directory: string, filesystem: AtomicWriteFs): Promise<void> {
   try {
-    const handle = await fs.open(directory, 'r');
+    const handle = await filesystem.open(directory, 'r');
     try {
       await handle.sync();
     } finally {
@@ -387,10 +458,21 @@ export const enrichCommand = new Command('enrich')
       console.log();
     } catch (error) {
       if (error instanceof OwnershipError) {
-        console.error(chalk.red('\nThat playlist belongs to another user or group.'));
+        // Two endings, one remedy. Say which one it was: "belongs to another user" sends someone to
+        // check ownership, and that is the wrong place to look when the ownership carried across fine
+        // and a set-group-ID bit is what could not be reproduced.
+        console.error(
+          chalk.red(
+            error.kind === 'ownership'
+              ? '\nThat playlist belongs to another user or group.'
+              : '\nThat playlist has permissions this replacement cannot reproduce.'
+          )
+        );
         console.error(
           chalk.dim(
-            `  Replacing it in place would hand it to you and could lock others out,\n` +
+            (error.kind === 'ownership'
+              ? `  Replacing it in place would hand it to you and could lock others out,\n`
+              : `  Replacing it in place would give it access the original did not have,\n`) +
               `  so nothing was written. Write elsewhere instead:\n` +
               `    ff-cli enrich ${error.target} -o enriched.json\n`
           )
