@@ -747,6 +747,21 @@ describe('decideActions', () => {
     const actions = await decideActions({ yes: true, publish: true });
     assert.deepEqual(actions, ['publish']);
   });
+
+  test('--yes --no-play → [] (opt-out of the -y default Play)', async () => {
+    const actions = await decideActions({ yes: true, play: false });
+    assert.deepEqual(actions, []);
+  });
+
+  test('--no-play alone → [] (no cast and no prompt, without --yes)', async () => {
+    const actions = await decideActions({ play: false });
+    assert.deepEqual(actions, []);
+  });
+
+  test('--no-play --publish → [publish] (publish still runs)', async () => {
+    const actions = await decideActions({ play: false, publish: true });
+    assert.deepEqual(actions, ['publish']);
+  });
 });
 
 /**
