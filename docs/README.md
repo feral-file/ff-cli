@@ -122,7 +122,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
-  - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes`, `--skip-verify`
+  - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `--no-play` (never cast; combine with `-y` to build and save without playing), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it plays the playlist on a device, so add `--no-play` to skip casting), `--skip-verify`
 - `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`

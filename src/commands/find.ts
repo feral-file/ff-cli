@@ -87,12 +87,13 @@ export const findCommand = new Command('find')
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
   .option('-p, --play', 'Play the playlist on an FF1 device after building')
+  .option('--no-play', 'Never cast to a device; combine with -y to build and save without playing')
   .option('-d, --device <name>', 'Device to play on (used with --play; default: first configured)')
   .option('--publish', 'Publish the playlist to a configured feed server')
   .option('-s, --server <index>', 'Feed server index (used with --publish)')
   .option(
     '-y, --yes',
-    'Skip interactive prompts; defaults to Play unless --output or --publish is set'
+    'Skip interactive prompts. Without --output or --publish, -y plays the playlist on a device; add --no-play to skip casting'
   )
   .option(
     '--skip-verify',
@@ -624,9 +625,16 @@ async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boo
  * Precedence: explicit flags (--play / --publish) win and may combine. If no
  * flag is set, fall back to --yes default (Play) or an interactive 3-way
  * prompt. Save is unconditional and already done before this is called.
+ *
+ * `--no-play` (commander sets `play === false`) is an opt-out that removes
+ * casting from every path, including the `--yes` default and the interactive
+ * prompt. It is additive: `--yes` alone keeps its deliberate "max-satisfaction
+ * default for scripted use" of Play, and this must not change that. Because
+ * `--no-play` already states the user's intent, it never opens the prompt.
  */
 export async function decideActions(options: FindOptions): Promise<PostBuildAction[]> {
   const flagActions: PostBuildAction[] = [];
+  const noPlay = options.play === false;
   if (options.play) {
     flagActions.push('play');
   }
@@ -637,7 +645,8 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
     return flagActions;
   }
   // --output alone (with or without --yes) means "save mode" — the save was the action.
-  if (options.output) {
+  // --no-play likewise means the save was the action; never prompt or default to Play.
+  if (options.output || noPlay) {
     return [];
   }
   // --yes without --output defaults to Play (max-satisfaction default for scripted use).

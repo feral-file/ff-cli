@@ -64,6 +64,9 @@ npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --publish
 
 # Build, play on a named device, and skip interactive prompts
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play -d "Living Room Display" -y
+
+# -y alone also plays (the scripted default); add --no-play to build and save without casting
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -y --no-play
 ```
 
 OpenSea and Verse accept both item and collection/series URLs:
