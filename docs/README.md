@@ -277,7 +277,7 @@ npm run dev -- play playlist.json --skip-verify
 An explicitly enrolled development FFOS image supports persistent owner SSH on
 port 2222 through Tailscale. It requires the owner's authorized computer and SSH
 key and remains available independently of controld. This pilot is not released
-or hardware-validated. Follow the [owner-access procedure](https://github.com/feral-file/ffos/blob/7353e43a7a29273aaffd1ea1e221cdac3d41bc7b/docs/OWNER_TAILSCALE.md)
+or hardware-validated. Follow the [owner-access procedure](https://github.com/feral-file/ffos/blob/f24ba771043ba2b5eb8c4edb51f7241df7c36d06/docs/OWNER_TAILSCALE.md)
 for enrollment, diagnostics, revocation and validation. The normal `ff-cli ssh`
 commands below continue to manage temporary support SSH on port 22; disabling
 support SSH does not revoke persistent owner access.

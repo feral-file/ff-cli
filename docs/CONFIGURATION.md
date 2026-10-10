@@ -267,7 +267,7 @@ address with the **same physical `--id` and existing `--name`**. Save its old
 host first. This updates that device in place, preserving its list position,
 API key and ID; relayer credentials remain in the vault under the same ID.
 The configured host is replaced, with no automatic LAN/Tailscale failover.
-See the [development-image owner-access procedure](https://github.com/feral-file/ffos/blob/7353e43a7a29273aaffd1ea1e221cdac3d41bc7b/docs/OWNER_TAILSCALE.md).
+See the [development-image owner-access procedure](https://github.com/feral-file/ffos/blob/f24ba771043ba2b5eb8c4edb51f7241df7c36d06/docs/OWNER_TAILSCALE.md).
 
 Selection rules when sending:
 
