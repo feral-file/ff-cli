@@ -272,12 +272,13 @@ npm run dev -- play "https://example.com/video.mp4"
 npm run dev -- play playlist.json --skip-verify
 ```
 
-### Owner remote-maintenance pilot
+### Owner remote maintenance
 
-An explicitly enrolled development FFOS image supports persistent owner SSH on
+FFOS images containing `feral-tailscale` support opt-in persistent owner SSH on
 port 2222 through Tailscale. It requires the owner's authorized computer and SSH
-key and remains available independently of controld. This pilot is not released
-or hardware-validated. Follow the [owner-access procedure](https://github.com/feral-file/ffos/blob/f24ba771043ba2b5eb8c4edb51f7241df7c36d06/docs/OWNER_TAILSCALE.md)
+key and remains available independently of controld. Check for the helper on
+the FF1; if absent, use the normal firmware release channel to obtain a version
+that includes it. Follow the [owner-access procedure](https://github.com/feral-file/ffos/blob/23a4d04c5c1a6f1f81767cf559c8cdfa1611d51c/docs/OWNER_TAILSCALE.md)
 for enrollment, diagnostics, revocation and validation. The normal `ff-cli ssh`
 commands below continue to manage temporary support SSH on port 22; disabling
 support SSH does not revoke persistent owner access.
