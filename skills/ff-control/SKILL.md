@@ -34,7 +34,7 @@ Flow:
 4) `ff-cli validate playlist.json`
 5) If requested, run:
    - send: `ff-cli play playlist.json` (or with `-d "Device Name"`)
-   - if it fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), report the exact failing command and error and that the Art Computer is unreachable from this network — do not suggest tunnels, IP changes, or network debugging
+   - if it fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), report the exact failing command and error and that the Art Computer is unreachable from this network. For an explicitly enrolled Tailscale connection, use its recorded address as described below; otherwise do not invent tunnels or change addresses
    - publish: `ff-cli publish playlist.json -s <index>`. Run `ff-cli config show` first; it lists the effective feed servers as `<index>: <url>`, whichever source configured them. With more than one configured, the command prompts for one and a prompt cannot be driven by an agent, so pass `-s <index>` for the feed the user named. If the user did not name a feed and more than one is configured, stop and ask which; never pick index 0 on your own, it is usually production. Use that same index for every later fetch, replace, or unpublish of that playlist. Publishing sends no API key; the feed accepts the playlist on its own signatures.
    - if both are requested: send first, then publish
 
@@ -52,3 +52,12 @@ Keep output short and concrete:
 - what succeeded
 - what failed (with code)
 - what to run next
+
+Owner remote maintenance (only when requested):
+- Requires an FFOS image with `feral-tailscale` and explicit owner enrollment. Follow the procedure’s installation checks; finding the helper alone does not prove the image is complete. If support is absent, report that enrollment needs a full firmware release containing it. Check release availability; if no release includes it yet, enrollment must wait. Do not switch firmware channels as part of enrollment. Read the [owner-access procedure](https://github.com/feral-file/ffos/blob/36e25cec84505271a7232d6936bb46a19fab5cfd/docs/OWNER_TAILSCALE.md) before enrollment or revocation.
+- The computer running this agent must itself be on the owner's tailnet. Tailscale on their phone does not connect a cloud agent. Use the recorded FF1 Tailscale **IPv4** address; remote mDNS discovery does not work.
+- Preserve the existing device name and physical ID when changing its host: `ff-cli device add --host http://<ff1-tailscale-ipv4>:1111 --name "<existing-name>" --id <physical-FF1-ID>`. Record the old host first. This replaces the configured address, without automatic LAN/Tailscale failover.
+- `ff-cli status` reports local configuration, not device health. Read `/api/status` on that explicit host for live status. Logs use `ssh -p 2222 -i <owner-private-key-file> feralfile@<ff1-tailscale-ipv4> 'journalctl --user -u feral-controld -n 80 --no-pager'`. Verify the SSH host fingerprint against the device's known LAN host key; never disable checking.
+- Owner SSH is persistent and independent of controld. An authorized repair can use that shell to run `systemctl --user restart feral-controld.service`. Follow the user's requested maintenance scope; pairing approvals remain the owner's action.
+- `ff-cli ssh enable --ttl …` and `ff-cli ssh disable` manage temporary support SSH on port 22. They neither establish nor revoke the owner's persistent grant on port 2222. Revoke that grant with `sudo feral-tailscale disconnect` on the FF1; it closes the remote session. Do not enroll another computer or replace the owner's key merely to work around denied access.
+- Only when the user explicitly requests a factory reset, run `sudo systemctl start --no-block set-factory-boot.service` on the FF1. Reset continues in that service when revocation closes owner SSH; successful dispatch does not prove reset completed. After reset, owner enrollment requires local access again.

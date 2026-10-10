@@ -262,6 +262,13 @@ You can also manage devices independently with:
 
 Setup and `device add` both preserve existing devices. Adding a device with the same host as an existing one updates it in place.
 
+For an explicitly enrolled owner Tailscale connection, use the FF1's Tailscale IPv4
+address with the **same physical `--id` and existing `--name`**. Save its old
+host first. This updates that device in place, preserving its list position,
+API key and ID; relayer credentials remain in the vault under the same ID.
+The configured host is replaced, with no automatic LAN/Tailscale failover.
+See the [owner-access procedure](https://github.com/feral-file/ffos/blob/36e25cec84505271a7232d6936bb46a19fab5cfd/docs/OWNER_TAILSCALE.md).
+
 Selection rules when sending:
 
 - If you omit `-d`, the first configured device is used.
