@@ -55,6 +55,7 @@ export async function sendPlaylistViaRelayer(input: {
       success: false,
       error: 'FF1 rejected the relayer display command',
       details: JSON.stringify(result.response),
+      response: result.response,
     };
   }
   return result;

@@ -287,13 +287,23 @@ async function attemptLan(
   };
 }
 
-/** retryableReply reports whether an encrypted reply code may be retried. */
+/**
+ * retryableReply reports whether an encrypted reply may be retried with a new
+ * request: `internal_error` (§4.3: not executed, retry with a new ctr),
+ * `rate_limited`, and a `command_failed` whose handler body is the router's
+ * storm protection (`res.error == "rate_limited"`), which the plaintext path
+ * sees as HTTP 429 and already retries.
+ */
 function retryableReply(outcome: SecureOutcome): boolean {
-  return (
-    outcome.kind === 'reply' &&
-    !outcome.reply.ok &&
-    (outcome.reply.code === 'internal_error' || outcome.reply.code === 'rate_limited')
-  );
+  if (outcome.kind !== 'reply' || outcome.reply.ok) {
+    return false;
+  }
+  const code = outcome.reply.code;
+  if (code === 'internal_error' || code === 'rate_limited') {
+    return true;
+  }
+  const res = outcome.reply.res as { error?: unknown } | undefined;
+  return code === 'command_failed' && res?.error === 'rate_limited';
 }
 
 /**
@@ -475,10 +485,13 @@ export function outcomeToResult(outcome: SecureOutcome, device: FF1Device): Secu
     };
   }
   if (code === 'command_failed' && outcome.kind === 'reply') {
+    // §4.3: res is the handler's error body, {ok:false,error,command,message}
+    // for routed commands and {error:<reason>} for the owner commands.
+    const res = outcome.reply.res as { message?: unknown } | undefined;
     return {
       success: false,
       error: `Device "${label}" rejected the command`,
-      details: JSON.stringify(outcome.reply.res ?? {}),
+      details: typeof res?.message === 'string' ? res.message : JSON.stringify(res ?? {}),
       transport: outcome.transport,
       code,
     };

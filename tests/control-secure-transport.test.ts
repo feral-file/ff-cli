@@ -369,7 +369,16 @@ describe('secure displayPlaylist', () => {
     enrolledRecord('controller');
     const device = fakeDevice((claims) =>
       claims.cmd === 'displayPlaylist'
-        ? { ok: false, code: 'command_failed', res: { ok: false, error: 'sourceUnreachable' } }
+        ? {
+            ok: false,
+            code: 'command_failed',
+            res: {
+              ok: false,
+              error: 'sourceUnreachable',
+              command: 'displayPlaylist',
+              message: 'sourceUnreachable: no playlist item source is loadable',
+            },
+          }
         : { ok: true, res: {} }
     );
     const result = await sendPlaylistToDevice(
@@ -417,6 +426,35 @@ describe('legacy path against a secured FF1', () => {
     assert.match(result.error!, /secured/);
     assert.match(result.details!, /ff-cli device pair Office/);
     assert.deepEqual(casts, ['getDeviceStatus']);
+  });
+
+  test('a relayer plaintext denial maps to pairing guidance', async () => {
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn: async (input) => {
+          if (new URL(input.toString()).origin === HOST) {
+            throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+          }
+          // ff1-control-v1 §4.4: the flat shape released clients read as a failure.
+          return json(200, {
+            message: {
+              ok: false,
+              error: 'envelope_required',
+              command: 'displayPlaylist',
+              message: 'this FF1 requires a signed control envelope',
+            },
+          });
+        },
+        getTopicIdFn: () => 'topic-secret',
+        controllerStore: { dir: storeDir },
+        waitFn: async () => undefined,
+        noticeFn: () => undefined,
+      }
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.transport, 'relayer');
+    assert.match(result.details!, /ff-cli device pair Office/);
   });
 
   test('old firmware keeps the plaintext cast unchanged', async () => {

@@ -11,11 +11,7 @@ import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-co
 import { sendPlaylistViaRelayer } from './ff1-relayer';
 import { getTopicId } from './topic-store';
 import type { ControllerStoreOptions, ControllerRecord } from './control/controller-store';
-import {
-  findEnvelopeAnswer,
-  findSecureController,
-  runSecureCommand,
-} from './control/secure-transport';
+import { findSecureController, runSecureCommand } from './control/secure-transport';
 import { describeControlCode } from './control/control-errors';
 import { isTransientDeviceNetworkError, parseRetryAfterMs } from './device-network';
 
@@ -504,6 +500,31 @@ function publicControlCode(status: number, body: string): string | undefined {
 }
 
 /**
+ * plaintextRefusalCode finds a control-protocol refusal in a relayer reply:
+ * the flat plaintext denial `{ok:false,error:"<code>",command,message}` or the
+ * public-error shape `{error:{code}}`, at any of the relayer's nesting levels.
+ *
+ * @param response - Parsed relayer response
+ * @returns A §4.4 code, or undefined
+ */
+function plaintextRefusalCode(response: unknown): string | undefined {
+  let current: unknown = response;
+  for (let depth = 0; depth < 3 && current && typeof current === 'object'; depth += 1) {
+    const record = current as Record<string, unknown>;
+    const error = record.error as unknown;
+    const code =
+      record.ok === false && typeof error === 'string'
+        ? error
+        : (error as { code?: unknown } | undefined)?.code;
+    if (typeof code === 'string' && PUBLIC_CONTROL_CODES.has(code)) {
+      return code;
+    }
+    current = record.message;
+  }
+  return undefined;
+}
+
+/**
  * Fall back to the relayer only after LAN reachability is exhausted.
  *
  * Topic lookup is keyed by the stable physical device ID and happens only at
@@ -559,6 +580,14 @@ async function fallbackToRelayer(input: {
     playlist: input.playlist,
     fetchFn: input.dependencies.fetchFn,
   });
+  // A secured FF1 refuses a plaintext relayer cast it will not run
+  // (ff1-control-v1 §4.4/§7.2) with a flat `{ok:false,error:"<code>"}` RPC
+  // message; map it to pairing guidance instead of a bare rejection.
+  const refusal = plaintextRefusalCode(result.response);
+  if (refusal) {
+    const failure = describeControlCode(refusal, input.device.name ?? input.device.id);
+    return { success: false, error: failure.error, details: failure.details, transport: 'relayer' };
+  }
   if (!result.success) {
     return {
       success: false,
@@ -566,13 +595,6 @@ async function fallbackToRelayer(input: {
       details: result.details,
       transport: 'relayer',
     };
-  }
-  // An enrolled or enforced FF1 answers a plaintext relayer cast it will not
-  // run with a public error as the RPC message (ff1-control-v1 §4.4/§7.2).
-  const refusal = findEnvelopeAnswer(result.response)?.code;
-  if (refusal && PUBLIC_CONTROL_CODES.has(refusal)) {
-    const failure = describeControlCode(refusal, input.device.name ?? input.device.id);
-    return { success: false, error: failure.error, details: failure.details, transport: 'relayer' };
   }
   return {
     success: true,

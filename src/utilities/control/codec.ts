@@ -47,6 +47,12 @@ import {
 export const MAX_COMPACT_BYTES = 4 * 1024 * 1024;
 /** MAX_HEADER_BYTES bounds the base64url protected-header segment (§3.1). */
 export const MAX_HEADER_BYTES = 4 * 1024;
+/**
+ * MAX_ENVELOPE_COMPACT_BYTES is what ff-cli lets a request grow to: the LAN
+ * hub caps the whole cast BODY at 4 MiB (§10), so the compact leaves room for
+ * the `{"command":"ff1Envelope","request":{"v":1,"jwe":…}}` wrapper.
+ */
+export const MAX_ENVELOPE_COMPACT_BYTES = MAX_COMPACT_BYTES - 1024;
 /** DEFAULT_REQUEST_LIFETIME_SECONDS is exp - iat; the spec allows [1, 120]. */
 export const DEFAULT_REQUEST_LIFETIME_SECONDS = 60;
 
@@ -440,9 +446,9 @@ export async function sealRequest(input: RequestInput): Promise<SealedRequest> {
     ephemeralKey: input.ephemeralKey,
     iv: input.iv,
   });
-  if (compact.length > MAX_COMPACT_BYTES) {
+  if (compact.length > MAX_ENVELOPE_COMPACT_BYTES) {
     throw new Error(
-      `the encrypted request is ${compact.length} bytes, over the FF1 limit of ${MAX_COMPACT_BYTES}; host large playlists by URL instead`
+      `the encrypted request is ${compact.length} bytes, over the FF1 limit of ${MAX_ENVELOPE_COMPACT_BYTES}; host large playlists by URL instead`
     );
   }
   return { compact, jws, claims, rk };
