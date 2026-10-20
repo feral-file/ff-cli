@@ -326,6 +326,7 @@ Compatibility checks:
 
 - If the CLI cannot get a version from the device (e.g. network or malformed response), it continues and sends the command.
 - If the detected version is below the minimum, the command fails early with an error that includes the detected version.
+- `ssh` sends the relayer topic stored by `ff-cli device pair` (OS keyring) in the `X-FF1-Topic` header. A claimed FF1 on newer FF OS rejects `sshAccess` without it (HTTP 401 `topic_required`), so run `ff-cli device pair <name>` before `ff-cli ssh`. With no stored topic the request is sent without the header, which unclaimed devices and older FF OS accept.
 
 Troubleshooting note:
 

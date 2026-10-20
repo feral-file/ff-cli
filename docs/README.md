@@ -295,6 +295,11 @@ ff-cli ssh disable -d "Living Room Display"
 # `ff-cli ssh` also performs the same FF1 OS compatibility preflight used by `play`.
 ```
 
+On newer FF OS, a claimed FF1 only accepts `ff-cli ssh` from a paired CLI: run
+`ff-cli device pair "Living Room Display"` once (choose "Pair with ff-cli" in the
+Feral File app) before `ff-cli ssh enable|disable`. Unclaimed devices and older
+FF OS do not require pairing.
+
 ### Publish to feed server
 
 ```bash
