@@ -1,0 +1,131 @@
+{
+  "v": 1,
+  "now": 1767225600,
+  "device": {
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "sig": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "5jpANW8lLoNYtEBXDv2jPgpWd26B0qqVN2zZwUAfw64",
+      "y": "DT4WvFtjCo0h6XHTGMG7cmPVBYFqYFN3OYlIbUREyQg",
+      "d": "3-mBEmzOWqlhVtDkSKYZIn7A-oIGhKimFhqYE9ixRIs"
+    },
+    "enc": {
+      "kty": "EC",
+      "crv": "P-256",
+      "x": "m_DDu8fTpmS9lGeEuKDUpSXiFQCwMEXEOtlqtFxn_b0",
+      "y": "T-W2r4vBsiYSbwb7_C48ZPvr9yQufQZAvWQXsMpHGCU",
+      "d": "PF9oRObERnsBCVMPFSg1BZtHtYGNCAvLRuvZejlOXR0"
+    },
+    "profile": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "sig": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "5jpANW8lLoNYtEBXDv2jPgpWd26B0qqVN2zZwUAfw64",
+        "y": "DT4WvFtjCo0h6XHTGMG7cmPVBYFqYFN3OYlIbUREyQg"
+      },
+      "enc": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "m_DDu8fTpmS9lGeEuKDUpSXiFQCwMEXEOtlqtFxn_b0",
+        "y": "T-W2r4vBsiYSbwb7_C48ZPvr9yQufQZAvWQXsMpHGCU"
+      }
+    },
+    "pins": {
+      "sig": "4kR-0SaJ9WxyLa8eyy-vcSQdKAXWNBwyTjrPb2NynnM",
+      "enc": "zcvu9gS-ZCl5bV9iKdPaLfRAoXW6xwVt27y1Nnpmcmw"
+    }
+  },
+  "controllers": {
+    "controller": {
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "F7cpdFdb0-gEjUhKTl4LuLw7EL2h6XG2sTrhFt4sCXs",
+        "y": "22pFRhJ_Wal3Ultb3c0GqPQIBVEcjUDHt-Gjk8sPYSo",
+        "d": "jV0vBphOHjlBlCRlKsU_MW7oBz8Y4Bv8zAgMY8pgyRA"
+      },
+      "enc": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "nK8KR-85YCx5U9FGkx5SBMhCs9QpKhjDjkvZDmGKeIM",
+        "y": "BO_vMsDrho_aQN1JfZ-YmdF9BFDII1hGdhrMQ476_Uc",
+        "d": "2E4kZcxKgbBssWidr3vZKqoJThi6aHvVNbg2g02sgIg"
+      },
+      "label": "Living room tablet",
+      "platform": "android",
+      "role": "controller",
+      "nk": "9NFsIXizsJ8J2FuC4LeFNkN0iyPiJlq7y2PQqWnMiaU",
+      "createdAt": 1767222000
+    },
+    "owner": {
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "SZ8u5ELdMhiHIMdUa1ERtwyratOYaXrJG2i7Y99FOfE",
+        "y": "hl51caTMOz00bQUbg9Vej_cCT5HstwVbMMStAD7MeQI",
+        "d": "rKXREgDjb36iMXERFP4RmtzaxHgxWHjtR4S3BzOdlXA"
+      },
+      "enc": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "FKSjBSB4xJxVmQcL-IMi3WwilxI0eBAVYqwaqj_C3u8",
+        "y": "b_iK2FaFcd4UpG7bQKXt3ND1T7NKmLQq79Rq0FxAgUI",
+        "d": "3tMKVMfcpzp-Wc-BNz6fHgPemwVJ87VufSPS_cxLS28"
+      },
+      "label": "Owner phone",
+      "platform": "ios",
+      "role": "owner",
+      "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+      "createdAt": 1767222000
+    },
+    "revoked": {
+      "ctl": "Ym85kZeVg6Js-1lNmtDsLzhA8GdEZ2Nt5lEXOBGNCg0",
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "L4rYtyF_WiYEBrIVrFxhWUftlBMJwAjX5PH7aV3bl6A",
+        "y": "aJDjDeOLvE77y4tpU5CNRq9NyAFXS-CSFQBRRb85JsU",
+        "d": "AaBYnSu79uZi-oWOzz_Xu2X8o7I4H9ZKmo62UkbNh7U"
+      },
+      "enc": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "i8UbDdfmxNOimuyYLmK9qVlezUoExmGHEXJD0sQrXMw",
+        "y": "leElIeznMOQh3bLn0dG3tKr2Xw7AqeDQRHKDUO67x8g",
+        "d": "HJLz1L7HcnDUzaFMVp5IFDSfGIQedJx3hjcr7VF0r_o"
+      },
+      "label": "Old laptop",
+      "platform": "cli",
+      "role": "controller",
+      "nk": "8Xy76ZitYLmD1Zzq25cB93K_fNbyE-wB2lI88_KLrC0",
+      "createdAt": 1767222000,
+      "revokedAt": 1767225000
+    },
+    "stranger": {
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k",
+        "y": "LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg",
+        "d": "AM8BQO2voRzFb1RtU2-LPRpuKmd-kmVazk64dIyQBag"
+      },
+      "enc": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g",
+        "y": "L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk",
+        "d": "DyJUbcjtWUniR_FVynSqdIgM4ZWogp-JNCb56GXfiks"
+      },
+      "label": "Stranger",
+      "platform": "other"
+    }
+  }
+}

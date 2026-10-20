@@ -1,0 +1,91 @@
+{
+  "name": "cmd-owner-listControllers",
+  "kind": "request",
+  "description": "Owner control command answered by the authority itself.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "SvVuPEnJ8j7sqr-64qImFgX9JnttLzSUh4cDr214sdQ"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-cmd-owner-listControllers\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"4ctN7CNTj3b1SpxjtADbHNfI2tsLPdhWn3ymeV5TosA\",\"cmd\":\"listControllers\",\"req\":{}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-cmd-owner-listControllers",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "4ctN7CNTj3b1SpxjtADbHNfI2tsLPdhWn3ymeV5TosA",
+    "cmd": "listControllers",
+    "req": {}
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "GqOaFXiGSSLcmlBGsyqwO6e5qS9dNjwja5yxyywWiXM",
+    "y": "RoQf0DAbMgEv-CtmbMAgko9rp-FDNQJeu1EQLv_2bRE",
+    "d": "SnCxMz_xGr9NPLu5f1CzNsv6Cn5bkaskjm69NQj1jkM"
+  },
+  "iv": "16gjIahajVJDBgi4",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1jbWQtb3duZXItbGlzdENvbnRyb2xsZXJzIiwiY3RyIjoxLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNTY2MCwib3AiOiJjbWQiLCJyayI6IjRjdE43Q05UajNiMVNweGp0QURiSE5mSTJ0c0xQZGhXbjN5bWVWNVRvc0EiLCJjbWQiOiJsaXN0Q29udHJvbGxlcnMiLCJyZXEiOnt9fQ.X-5DQOcsG4i6HI4bo-jqhgeU3iviwNSoPJxGmon3g8ngAUMN3A_WG7-8j2s_XzfKWMRN8HiIUOI7_WMhMbZDgA",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiR3FPYUZYaUdTU0xjbWxCR3N5cXdPNmU1cVM5ZE5qd2phNXl4eXl3V2lYTSIsInkiOiJSb1FmMERBYk1nRXYtQ3RtYk1BZ2tvOXJwLUZETlFKZXUxRVFMdl8yYlJFIn19..16gjIahajVJDBgi4.6If1J7CXVUaCw0zI3_Mlwkmof0tgZuLq-1RCcJU_1J7bb-DqIi8SEMhLj6j1ExaHObTeUXTXIf0r37yst9-YA5iwzqlptpuqIwT9EarXpXUwjDLcdm_F4g0IjAxKHLM5l059pjOESNMeN3IMpoRyBkN2PcaMXJDCwGuaJXwWS9Qwp-e2EscEWzNvncXDqzTckZblZJq69Rqmf133CUbA4Jle04KtUtgevpJvDcdpBddvX9zzdmjn1lsM2A35DLmFy30ZIw16fenKDvjg8dDqxOVjn7O91dCLMHcXZ2GXC-EmXaHBnDNCVTUzLXdlSUJ_baILNc-j3KvcqQP7rvXedndkRkLg5EGN6vohSSAU7O5PbY7pqmd7o2CrmAkK-LXLwMuqzI1Oq8bCaqWfAy01yswJE-t6facxRhBtdfO_Q3hmqxWBAxQmyhFYxn198Fw6ja2Or8h35ZqnhZJtt3BRABk_6_LxyB3G2DR5rV6Cvmw5fmohVOEl7tSv27npy3RR9O2IsMqVLpVua-WC915CojEL1ap9ikFegm5RZppPmqyPX3iwgjXf9uW-GTwlBDsC6Tuu9l8tLvJ-pnUiwrxrOdpJBfvVR6S4Yz8gNybE0jzCHwqBNkv0fZLpR47rBp-lH40bbkOgOCKUZ2YgHgK03zAb4BWMmk0GbCDmzjpYIc8u7ubgIqRMWCE_hlquQl4O-tUZ5KMzeSa5-JpOORZ9sSAhKowFsVpCpZe7yxlhy3DpntKzktX8vxU2xhjUdn5KA5J3jENhQ3SR-w.DsFYQ4pvQHSP7iWcXcbmdg",
+  "rk": "4ctN7CNTj3b1SpxjtADbHNfI2tsLPdhWn3ymeV5TosA",
+  "expect": {
+    "command": "listControllers",
+    "principal": {
+      "controllerId": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "role": "owner"
+    },
+    "replyOk": true
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..KLLpbJ3W9Ux3Zswu.St_fHgzG7EqCbOZT18CZdlMGbqH5ytxYHZUXBHnBohV6pSlrD2jHXHE7wxVjEeMaDAYFrJ7ZICKbpFabyWLEnt1pT9SQYU_yyzol4tmHouj-6aPVa6B6AmlOHuzYQeRRUXJdGDv04_5ADY1MpnLTCreh0AYuss9waUh6ZLZTzpK-coXKfpOAA0b7qh11YhXLjW9u-jPNaEdXNkiIGBfmhgkLF7bJXCy0NQg1Fzs12tZzE3ljRl0QjODFbfqveWpONXDLcRZCTngknLj3KGLIO0RL3tzq7t_RHh8QxTIBaY5jN7tno-SZ1LUC6rht9zfORoti2EeAcs9nKlNkdI0QMCe7ZnKbCn03J8TaLQT-Hiug8961st9bYvfDV71_1CNAaEc6cwXCMQOCXVUw1kRJB1PNRmsEX8VpoeKyeLQnJ4TWp2YcTopGSj1ZGEUdtuWkRIKGZsY90L39p1Xm6nwFnXDl6TlQie6ck2o-OABOadciitnYeSeFHKs7SZ9t8XxozYu-x_qRY5KlSABRchuJ1IAyInbyGMNqLUwEBr7yj_IoUu2QMGClvZKsmH_LN8MtiSDxWYtA7jB9u6QwMEOgzzLTiygipNEo1CYU9i-DJ1i_0WMr-ZxMB33sUkXOYitKxw6z1cqcall0GN_ItZ5nb9sdz0_-xsMgT59I_UxR0necnBR97sJAK4eSv9_X1mTtueJaq5bQsv_u7E3ASxZMpl3he7znkjgYkBJntP0Sj5eu3-CL1Paj_HO6Ak1OjvA65gQnzDCd-J9BeadXwWJbxtT9QSj7hAufVcyhmWBPFSGLRifQU5rRreVWrYNjEOIWwZyFGW8kSpF4aqSYHULCc2yk57G-6eD_bTFzsM-k_PdHBE87ibAUWXTTsBPnup-j_sOeG7u3y2QsX0xVvQ7K7DD2faE0wCziSm5d2MM8vQE6ShYfPBHmari8X4ZBS8KnAM3irtG4i59Nwz8N2HftSuPl28RjmqvowfYU_1bBApz3PNeCIwEUL0nE2muk5hGSxkTUDZuWnUrvewF-yYys3unQwtB1E1_4nBMEZALyB8Sm3bWiv7E8QTI6dLxqhXKzHKzRCDRcfBWe14NNKBagnbNGTv-iNDpZ58zLRpkoZHCvR5jLOVXmG3RvKoiD3mfFieP-benD9FPc6WRTjHOknd8lJk-eE71mp0F-LDoLpPemMgUvjR05shA1oWtnUs4vCq984PwRfUpKL9PE3Wdde-sCNT_SeMg9ovxy3ak_FOyj76TcEs40QYJ4tgVu4KcET1l7xOvY99IJxhwBFV83fEi918PkEuiWa14uDJf8-DYy7NrnrsYAI3dw8Gbyc9ij6rAWUr2reI0yN5mgJzpEqI4okns729iGpisezX9sv0W4QI_qoUlkvvIaxYWnvw078gZda9eoiKEVjk8z9nA2T10Ym6p6TKLjvp-AnCzdaG_0cl_I7eY4q9A7VfEcNh54cEV-SThHZTr0D86_ipF2sg.IwJQC7uuStNdwg-goViYsQ",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "rid": "rid-cmd-owner-listControllers",
+      "iat": 1767225600,
+      "ok": true,
+      "res": {
+        "controllers": [
+          {
+            "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+            "role": "owner",
+            "label": "Owner phone",
+            "platform": "ios",
+            "createdAt": 1767222000,
+            "self": true
+          },
+          {
+            "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+            "role": "controller",
+            "label": "Living room tablet",
+            "platform": "android",
+            "createdAt": 1767222000,
+            "self": false
+          },
+          {
+            "ctl": "Ym85kZeVg6Js-1lNmtDsLzhA8GdEZ2Nt5lEXOBGNCg0",
+            "role": "controller",
+            "label": "Old laptop",
+            "platform": "cli",
+            "createdAt": 1767222000,
+            "revokedAt": 1767225000,
+            "self": false
+          }
+        ],
+        "pending": []
+      }
+    }
+  }
+}

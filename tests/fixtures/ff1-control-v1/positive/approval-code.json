@@ -1,0 +1,32 @@
+{
+  "name": "approval-code",
+  "kind": "approvalCode",
+  "description": "approvalCode(ctl, sigPin) = first 4 bytes of SHA-256(\"ff1-approval-code/v1|\" + ctl + \"|\" + sigPin) as uint32 BE, mod 1e6, 6 digits (§5.4). The last case uses a non-device pin and must differ.",
+  "cases": [
+    {
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "sigPin": "4kR-0SaJ9WxyLa8eyy-vcSQdKAXWNBwyTjrPb2NynnM",
+      "code": "257597"
+    },
+    {
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "sigPin": "4kR-0SaJ9WxyLa8eyy-vcSQdKAXWNBwyTjrPb2NynnM",
+      "code": "339947"
+    },
+    {
+      "ctl": "Ym85kZeVg6Js-1lNmtDsLzhA8GdEZ2Nt5lEXOBGNCg0",
+      "sigPin": "4kR-0SaJ9WxyLa8eyy-vcSQdKAXWNBwyTjrPb2NynnM",
+      "code": "674416"
+    },
+    {
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "sigPin": "4kR-0SaJ9WxyLa8eyy-vcSQdKAXWNBwyTjrPb2NynnM",
+      "code": "359263"
+    },
+    {
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "sigPin": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "code": "704976"
+    }
+  ]
+}
