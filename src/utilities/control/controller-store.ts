@@ -23,6 +23,7 @@
  */
 
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { getConfigPaths } from '../../config';
 import {
@@ -95,10 +96,24 @@ export function controllersDir(options: ControllerStoreOptions = {}): string {
  * @throws {Error} When the device ID is not file-name safe
  */
 export function controllerFilePath(deviceId: string, options: ControllerStoreOptions = {}): string {
-  if (!DEVICE_ID_PATTERN.test(deviceId)) {
+  const normalized = normalizeDeviceId(deviceId);
+  if (!DEVICE_ID_PATTERN.test(normalized)) {
     throw new Error(`FF1 device ID "${deviceId}" cannot name a controller file`);
   }
-  return path.join(controllersDir(options), `${deviceId}.json`);
+  return path.join(controllersDir(options), `${normalized}.json`);
+}
+
+/**
+ * normalizeDeviceId is the one spelling of a device ID the store uses: trimmed
+ * and upper case, matching the topic store and the device's own hostname
+ * (FF1-XXXXXXXX). A hand-edited config.json may carry `ff1-abc`; without this
+ * the file written under the profile's upper-case `dev` would not be found.
+ *
+ * @param deviceId - Configured or profile device ID
+ * @returns Normalized ID
+ */
+export function normalizeDeviceId(deviceId: string): string {
+  return deviceId.trim().toUpperCase();
 }
 
 /**
@@ -227,7 +242,7 @@ export function loadController(
   }
   try {
     const record = parseControllerRecord(text);
-    if (record.deviceId !== deviceId) {
+    if (record.deviceId !== normalizeDeviceId(deviceId)) {
       throw new ControlFormatError('controller file is for another device');
     }
     return record;
@@ -356,11 +371,14 @@ function withControllerLock<T>(file: string, fn: () => T): T {
   const lock = `${file}.lock`;
   ensurePrivateDir(path.dirname(file));
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  // The token makes the lock ours: release removes it only if it still holds
+  // this token, so a process can never delete another process's live lock.
+  const token = `${process.pid}:${randomUUID()}`;
   for (;;) {
     try {
       const fd = fs.openSync(lock, 'wx', FILE_MODE);
       try {
-        fs.writeFileSync(fd, String(process.pid));
+        fs.writeFileSync(fd, token);
       } finally {
         fs.closeSync(fd);
       }
@@ -370,7 +388,7 @@ function withControllerLock<T>(file: string, fn: () => T): T {
         throw error;
       }
       if (isStaleLock(lock)) {
-        fs.rmSync(lock, { force: true });
+        breakStaleLock(lock);
         continue;
       }
       if (Date.now() > deadline) {
@@ -382,14 +400,53 @@ function withControllerLock<T>(file: string, fn: () => T): T {
   try {
     return fn();
   } finally {
-    fs.rmSync(lock, { force: true });
+    releaseLock(lock, token);
+  }
+}
+
+/**
+ * breakStaleLock moves a stale lock aside with rename, which only one of
+ * several concurrent breakers can win (the losers get ENOENT and simply retry
+ * the O_EXCL create). Deleting it in place instead would let a slow breaker
+ * delete a lock another process had just re-created and now holds.
+ */
+function breakStaleLock(lock: string): void {
+  const aside = `${lock}.${process.pid}.${randomUUID()}.stale`;
+  try {
+    fs.renameSync(lock, aside);
+  } catch {
+    return; // someone else broke it first
+  }
+  if (isStaleLock(aside)) {
+    fs.rmSync(aside, { force: true });
+    return;
+  }
+  // The lock was re-created by a live holder between our check and the
+  // rename: put it back if the name is still free, else drop our copy.
+  try {
+    fs.linkSync(aside, lock);
+  } catch {
+    // a newer lock exists; ours was the live one only if it still matches,
+    // which cannot be restored safely, so the holder's release is a no-op
+  }
+  fs.rmSync(aside, { force: true });
+}
+
+/** releaseLock removes the lock only while it still holds this process's token. */
+function releaseLock(lock: string, token: string): void {
+  try {
+    if (fs.readFileSync(lock, 'utf8') === token) {
+      fs.rmSync(lock, { force: true });
+    }
+  } catch {
+    // already gone
   }
 }
 
 /** isStaleLock reports whether a lock's holder is gone or the lock is too old. */
 function isStaleLock(lock: string): boolean {
   try {
-    const pid = Number(fs.readFileSync(lock, 'utf8'));
+    const pid = Number(fs.readFileSync(lock, 'utf8').split(':')[0]);
     if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && !processExists(pid)) {
       return true;
     }

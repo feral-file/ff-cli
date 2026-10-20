@@ -188,7 +188,7 @@ export async function requestAccess(
         code: 'not_approved',
         error: 'This FF1 has no owner under secure control yet, so nobody can approve ff-cli.',
         details:
-          'In the Feral File app, open this FF1 and choose "Secure this FF1" first, then run the pairing again.',
+          'In the Feral File app, open this FF1 and choose "Secure this FF1" first, then run the pairing again. Until then ff-cli keeps using unpaired access.',
       },
     };
   }

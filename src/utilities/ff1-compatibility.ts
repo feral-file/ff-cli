@@ -304,6 +304,16 @@ function refusalFromPublicError(
 }
 
 /**
+ * TRANSIENT_PROBE_CODES are secure-probe answers that do not mean "this
+ * controller may not proceed": the FF1 shed load (rate_limited, or the
+ * router's storm protection surfacing as command_failed) or could not record
+ * the replay window (internal_error, §4.3: not executed, retry with a new ctr).
+ * The plaintext probe sees the same conditions as HTTP 429 and carries on, so
+ * the secure probe does too; the real command then applies its own retries.
+ */
+const TRANSIENT_PROBE_CODES = new Set(['rate_limited', 'internal_error', 'command_failed']);
+
+/**
  * detectFF1VersionSecurely runs the getDeviceStatus probe as a secure
  * envelope over the LAN only (no retry, no relayer: the probe never had
  * either). A protocol refusal (revoked, unknown controller, …) stops the
@@ -330,7 +340,7 @@ async function detectFF1VersionSecurely(
     controller.deps
   );
   if (!result.success) {
-    if (result.code) {
+    if (result.code && !TRANSIENT_PROBE_CODES.has(result.code)) {
       return { refusal: { error: result.error!, details: result.details } };
     }
     logger.debug('Secure FF1 version probe failed; continuing with command', result.error);

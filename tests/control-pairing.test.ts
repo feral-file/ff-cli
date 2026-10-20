@@ -23,7 +23,7 @@ import {
   requestAccess,
 } from '../src/utilities/control/pairing';
 import { parseHandoffPayload } from '../src/utilities/handoff-client';
-import { formatControllerTable } from '../src/commands/helpers/device-control';
+import { enrollController, formatControllerTable } from '../src/commands/helpers/device-control';
 import { FakeFF1, thumb, type Jwk } from './helpers/control-device';
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'ff1-control-v1');
@@ -270,6 +270,38 @@ describe('pairing', () => {
     });
     assert.equal(access.status, 'failed');
     assert.match(access.status === 'failed' ? access.failure.details! : '', /Secure this FF1/);
+  });
+
+  test('a refused request deletes the controller file this run created, keeping plaintext working', async () => {
+    const fake = new FakeFF1(
+      { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+      {},
+      () => ({ ok: false, code: 'not_approved' })
+    );
+    const deps = {
+      fetchFn: (async (_i, init) => {
+        const a = fake.handle(JSON.parse(String(init?.body)));
+        return json(a.status, a.json);
+      }) as typeof fetch,
+      controllerStore: { dir: storeDir },
+    };
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    await assert.rejects(
+      enrollController(device, created.record, 10_000, true, deps),
+      /no owner under secure control/
+    );
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+
+    const reused = prepareController(profile, 'x', { dir: storeDir });
+    await assert.rejects(enrollController(device, reused.record, 10_000, false, deps));
+    assert.ok(loadController(DEVICE_ID, { dir: storeDir }), 'an earlier pairing is kept');
+  });
+
+  test('a lower-case configured device ID finds the upper-case controller file', () => {
+    prepareController(profile, 'x', { dir: storeDir });
+    const lower = DEVICE_ID.toLowerCase();
+    assert.ok(loadController(lower, { dir: storeDir }));
+    assert.equal(nextCounter(lower, { dir: storeDir }).ctr, 1);
   });
 
   test('re-pairing the same identity reuses keys and counter; a new gen replaces them', () => {

@@ -161,6 +161,16 @@ describe('controller key store', () => {
     assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
   });
 
+  test('releasing never removes a lock another process now holds', () => {
+    enrolledRecord('owner');
+    const lock = `${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`;
+    // A live holder (this test process's parent PID stands in for one).
+    fs.writeFileSync(lock, `${process.ppid}:other`);
+    assert.throws(() => nextCounter(DEVICE_ID, { dir: storeDir }), /Timed out/);
+    assert.equal(fs.readFileSync(lock, 'utf8'), `${process.ppid}:other`);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 0);
+  });
+
   test('markEnrolled keeps a counter allocated in between', () => {
     createController({ profile: parseProfile(keys.device.profile), label: 'x' }, { dir: storeDir });
     nextCounter(DEVICE_ID, { dir: storeDir });
@@ -229,6 +239,24 @@ describe('secure displayPlaylist', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 2);
     // The plaintext playlist never crosses the wire.
     assert.ok(!JSON.stringify(bodies).includes('secure-test'));
+  });
+
+  test('a transient preflight answer (internal_error) does not stop the command', async () => {
+    enrolledRecord('owner');
+    const device = fakeDevice((claims) =>
+      claims.cmd === 'getDeviceStatus'
+        ? { ok: false, code: 'internal_error' }
+        : { ok: true, res: { ok: true } }
+    );
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      { fetchFn: lanFetch(device), controllerStore: { dir: storeDir }, nowFn: () => NOW }
+    );
+    assert.equal(result.success, true, result.error);
+    assert.deepEqual(
+      device.seen.map((c) => c.cmd),
+      ['getDeviceStatus', 'displayPlaylist']
+    );
   });
 
   test('a retry after HTTP 429 is a new request with a new ctr and rid', async () => {

@@ -30,6 +30,7 @@ import {
 } from '../../utilities/control/pairing';
 import {
   type SecureCommandResult,
+  type SecureTransportDeps,
   findSecureController,
   runSecureCommand,
 } from '../../utilities/control/secure-transport';
@@ -135,7 +136,7 @@ export async function runPair(name: string | undefined, options: PairOptions): P
         `Run \`${pairCommand(deviceLabel(device))}\` to start one.`
       );
     }
-    await enrollController(device, record, timeoutMs);
+    await enrollController(device, record, timeoutMs, false);
     return;
   }
   const payload = await receiveHandoff(device);
@@ -153,7 +154,7 @@ export async function runPair(name: string | undefined, options: PairOptions): P
       `\n${reused ? 'Using this computer’s existing' : 'Created new'} controller keys: ${controllerFilePath(device.id)}`
     )
   );
-  await enrollController(device, record, timeoutMs);
+  await enrollController(device, record, timeoutMs, !reused);
 }
 
 /** receiveHandoff runs the existing broker handoff and always closes the channel. */
@@ -198,16 +199,32 @@ export function formatCode(code: string): string {
  * the owner approves. Ctrl-C stops polling between requests (the controller
  * file is always consistent) and prints how to resume; a second Ctrl-C exits
  * at once.
+ *
+ * @param device - Device with ID
+ * @param record - Controller record (pending or enrolled)
+ * @param timeoutMs - Approval wait
+ * @param createdNow - Whether this run created the record (deleted on refusal)
+ * @param deps - Transport and store seams (tests)
  */
-async function enrollController(
+export async function enrollController(
   device: PairDevice,
   record: ControllerRecord,
-  timeoutMs: number
+  timeoutMs: number,
+  createdNow: boolean,
+  deps: SecureTransportDeps = {}
 ): Promise<void> {
   const ctl = controllerIdOf(record.keys);
   console.log(`\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`);
-  const access = await requestAccess(device, record);
+  const access = await requestAccess(device, record, deps);
   if (access.status === 'failed') {
+    // A pending controller file switches every command to envelopes. When
+    // nobody can approve it (the FF1 has no secure owner yet: not_approved)
+    // or the request never got through, a file created by THIS run must not
+    // be left behind, or play/ssh would stop working on an FF1 that still
+    // accepts plaintext. A reused file belonged to an earlier pairing; keep it.
+    if (createdNow) {
+      deleteController(device.id, deps.controllerStore);
+    }
     throw new CommandFailure(access.failure.error, access.failure.details);
   }
   if (access.status === 'pending') {
@@ -224,7 +241,11 @@ async function enrollController(
     console.log(chalk.dim(`Waiting up to ${Math.round(timeoutMs / 1000)}s for approval...`));
   }
   const result = await withInterrupt((cancelled) =>
-    pollEnrollment(device, record, {}, { timeoutMs, cancelled })
+    pollEnrollment(device, record, deps, {
+      timeoutMs,
+      cancelled,
+      storeOptions: deps.controllerStore,
+    })
   );
   reportEnrollment(device, result);
 }

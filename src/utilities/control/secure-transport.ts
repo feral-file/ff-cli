@@ -147,7 +147,7 @@ export function findSecureController(
       failure: {
         code: 'pending',
         error: 'Pairing ff-cli with this FF1 is not finished.',
-        details: `Run \`ff-cli device pair ${device.name ?? device.id} --resume\` and approve the request in the Feral File app on an owner's phone.`,
+        details: `Run \`ff-cli device pair ${device.name ?? device.id} --resume\` and approve the request in the Feral File app on an owner's phone, or run \`ff-cli device unpair ${device.name ?? device.id}\` to go back to unpaired access.`,
       },
     };
   }

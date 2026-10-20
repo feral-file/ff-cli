@@ -391,8 +391,10 @@ the counter inside must only grow, and an FF1 rejects reused counters
 `device remove` keeps the file, so re-adding the same FF1 keeps its pairing.
 
 Requests go to `POST /api/cast` as
-`{"command":"ff1Envelope","request":{"v":1,"jwe":"…"}}`, on the LAN and, for
-`play` only, through the relayer when the LAN is unreachable. Each attempt,
+`{"command":"ff1Envelope","request":{"v":1,"jwe":"…"}}` on the LAN. When the
+LAN is unreachable, `play`, pairing (`device pair`), `device controllers` and
+`device revoke` go through the relayer instead (they are encrypted and signed
+either way); the version preflight and `ssh` stay LAN-only. Each attempt,
 including every retry, is a new request with a new counter. FF1s on older FF OS
 (no controller file for them) keep the plaintext path described above.
 
