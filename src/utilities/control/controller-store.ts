@@ -343,8 +343,54 @@ export function createController(
     ctr: 0,
     createdAt: input.now ?? Math.floor(Date.now() / 1000),
   };
-  saveController(record, options);
+  const file = controllerFilePath(record.deviceId, options);
+  withControllerLock(file, () => saveController(record, options));
   return record;
+}
+
+/**
+ * stagingStore is where `ff-cli device pair` keeps a new controller while an
+ * existing record for the same FF1 stays in place: the old keys (possibly the
+ * last reachable owner grant) are replaced only once the new pairing is
+ * enrolled (promoteStagedController), never by a pairing that fails.
+ *
+ * @param options - Main store options
+ * @returns Store options for the staging directory
+ */
+export function stagingStore(options: ControllerStoreOptions = {}): ControllerStoreOptions {
+  return { dir: path.join(controllersDir(options), 'pairing') };
+}
+
+/**
+ * promoteStagedController moves an enrolled staged record over the device's
+ * controller file. Both locks are held (main, then staged; nothing takes them
+ * in the other order), so no counter allocated on either file is lost.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns The promoted record
+ * @throws {Error} When the staged file is missing or corrupt
+ */
+export function promoteStagedController(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): ControllerRecord {
+  const staged = stagingStore(options);
+  const from = controllerFilePath(deviceId, staged);
+  const to = controllerFilePath(deviceId, options);
+  return withControllerLock(to, () =>
+    withControllerLock(from, () => {
+      const record = loadController(deviceId, staged);
+      if (!record) {
+        throw new Error(`No staged controller file for ${deviceId}`);
+      }
+      // Rewritten rather than renamed: the staging directory is a different
+      // directory, and writeAtomic gives the same durability as every write.
+      saveController(record, options);
+      fs.rmSync(from, { force: true });
+      return record;
+    })
+  );
 }
 
 /**

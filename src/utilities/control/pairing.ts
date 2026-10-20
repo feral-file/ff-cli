@@ -34,6 +34,7 @@ import {
   createController,
   loadController,
   markEnrolled,
+  stagingStore,
   updateLabel,
 } from './controller-store';
 import {
@@ -78,19 +79,20 @@ export function sameIdentity(a: DeviceProfile, b: DeviceProfile): boolean {
  * prepareController returns the record to pair with: the existing one when it
  * belongs to the same control identity (its keys, counter and any grant are
  * kept; the label is updated), else a new record with fresh keys. A record
- * for an older identity (factory reset: new gen) is replaced, because every
- * grant from an earlier gen is void (§2).
+ * for another identity (factory reset: new gen; or a stale handoff) is not
+ * touched here: the new keys go to the staging store and replace it only
+ * once the new pairing is enrolled, so a failed pairing never costs a grant.
  *
  * @param profile - Profile pinned from the handoff
  * @param label - Controller label
  * @param options - Store options
- * @returns The record and whether its keys are new
+ * @returns The record, whether its keys are reused, and whether it is staged
  */
 export function prepareController(
   profile: DeviceProfile,
   label: string,
   options: ControllerStoreOptions = {}
-): { record: ControllerRecord; reused: boolean } {
+): { record: ControllerRecord; reused: boolean; staged: boolean } {
   let existing: ControllerRecord | null = null;
   try {
     existing = loadController(profile.dev, options);
@@ -98,9 +100,11 @@ export function prepareController(
     existing = null; // corrupt: replaced below with fresh keys
   }
   if (existing && sameIdentity(existing.profile, profile)) {
-    return { record: updateLabel(profile.dev, label, options), reused: true };
+    return { record: updateLabel(profile.dev, label, options), reused: true, staged: false };
   }
-  return { record: createController({ profile, label }, options), reused: false };
+  const staged = existing !== null;
+  const record = createController({ profile, label }, staged ? stagingStore(options) : options);
+  return { record, reused: false, staged };
 }
 
 /** enrollObject builds the §5 enroll claim for this controller. */

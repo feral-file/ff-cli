@@ -353,6 +353,7 @@ ff-cli device pair office --label studio  # name the owner sees (default: hostna
                                           # no control or invisible formatting (bidi, zero-width) characters
 ff-cli device pair office --timeout 600   # wait longer for approval (seconds)
 ff-cli device pair office --resume        # continue after Ctrl-C or a timeout
+ff-cli device pair office --yes           # replace a pairing for another FF1 identity without asking
 ```
 
 1. In Feral File mobile choose **Pair with ff-cli** and enter the one-time
@@ -367,6 +368,12 @@ ff-cli device pair office --resume        # continue after Ctrl-C or a timeout
    different code.
 4. ff-cli checks for the approval every 2 seconds (5 minutes by default) and
    prints the role it was granted.
+
+If ff-cli is already paired with the FF1 under a different identity (the FF1
+was factory reset, or the app sent an out-of-date one), it asks before pairing
+again, and keeps the current keys in place until the new pairing is approved:
+a refused or abandoned pairing never loses an existing grant. The pending
+replacement is kept in `controllers/pairing/` until then.
 
 Roles:
 

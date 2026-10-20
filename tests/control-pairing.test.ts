@@ -21,6 +21,7 @@ import {
   createController,
   loadController,
   nextCounter,
+  stagingStore,
 } from '../src/utilities/control/controller-store';
 import {
   localApprovalCode,
@@ -31,7 +32,10 @@ import {
 import { parseHandoffPayload } from '../src/utilities/handoff-client';
 import {
   CommandFailure,
+  REQUEST_ACCESS_RETRY_MS,
+  confirmReplacement,
   enrollController,
+  formatCode,
   formatControllerTable,
   parseLabel,
   runUnpair,
@@ -319,7 +323,7 @@ describe('pairing', () => {
     assert.equal(nextCounter(lower, { dir: storeDir }).ctr, 1);
   });
 
-  test('re-pairing the same identity reuses keys and counter; a new gen replaces them', () => {
+  test('re-pairing the same identity reuses keys and counter; a new gen is staged beside it', () => {
     const first = prepareController(profile, 'a', { dir: storeDir });
     nextCounter(DEVICE_ID, { dir: storeDir });
     const again = prepareController(profile, 'b', { dir: storeDir });
@@ -331,8 +335,87 @@ describe('pairing', () => {
     const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
     const fresh = prepareController(reset, 'b', { dir: storeDir });
     assert.equal(fresh.reused, false);
+    assert.equal(fresh.staged, true);
     assert.notEqual(controllerIdOf(fresh.record.keys), controllerIdOf(first.record.keys));
     assert.equal(fresh.record.ctr, 0);
+    // The existing record is untouched until the new pairing is enrolled.
+    const kept = loadController(DEVICE_ID, { dir: storeDir })!;
+    assert.equal(controllerIdOf(kept.keys), controllerIdOf(first.record.keys));
+    const staged = loadController(DEVICE_ID, stagingStore({ dir: storeDir }))!;
+    assert.equal(controllerIdOf(staged.keys), controllerIdOf(fresh.record.keys));
+  });
+
+  test('a failed replacement pairing keeps the enrolled record; success replaces it', async () => {
+    const store = { dir: storeDir };
+    const old = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    const first = createController({ profile: old, label: 'old' }, store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+
+    const refused = prepareController(profile, 'x', store);
+    assert.equal(refused.staged, true);
+    const refusing = fakeFetch(() => ({ ok: false, code: 'not_approved' }));
+    await assert.rejects(
+      enrollController(
+        device,
+        refused.record,
+        10_000,
+        true,
+        { fetchFn: refusing, controllerStore: store },
+        true
+      ),
+      /no owner under secure control/
+    );
+    const kept = loadController(DEVICE_ID, store)!;
+    assert.equal(controllerIdOf(kept.keys), controllerIdOf(first.keys));
+    assert.equal(kept.role, 'owner');
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+
+    const replacing = prepareController(profile, 'x', store);
+    const { fetchFn } = pairingDevice(0);
+    await enrollController(
+      device,
+      replacing.record,
+      10_000,
+      true,
+      { fetchFn, controllerStore: store, waitFn: async () => undefined },
+      true
+    );
+    const now = loadController(DEVICE_ID, store)!;
+    assert.equal(controllerIdOf(now.keys), controllerIdOf(replacing.record.keys));
+    assert.equal(now.role, 'controller');
+    assert.equal(now.profile.gen, profile.gen);
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+  });
+
+  test('replacing an enrolled record for another identity asks first', async () => {
+    const store = { dir: storeDir };
+    const old = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    createController({ profile: old, label: 'old' }, store);
+    const never = async () => {
+      throw new Error('must not ask');
+    };
+    // Pending (not enrolled): nothing to lose, no question.
+    await confirmReplacement(device, profile, {}, never, store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+    // Same identity: no question.
+    await confirmReplacement(device, old, {}, never, store);
+    await confirmReplacement(device, profile, { yes: true }, never, store);
+    const asked: string[] = [];
+    await assert.rejects(
+      confirmReplacement(
+        device,
+        profile,
+        {},
+        async (q) => {
+          asked.push(q);
+          return false;
+        },
+        store
+      ),
+      /current pairing was kept/
+    );
+    assert.equal(asked.length, 1);
+    await confirmReplacement(device, profile, {}, async () => true, store);
   });
 
   test('a corrupt controller file is replaced by a fresh pairing', () => {
@@ -445,6 +528,86 @@ describe('pairing robustness', () => {
       process.exitCode = previous;
     }
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+  });
+
+  test('rate_limited or busy on requestAccess asks again and keeps the file', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    let requests = 0;
+    const fetchFn = fakeFetch((claims) => {
+      if (claims.op === 'requestAccess') {
+        requests += 1;
+        if (requests === 1) {
+          return { ok: false, code: 'rate_limited' };
+        }
+        if (requests === 2) {
+          return { publicCode: 'busy', status: 503 };
+        }
+        return {
+          ok: true,
+          res: {
+            status: 'pending',
+            code: approvalCode(String(claims.ctl), keys.device.pins.sig),
+            expiresAt: 1,
+          },
+        };
+      }
+      return { ok: true, res: { role: 'controller', nk: NK, profile: keys.device.profile } };
+    });
+    const waits: number[] = [];
+    await enrollController(device, created.record, 60_000, true, {
+      fetchFn,
+      controllerStore: { dir: storeDir },
+      waitFn: async (ms) => {
+        waits.push(ms);
+      },
+    });
+    assert.deepEqual(waits, [REQUEST_ACCESS_RETRY_MS, REQUEST_ACCESS_RETRY_MS]);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, 'controller');
+  });
+
+  test('rate_limited until the wait is used up fails and deletes the file this run created', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const fetchFn = fakeFetch(() => ({ ok: false, code: 'rate_limited' }));
+    const waits: number[] = [];
+    await assert.rejects(
+      enrollController(device, created.record, 20_000, true, {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+        waitFn: async (ms) => {
+          waits.push(ms);
+        },
+      }),
+      /rate-limiting/
+    );
+    assert.equal(waits.length, 2);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+  });
+
+  test('approved for a key without a local grant still shows the approval code', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const fetchFn = fakeFetch((claims) =>
+      claims.op === 'requestAccess'
+        ? { ok: true, res: { status: 'approved', role: 'controller' } }
+        : { ok: true, res: { role: 'controller', nk: NK, profile: keys.device.profile } }
+    );
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(' '));
+    };
+    try {
+      await enrollController(device, created.record, 10_000, true, {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+      });
+    } finally {
+      console.log = log;
+    }
+    const code = formatCode(localApprovalCode(created.record));
+    assert.ok(
+      lines.some((l) => l.includes(code)),
+      'approval code printed'
+    );
   });
 
   test('public bad_envelope / bad_signature advice is conditional', () => {

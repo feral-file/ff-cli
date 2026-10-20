@@ -12,14 +12,17 @@ import { type HandoffPayload, HandoffReceiver } from '../../utilities/handoff-cl
 import { storeTopicId } from '../../utilities/topic-store';
 import { createPrompt, promptYesNo } from './prompt';
 import type { FF1Device } from '../../types';
-import { controllerIdOf, labelProblem } from '../../utilities/control/codec';
+import { type DeviceProfile, controllerIdOf, labelProblem } from '../../utilities/control/codec';
 import { isThumbprint } from '../../utilities/control/jwk';
 import {
   type ControllerRecord,
+  type ControllerStoreOptions,
   controllerFilePath,
   deleteController,
   isEnrolled,
   loadController,
+  promoteStagedController,
+  stagingStore,
 } from '../../utilities/control/controller-store';
 import {
   DEFAULT_PAIR_TIMEOUT_MS,
@@ -28,6 +31,7 @@ import {
   pollEnrollment,
   prepareController,
   requestAccess,
+  sameIdentity,
 } from '../../utilities/control/pairing';
 import {
   type SecureCommandResult,
@@ -44,7 +48,15 @@ export interface PairOptions {
   label?: string;
   timeout?: string;
   resume?: boolean;
+  yes?: boolean;
 }
+
+/**
+ * REQUEST_ACCESS_RETRY_MS is the pause before asking again after `busy` or
+ * `rate_limited` (§5.2: the device refuses a new request within 10 s of the
+ * last one and changes nothing).
+ */
+export const REQUEST_ACCESS_RETRY_MS = 10_000;
 
 /** CommandFailure is thrown by actions and printed by the command wrapper. */
 export class CommandFailure extends Error {
@@ -134,14 +146,17 @@ export async function runPair(name: string | undefined, options: PairOptions): P
   const timeoutMs = parseTimeoutMs(options.timeout);
   const label = parseLabel(options.label);
   if (options.resume) {
-    const record = loadController(device.id);
+    // A staged pairing (one that will replace an existing record) wins: it is
+    // the one the last run was waiting on.
+    const staged = loadController(device.id, stagingStore());
+    const record = staged ?? loadController(device.id);
     if (!record) {
       throw new CommandFailure(
         `There is no pairing to resume for ${deviceLabel(device)}.`,
         `Run \`${pairCommand(deviceLabel(device))}\` to start one.`
       );
     }
-    await enrollController(device, record, timeoutMs, false);
+    await enrollController(device, record, timeoutMs, false, {}, staged !== null);
     return;
   }
   const payload = await receiveHandoff(device);
@@ -153,13 +168,66 @@ export async function runPair(name: string | undefined, options: PairOptions): P
   if (payload.topicId) {
     storeHandoffTopic(device.id, payload.topicId);
   }
-  const { record, reused } = prepareController(payload.profile, label);
+  await confirmReplacement(device, payload.profile, options);
+  const { record, reused, staged } = prepareController(payload.profile, label);
   console.log(
     chalk.dim(
-      `\n${reused ? 'Using this computer’s existing' : 'Created new'} controller keys: ${controllerFilePath(device.id)}`
+      `\n${reused ? 'Using this computer’s existing' : 'Created new'} controller keys: ${controllerFilePath(device.id, staged ? stagingStore() : {})}`
     )
   );
-  await enrollController(device, record, timeoutMs, !reused);
+  await enrollController(device, record, timeoutMs, !reused, {}, staged);
+}
+
+/**
+ * confirmReplacement asks before a pairing for another control identity
+ * replaces an ENROLLED record: the app may have handed over a stale identity,
+ * and once the new pairing is approved the old grant (possibly the last
+ * reachable owner) is gone. Same rule as unpair: ask on a TTY, or --yes.
+ *
+ * @param device - Device with ID
+ * @param profile - Profile from the handoff
+ * @param options - `yes` skips the confirmation
+ * @param confirmFn - Confirmation prompt (tests inject one)
+ * @param storeOptions - Store options (tests)
+ * @throws {CommandFailure} When declined
+ */
+export async function confirmReplacement(
+  device: PairDevice,
+  profile: DeviceProfile,
+  options: { yes?: boolean },
+  confirmFn: (question: string) => Promise<boolean> = confirmInteractively,
+  storeOptions: ControllerStoreOptions = {}
+): Promise<void> {
+  let existing: ControllerRecord | null;
+  try {
+    existing = loadController(device.id, storeOptions);
+  } catch {
+    return; // corrupt: nothing usable to keep
+  }
+  if (
+    !existing ||
+    !isEnrolled(existing) ||
+    sameIdentity(existing.profile, profile) ||
+    options.yes
+  ) {
+    return;
+  }
+  console.log(
+    chalk.yellow(
+      `\nff-cli is already paired with ${deviceLabel(device)} as ${existing.role}, under a different FF1 identity than the app just sent. ` +
+        'If the FF1 was not factory reset, the app may have sent an out-of-date identity. ' +
+        'Once the new pairing is approved, the current keys are replaced' +
+        (existing.role === 'owner'
+          ? '; if no other owner can reach this FF1, it is then left without a reachable owner until a factory reset.'
+          : '.')
+    )
+  );
+  if (!(await confirmFn('Replace the current pairing?'))) {
+    throw new CommandFailure(
+      'Pairing cancelled; the current pairing was kept.',
+      'Pass --yes to skip this check.'
+    );
+  }
 }
 
 /**
@@ -239,24 +307,31 @@ export function formatCode(code: string): string {
  * @param record - Controller record (pending or enrolled)
  * @param timeoutMs - Approval wait
  * @param createdNow - Whether this run created the record (deleted on refusal)
- * @param deps - Transport and store seams (tests)
+ * @param deps - Transport and store seams (tests); controllerStore is the main store
+ * @param staged - The record is in the staging store and replaces the main
+ *   record only once enrolled
  */
 export async function enrollController(
   device: PairDevice,
   record: ControllerRecord,
   timeoutMs: number,
   createdNow: boolean,
-  deps: SecureTransportDeps = {}
+  deps: SecureTransportDeps = {},
+  staged = false
 ): Promise<void> {
   const ctl = controllerIdOf(record.keys);
+  const mainStore = deps.controllerStore ?? {};
+  const pairDeps = staged ? { ...deps, controllerStore: stagingStore(mainStore) } : deps;
+  const wait = deps.waitFn ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   // A pending controller file switches every command to envelopes, so a file
   // created by THIS run is removed whenever the run ends without a request the
   // owner can approve: refused (an FF1 with no secure owner answers
   // not_approved), unreachable, a code mismatch, or Ctrl-C before the request
-  // was confirmed. A reused file belonged to an earlier pairing; keep it.
+  // was confirmed. A reused file belonged to an earlier pairing; keep it. A
+  // staged file is the only one discarded; the record it would replace stays.
   const discard = () => {
     if (createdNow) {
-      deleteController(device.id, deps.controllerStore);
+      deleteController(device.id, pairDeps.controllerStore);
     }
   };
   // SIGINT handling is installed before requestAccess, so a Ctrl-C while the
@@ -265,7 +340,21 @@ export async function enrollController(
     console.log(
       `\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`
     );
-    const access = await requestAccess(device, record, deps);
+    let access = await requestAccess(device, record, pairDeps);
+    // busy / rate_limited (§4.4, §5.2) changed nothing on the FF1: ask again
+    // within the approval wait instead of making the user redo the handoff.
+    for (
+      let left = Math.floor(timeoutMs / REQUEST_ACCESS_RETRY_MS);
+      access.status === 'failed' &&
+      (access.failure.code === 'busy' || access.failure.code === 'rate_limited') &&
+      left > 0 &&
+      !cancelled();
+      left -= 1
+    ) {
+      console.log(chalk.dim('The FF1 is handling other requests; asking again in 10s...'));
+      await wait(REQUEST_ACCESS_RETRY_MS);
+      access = await requestAccess(device, record, pairDeps);
+    }
     if (access.status === 'failed') {
       discard();
       throw new CommandFailure(access.failure.error, access.failure.details);
@@ -274,11 +363,13 @@ export async function enrollController(
       discard();
       return { status: 'interrupted-early' as const };
     }
-    if (access.status === 'pending') {
+    // §14.3: `approved` for a key that holds no grant here is treated as
+    // pending, so the code is always shown before an owner can approve.
+    if (access.status === 'pending' || !isEnrolled(record)) {
       const code = localApprovalCode(record);
       // The device signs its code with the pinned devSig over the same
       // inputs, so a mismatch cannot be a man-in-the-middle; it is a bug.
-      if (access.code !== code) {
+      if (access.status === 'pending' && access.code !== code) {
         discard();
         throw new CommandFailure(
           'The FF1 reported a different approval code than ff-cli computed.'
@@ -290,11 +381,15 @@ export async function enrollController(
       console.log(chalk.dim(`Controller ID: ${ctl}`));
       console.log(chalk.dim(`Waiting up to ${Math.round(timeoutMs / 1000)}s for approval...`));
     }
-    return pollEnrollment(device, record, deps, {
+    const enrolled = await pollEnrollment(device, record, pairDeps, {
       timeoutMs,
       cancelled,
-      storeOptions: deps.controllerStore,
+      storeOptions: pairDeps.controllerStore,
     });
+    if (enrolled.status === 'enrolled' && staged) {
+      return { status: 'enrolled' as const, record: promoteStagedController(device.id, mainStore) };
+    }
+    return enrolled;
   });
   if (result.status === 'interrupted-early') {
     console.log(
@@ -617,6 +712,7 @@ export async function runUnpair(
       );
     }
   }
+  deleteController(device.id, stagingStore()); // an unfinished replacement pairing
   if (!deleteController(device.id)) {
     console.log(chalk.dim(`\nff-cli has no controller keys for ${deviceLabel(device)}.\n`));
     return;
