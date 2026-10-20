@@ -86,7 +86,30 @@ describe('ff1-control-v1 fixture inventory', () => {
     for (const kind of kinds) {
       assert.ok(['request', 'notification', 'reply', 'approvalCode'].includes(kind), kind);
     }
-    assert.ok(positive.length >= 10 && negative.length >= 30);
+    // 43 files at ffos-user 4ba8b18: keys.json + 10 positive + 32 negative.
+    assert.equal(positive.length, 10);
+    assert.equal(negative.length, 32);
+  });
+
+  test('the reordered-ctr vector is accepted (ctr inside the window, unseen)', async () => {
+    const f = positive.find((v) => v.name === 'cmd-owner-reordered-ctr')!;
+    const reply = f.reply as { compact: string };
+    const claims = await openReply(
+      reply.compact,
+      b64uDecode(f.rk as string),
+      profile.sig,
+      bindFor(f)
+    );
+    assert.equal(claims.ok, true);
+    assert.equal(claims.code, undefined);
+    assert.equal((f.expect as { replyOk?: boolean }).replyOk, true);
+  });
+
+  test('the strict-ep notification negatives are present', () => {
+    const names = negative.filter((v) => v.kind === 'notification').map((v) => v.name);
+    for (const name of ['notification-bad-ep', 'notification-padded-ep']) {
+      assert.ok(names.includes(name), name);
+    }
   });
 
   test('pins are the RFC 7638 thumbprints of the profile keys', () => {

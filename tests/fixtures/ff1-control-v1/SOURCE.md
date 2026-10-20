@@ -3,11 +3,9 @@
 These files are a verbatim copy of
 `components/feral-controld/control/testdata/fixtures/` from
 `feral-file/ffos-user`, branch `feat/3551-control-protocol`, commit
-`6b8d87119ef9045b6ee1791150b42603bcebbaf1`
-("fix(controld): control protocol fails closed on config; reset tombstone").
-The fixture files are byte-identical to the ones introduced in `5f65e23`
-("feat(control): bind the approval code to the device pin; add notification
-ep"), the last commit that changed them.
+`4ba8b185726091a3eefeb216d209bc3f8433601a`
+("fix(control): reordered-ctr vector really tests acceptance; strict
+notification ep"). 43 JSON files.
 
 The normative spec is `docs/ff1-control-v1.md` in the same commit; §12 defines
 the fixture format. The Go generator is

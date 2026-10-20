@@ -662,8 +662,7 @@ export async function openNotification(
   if (claims.ctl !== ctl) {
     throw new ControlFormatError('notification ctl does not match kid');
   }
-  // §9: ep is b64u(8 random bytes). The Go reference only checks it is a
-  // string; checking the length here is stricter and still spec-conformant.
+  // §9: ep is b64u(8 random bytes), strict (no padding), as in the Go reference.
   if (!isB64uOfLength(claims.ep, 8)) {
     throw new ControlFormatError('notification ep must be b64u(8 bytes)');
   }
