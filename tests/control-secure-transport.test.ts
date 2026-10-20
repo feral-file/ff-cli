@@ -5,6 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -150,6 +151,13 @@ describe('controller key store', () => {
     fs.writeFileSync(lock, '');
     const old = new Date(Date.now() - 60_000);
     fs.utimesSync(lock, old, old);
+    assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
+  });
+
+  test('breaks a fresh lock whose holder process has exited', () => {
+    enrolledRecord('owner');
+    const dead = spawnSync(process.execPath, ['-e', '']).pid!;
+    fs.writeFileSync(`${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`, String(dead));
     assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
   });
 

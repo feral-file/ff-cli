@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { describe, test } from 'node:test';
-import { TopicHandoffReceiver } from '../src/utilities/handoff-client';
+import { HandoffReceiver } from '../src/utilities/handoff-client';
 import {
   encryptHandoffMessage,
   exportHandoffPublicJwk,
   generateHandoffKeyPair,
 } from '../src/utilities/handoff-crypto';
 
-describe('TopicHandoffReceiver', () => {
+describe('HandoffReceiver', () => {
   test('receives only the selected device topic and closes the channel', async () => {
     let minterPublicKeyJwk: webcrypto.JsonWebKey | undefined;
     let closed = false;
@@ -67,11 +67,11 @@ describe('TopicHandoffReceiver', () => {
       return new Response('not found', { status: 404 });
     };
 
-    const receiver = await TopicHandoffReceiver.create({
+    const receiver = await HandoffReceiver.create({
       baseUrl: 'https://handoff.example',
       fetchFn,
     });
-    const payload = await receiver.receiveTopic({
+    const payload = await receiver.receiveHandoff({
       expectedDeviceId: 'ff1-skyz2e3a',
       pollIntervalMs: 1,
       maxWaitMs: 100,

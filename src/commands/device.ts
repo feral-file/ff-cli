@@ -9,61 +9,78 @@ import { renameDevice } from '../utilities/device-rename';
 import { readConfigFile, resolveExistingConfigPath } from './helpers/config-files';
 import { discoverAndSelectDevice } from './helpers/device-discovery';
 import { createPrompt, promptYesNo } from './helpers/prompt';
-import { resolveConfiguredDevice } from '../utilities/ff1-compatibility';
-import { TopicHandoffReceiver } from '../utilities/handoff-client';
-import { storeTopicId } from '../utilities/topic-store';
+import {
+  CommandFailure,
+  type PairOptions,
+  runControllers,
+  runPair,
+  runRevoke,
+  runUnpair,
+} from './helpers/device-control';
 import { persistDeviceRemoval } from './helpers/device-removal';
 
 const deviceCommand = new Command('device').description('Manage configured FF1 devices');
 
 deviceCommand
   .command('pair')
-  .description('Securely receive relayer access for a configured FF1 from the mobile app')
+  .description(
+    'Pair ff-cli with a configured FF1 through the Feral File app (secure controller pairing on current firmware, relayer access on older firmware)'
+  )
+  .argument('[name]', 'Configured device name (uses the default device when omitted)')
+  .option(
+    '--label <label>',
+    "Name the owner sees when approving (default: this computer's hostname)"
+  )
+  .option('--timeout <seconds>', 'How long to wait for owner approval (default: 300)')
+  .option('--resume', 'Continue an interrupted pairing without a new app handoff')
+  .action(async (name: string | undefined, options: PairOptions) => {
+    await runControlAction('Pairing failed:', () => runPair(name, options));
+  });
+
+deviceCommand
+  .command('controllers')
+  .description('List the controllers paired with an FF1 (owner only)')
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .action(async (name?: string) => {
-    let receiver: TopicHandoffReceiver | undefined;
-    try {
-      const selected = resolveConfiguredDevice(name);
-      if (!selected.success || !selected.device) {
-        throw new Error(selected.error || 'FF1 device is not configured correctly');
-      }
-      const device = selected.device;
-      if (!device.id) {
-        throw new Error(
-          `Device "${device.name || device.host}" has no stable device ID. Re-add it with ff-cli device add before pairing.`
-        );
-      }
-
-      receiver = await TopicHandoffReceiver.create();
-      console.log(chalk.blue('\nPair ff-cli with Feral File mobile\n'));
-      console.log(`  Device: ${chalk.bold(device.name || device.id)}`);
-      console.log(`  Device ID: ${chalk.dim(device.id)}`);
-      console.log("\nIn the mobile app, open this Art Computer's options and choose");
-      console.log(chalk.bold('“Pair with ff-cli”'), 'then enter:');
-      console.log(`\n  ${chalk.bold(receiver.shortCode)}\n`);
-      console.log('Before sharing, confirm the mobile security check matches:');
-      console.log(`\n  ${chalk.bold(receiver.verificationCode)}\n`);
-      console.log(chalk.dim(`This one-time code expires at ${receiver.expiresAt}. Waiting...`));
-
-      const payload = await receiver.receiveTopic({ expectedDeviceId: device.id });
-      storeTopicId(device.id, payload.topicId);
-      console.log(
-        chalk.green('\n✓ Relayer access stored in the operating system secure storage.\n')
-      );
-    } catch (error) {
-      console.error(chalk.red('\nPairing failed:'), (error as Error).message);
-      process.exitCode = 1;
-    } finally {
-      if (receiver) {
-        try {
-          await receiver.close();
-        } catch {
-          // The channel is short-lived and expires automatically. A close
-          // failure must not erase or misreport an already stored credential.
-        }
-      }
-    }
+    await runControlAction('Error:', () => runControllers(name));
   });
+
+deviceCommand
+  .command('revoke')
+  .description("Revoke a controller's access to an FF1, or deny its pending request (owner only)")
+  .argument('<controller-id>', 'Controller ID shown by `ff-cli device controllers`')
+  .argument('[name]', 'Configured device name (uses the default device when omitted)')
+  .action(async (ctl: string, name?: string) => {
+    await runControlAction('Error:', () => runRevoke(ctl, name));
+  });
+
+deviceCommand
+  .command('unpair')
+  .description("Delete ff-cli's controller keys for an FF1")
+  .argument('[name]', 'Configured device name (uses the default device when omitted)')
+  .action(async (name?: string) => {
+    await runControlAction('Error:', () => runUnpair(name));
+  });
+
+/**
+ * runControlAction runs a pairing/controller action and prints a failure as
+ * an error line plus its follow-up, setting a non-zero exit code.
+ *
+ * @param prefix - Error prefix
+ * @param action - Action to run
+ */
+async function runControlAction(prefix: string, action: () => Promise<void>): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    console.error(chalk.red(`\n${prefix}`), (error as Error).message);
+    if (error instanceof CommandFailure && error.details) {
+      console.error(chalk.dim(error.details));
+    }
+    console.error();
+    process.exitCode = 1;
+  }
+}
 
 deviceCommand
   .command('list')

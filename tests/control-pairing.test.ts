@@ -1,0 +1,325 @@
+/**
+ * Controller pairing (feral-file#3551 M6): v2 handoff validation, the
+ * requestAccess + enroll poll against a fake FF1, key reuse, and the owner
+ * command table.
+ */
+
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, test } from 'node:test';
+import { approvalCode, controllerIdOf, parseProfile } from '../src/utilities/control/codec';
+import { thumbprint } from '../src/utilities/control/jwk';
+import {
+  createController,
+  loadController,
+  nextCounter,
+} from '../src/utilities/control/controller-store';
+import {
+  localApprovalCode,
+  pollEnrollment,
+  prepareController,
+  requestAccess,
+} from '../src/utilities/control/pairing';
+import { parseHandoffPayload } from '../src/utilities/handoff-client';
+import { formatControllerTable } from '../src/commands/helpers/device-control';
+import { FakeFF1, thumb, type Jwk } from './helpers/control-device';
+
+const FIXTURES = path.join(__dirname, 'fixtures', 'ff1-control-v1');
+const keys = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'keys.json'), 'utf8'));
+const DEVICE_ID = keys.device.dev as string;
+const HOST = 'http://ff1-fixture1.local:1111';
+const device = { name: 'Office', id: DEVICE_ID, host: HOST };
+const profile = parseProfile(keys.device.profile);
+const NK = keys.controllers.controller.nk as string;
+
+let storeDir: string;
+
+beforeEach(() => {
+  storeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ff1-pair-'));
+});
+
+afterEach(() => {
+  fs.rmSync(storeDir, { recursive: true, force: true });
+});
+
+function json(status: number, body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/**
+ * pairingDevice simulates §5.2/§5.3: requestAccess -> pending with the
+ * device-side code; enroll -> pending until `approveAfter` polls, then the grant.
+ */
+function pairingDevice(approveAfter: number, final: 'grant' | 'not_approved' = 'grant') {
+  let enrolls = 0;
+  const fake = new FakeFF1(
+    { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+    {},
+    (claims) => {
+      const ctl = String(claims.ctl);
+      const enroll = claims.enroll as { sig: Jwk };
+      assert.equal(thumb(enroll.sig), ctl);
+      if (claims.op === 'requestAccess') {
+        return {
+          ok: true,
+          res: {
+            status: 'pending',
+            code: approvalCode(ctl, keys.device.pins.sig),
+            expiresAt: 1,
+          },
+        };
+      }
+      enrolls += 1;
+      if (enrolls <= approveAfter) {
+        return { ok: false, code: 'pending', res: {} };
+      }
+      if (final === 'not_approved') {
+        return { ok: false, code: 'not_approved' };
+      }
+      return { ok: true, res: { role: 'controller', nk: NK, profile: keys.device.profile } };
+    }
+  );
+  const fetchFn: typeof fetch = async (_input, init) => {
+    const answer = fake.handle(JSON.parse(String(init?.body)));
+    return json(answer.status, answer.json);
+  };
+  return { fake, fetchFn };
+}
+
+describe('v2 controller handoff', () => {
+  const base = {
+    v: 2,
+    type: 'ff1_controller_handoff',
+    channelId: 'ch_test',
+    deviceId: DEVICE_ID,
+    profile: keys.device.profile,
+    topicId: 'topic-secret',
+    sentAt: '2026-10-20T00:00:00Z',
+  };
+
+  test('accepts a profile for the selected device', () => {
+    const payload = parseHandoffPayload(base, 'ch_test', DEVICE_ID.toLowerCase());
+    assert.equal(payload.v, 2);
+    assert.deepEqual(payload.v === 2 && payload.profile, profile);
+  });
+
+  test('topicId is optional', () => {
+    const { topicId: _omit, ...withoutTopic } = base;
+    assert.equal(parseHandoffPayload(withoutTopic, 'ch_test', DEVICE_ID).v, 2);
+  });
+
+  test('rejects a profile for another device', () => {
+    assert.throws(
+      () =>
+        parseHandoffPayload(
+          { ...base, profile: { ...keys.device.profile, dev: 'FF1-OTHER001' } },
+          'ch_test',
+          DEVICE_ID
+        ),
+      /does not match/
+    );
+    assert.throws(
+      () => parseHandoffPayload({ ...base, deviceId: 'FF1-OTHER001' }, 'ch_test', DEVICE_ID),
+      /does not match/
+    );
+  });
+
+  test('rejects a profile that carries a private key', () => {
+    assert.throws(
+      () =>
+        parseHandoffPayload(
+          { ...base, profile: { ...keys.device.profile, sig: keys.device.sig } },
+          'ch_test',
+          DEVICE_ID
+        ),
+      /invalid FF1 profile/
+    );
+  });
+
+  test('still accepts a v1 topic handoff', () => {
+    const payload = parseHandoffPayload(
+      { ...base, v: 1, type: 'ff1_topic_handoff', profile: undefined },
+      'ch_test',
+      DEVICE_ID
+    );
+    assert.equal(payload.v, 1);
+  });
+});
+
+describe('pairing', () => {
+  test('requestAccess then enroll stores role and nk', async () => {
+    const { record } = prepareController(profile, 'test laptop', { dir: storeDir });
+    const { fake, fetchFn } = pairingDevice(2);
+    const deps = { fetchFn, controllerStore: { dir: storeDir }, waitFn: async () => undefined };
+
+    const access = await requestAccess(device, record, deps);
+    assert.equal(access.status, 'pending');
+    assert.equal(access.status === 'pending' && access.code, localApprovalCode(record));
+    assert.equal(
+      localApprovalCode(record),
+      approvalCode(controllerIdOf(record.keys), thumbprint(profile.sig))
+    );
+
+    const sleeps: number[] = [];
+    const result = await pollEnrollment(device, record, deps, {
+      sleepFn: async (ms) => {
+        sleeps.push(ms);
+      },
+      storeOptions: { dir: storeDir },
+    });
+    assert.equal(result.status, 'enrolled');
+    const stored = loadController(DEVICE_ID, { dir: storeDir })!;
+    assert.equal(stored.role, 'controller');
+    assert.equal(stored.nk, NK);
+    assert.deepEqual(sleeps, [2000, 2000]);
+    // requestAccess + three enroll polls, each with its own counter.
+    assert.deepEqual(
+      fake.seen.map((c) => [c.op, c.ctr]),
+      [
+        ['requestAccess', 1],
+        ['enroll', 2],
+        ['enroll', 3],
+        ['enroll', 4],
+      ]
+    );
+    const enroll = fake.seen[1].enroll as Record<string, unknown>;
+    assert.equal(enroll.platform, 'cli');
+    assert.equal(enroll.label, 'test laptop');
+    assert.equal('inv' in enroll, false);
+  });
+
+  test('a denied or expired request stops polling with re-pair guidance', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(1, 'not_approved');
+    const result = await pollEnrollment(
+      device,
+      record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      { sleepFn: async () => undefined, storeOptions: { dir: storeDir } }
+    );
+    assert.equal(result.status, 'failed');
+    assert.match(result.status === 'failed' ? result.failure.error : '', /denied or expired/);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, undefined);
+  });
+
+  test('times out and stops when cancelled', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(1000);
+    let clock = 0;
+    const timeout = await pollEnrollment(
+      device,
+      record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      {
+        timeoutMs: 5000,
+        nowMsFn: () => clock,
+        sleepFn: async (ms) => {
+          clock += ms;
+        },
+        storeOptions: { dir: storeDir },
+      }
+    );
+    assert.equal(timeout.status, 'timeout');
+    const cancelled = await pollEnrollment(
+      device,
+      record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      { cancelled: () => true, storeOptions: { dir: storeDir } }
+    );
+    assert.equal(cancelled.status, 'cancelled');
+  });
+
+  test('keeps polling while the FF1 is unreachable', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(0);
+    let calls = 0;
+    const flaky: typeof fetch = async (input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+      }
+      return fetchFn(input, init);
+    };
+    const result = await pollEnrollment(
+      device,
+      record,
+      { fetchFn: flaky, controllerStore: { dir: storeDir }, getTopicIdFn: () => null },
+      { sleepFn: async () => undefined, storeOptions: { dir: storeDir } }
+    );
+    assert.equal(result.status, 'enrolled');
+  });
+
+  test('an FF1 with no secure owner yet is explained', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const fake = new FakeFF1(
+      { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+      {},
+      () => ({ ok: false, code: 'not_approved' })
+    );
+    const access = await requestAccess(device, record, {
+      fetchFn: async (_i, init) => {
+        const a = fake.handle(JSON.parse(String(init?.body)));
+        return json(a.status, a.json);
+      },
+      controllerStore: { dir: storeDir },
+    });
+    assert.equal(access.status, 'failed');
+    assert.match(access.status === 'failed' ? access.failure.details! : '', /Secure this FF1/);
+  });
+
+  test('re-pairing the same identity reuses keys and counter; a new gen replaces them', () => {
+    const first = prepareController(profile, 'a', { dir: storeDir });
+    nextCounter(DEVICE_ID, { dir: storeDir });
+    const again = prepareController(profile, 'b', { dir: storeDir });
+    assert.equal(again.reused, true);
+    assert.equal(controllerIdOf(again.record.keys), controllerIdOf(first.record.keys));
+    assert.equal(again.record.ctr, 1);
+    assert.equal(again.record.label, 'b');
+
+    const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    const fresh = prepareController(reset, 'b', { dir: storeDir });
+    assert.equal(fresh.reused, false);
+    assert.notEqual(controllerIdOf(fresh.record.keys), controllerIdOf(first.record.keys));
+    assert.equal(fresh.record.ctr, 0);
+  });
+
+  test('a corrupt controller file is replaced by a fresh pairing', () => {
+    createController({ profile, label: 'x' }, { dir: storeDir });
+    fs.writeFileSync(path.join(storeDir, `${DEVICE_ID}.json`), '{"v":1,"v":1}');
+    const result = prepareController(profile, 'x', { dir: storeDir });
+    assert.equal(result.reused, false);
+    assert.ok(loadController(DEVICE_ID, { dir: storeDir }));
+  });
+});
+
+describe('controllers table', () => {
+  test('renders listControllers rows, self marker, status and pending codes', () => {
+    const fixture = JSON.parse(
+      fs.readFileSync(path.join(FIXTURES, 'positive', 'cmd-owner-listControllers.json'), 'utf8')
+    );
+    const res = {
+      ...fixture.reply.claims.res,
+      pending: [
+        {
+          ctl: keys.controllers.stranger.ctl,
+          label: 'Stranger',
+          platform: 'other',
+          code: '359263',
+          expiresAt: 1767225900,
+        },
+      ],
+    };
+    const lines = formatControllerTable(res, keys.now);
+    const text = lines.join('\n');
+    assert.match(lines[0], /ROLE\s+LABEL\s+PLATFORM/);
+    assert.match(text, /\*\s+owner\s+Owner phone/);
+    assert.match(text, /revoked 2025-12-31 23:50/);
+    assert.match(text, /359 263/);
+    assert.ok(text.includes(keys.controllers.owner.ctl));
+  });
+});

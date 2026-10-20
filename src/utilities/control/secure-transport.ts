@@ -90,7 +90,15 @@ export interface SecureRequest {
 export type SecureOutcome =
   | { kind: 'reply'; reply: ReplyClaims; transport: Transport }
   | { kind: 'public'; code: string; transport: Transport }
-  | { kind: 'failed'; error: string; details?: string; transport?: Transport; code?: string };
+  | {
+      kind: 'failed';
+      error: string;
+      details?: string;
+      transport?: Transport;
+      code?: string;
+      /** The LAN could not be reached (and no relayer route was taken). */
+      unreachable?: boolean;
+    };
 
 /** AttemptResult classifies one LAN attempt for the retry loop. */
 type AttemptResult =
@@ -352,6 +360,7 @@ async function fallbackOrUnreachable(
   const label = request.device.name || request.device.host;
   const unreachable: SecureOutcome = {
     kind: 'failed',
+    unreachable: true,
     error: `Could not reach device "${label}" at ${request.device.host}`,
     details:
       'Check that the device is powered on and reachable on your network. ' +

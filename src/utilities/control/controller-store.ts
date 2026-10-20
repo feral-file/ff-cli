@@ -347,8 +347,10 @@ function sleepSync(ms: number): void {
 
 /**
  * withControllerLock runs fn while holding `<file>.lock`, created with O_EXCL
- * so two ff-cli processes cannot allocate the same counter. A lock older
- * than LOCK_STALE_MS is from a crashed process and is broken.
+ * so two ff-cli processes cannot allocate the same counter. The lock records
+ * the holder's PID; a lock whose holder is gone (killed mid-allocation) or
+ * that is older than LOCK_STALE_MS is broken. fn must be synchronous, so a
+ * JS-level signal handler can never run while the lock is held.
  */
 function withControllerLock<T>(file: string, fn: () => T): T {
   const lock = `${file}.lock`;
@@ -356,7 +358,12 @@ function withControllerLock<T>(file: string, fn: () => T): T {
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
   for (;;) {
     try {
-      fs.closeSync(fs.openSync(lock, 'wx', FILE_MODE));
+      const fd = fs.openSync(lock, 'wx', FILE_MODE);
+      try {
+        fs.writeFileSync(fd, String(process.pid));
+      } finally {
+        fs.closeSync(fd);
+      }
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
@@ -379,11 +386,26 @@ function withControllerLock<T>(file: string, fn: () => T): T {
   }
 }
 
+/** isStaleLock reports whether a lock's holder is gone or the lock is too old. */
 function isStaleLock(lock: string): boolean {
   try {
+    const pid = Number(fs.readFileSync(lock, 'utf8'));
+    if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && !processExists(pid)) {
+      return true;
+    }
     return Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS;
   } catch {
     return false;
+  }
+}
+
+/** processExists probes a PID with signal 0 (EPERM still means it exists). */
+function processExists(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
   }
 }
 
