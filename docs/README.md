@@ -138,7 +138,11 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `device list` – List all configured FF1 devices
 - `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
-- `device pair [name]` – Securely receive relayer access from Feral File mobile
+- `device pair [name]` – Pair ff-cli with an FF1 through Feral File mobile: on current FF OS, request controller access and wait for an owner to approve it (prints a 6-digit approval code); on older FF OS, receive relayer access
+  - Options: `--label <label>`, `--timeout <seconds>`, `--resume`
+- `device controllers [name]` – List an FF1's paired controllers and pending requests (owner only)
+- `device revoke <controller-id> [name]` – Revoke a controller or deny its pending request (owner only)
+- `device unpair [name]` – Delete ff-cli's controller keys for an FF1
 - `device rename <name> <new-name>` – Rename a configured FF1 device (host, API key, and default status are untouched)
 - `device remove <name>` – Remove a configured FF1 device
 - `device default <name>` – Set the default FF1 device (used when `-d` is omitted)
@@ -298,7 +302,8 @@ ff-cli ssh disable -d "Living Room Display"
 On newer FF OS, a claimed FF1 only accepts `ff-cli ssh` from a paired CLI: run
 `ff-cli device pair "Living Room Display"` once (choose "Pair with ff-cli" in the
 Feral File app) before `ff-cli ssh enable|disable`. Unclaimed devices and older
-FF OS do not require pairing.
+FF OS do not require pairing. On FF OS with secure control, `ssh` needs the
+**owner** role; a controller grant gets "This command needs owner access".
 
 ### Publish to feed server
 
@@ -447,6 +452,32 @@ ff-cli device remove kitchen
 # Set the default device (used when -d is omitted)
 ff-cli device default office
 ```
+
+### Pair ff-cli as a controller (secure control)
+
+Current FF OS only accepts commands from controllers an owner approved. Pair
+once per FF1:
+
+```bash
+ff-cli device pair office
+#  ...enter the one-time code in Feral File mobile ("Pair with ff-cli")...
+#  Requesting access to office as "studio-mac"...
+#  Approve it only if the app shows this code:
+#    379 966
+#  ✓ ff-cli is paired with office as controller.
+
+ff-cli device controllers office          # owner only: who can control this FF1
+ff-cli device revoke <controller-id> office
+ff-cli device unpair office               # delete this computer's controller keys
+```
+
+Approve the request on an owner's phone only when the app shows the same code.
+After pairing, `play`, `ssh` and the version preflight are sent encrypted and
+signed; the FF1 decides what each controller may do. `owner` covers every
+command; `controller` covers playback and status but not `ssh` or controller
+management. Keys are stored in `~/.config/ff-cli/controllers/<device ID>.json`
+(mode 0600). See `./CONFIGURATION.md#secure-control-pairing` for the file,
+roles, and error messages.
 
 Setup preserves existing devices when adding new ones. See selection rules and examples in `./CONFIGURATION.md`.
 
