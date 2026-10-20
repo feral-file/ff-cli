@@ -306,6 +306,55 @@ function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: st
 }
 
 /**
+ * getFF1HandoffConfig resolves the pairing broker independently of live control.
+ * Config wins over environment; production stays on the existing broker until
+ * its channels are drained. A merged relayer is an explicit deployment choice.
+ */
+export function getFF1HandoffConfig(): { baseUrl: string } {
+  return resolveFF1HandoffConfig(getConfig());
+}
+
+/** resolveFF1HandoffConfig validates the broker without echoing credentials. */
+function resolveFF1HandoffConfig(config: Config): { baseUrl: string } {
+  const configured: unknown = config.ff1Handoff;
+  if (
+    configured !== undefined &&
+    (!configured || typeof configured !== 'object' || Array.isArray(configured))
+  ) {
+    throw new Error('ff1Handoff must be an object');
+  }
+  const value = (configured as Record<string, unknown> | undefined)?.baseUrl;
+  if (value !== undefined && typeof value !== 'string') {
+    throw new Error('ff1Handoff.baseUrl must be a string');
+  }
+  const baseUrl = (
+    (value as string | undefined) ||
+    process.env.FF1_HANDOFF_URL ||
+    'https://handoff.feralfile.com'
+  )
+    .trim()
+    .replace(/\/$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    throw new Error('ff1Handoff.baseUrl must be a valid HTTP(S) URL');
+  }
+  if (
+    !['http:', 'https:'].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  ) {
+    throw new Error(
+      'ff1Handoff.baseUrl must be an HTTP(S) URL without credentials, query, or fragment'
+    );
+  }
+  return { baseUrl };
+}
+
+/**
  * Validate configuration
  *
  * @returns {Object} Validation result
@@ -379,6 +428,7 @@ export function validateConfig(): ValidationResult {
 
     try {
       resolveFF1RelayerConfig(config);
+      resolveFF1HandoffConfig(config);
     } catch (error) {
       errors.push((error as Error).message);
     }

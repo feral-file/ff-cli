@@ -1,3 +1,4 @@
+import { getFF1HandoffConfig } from '../config';
 import { defaultDeadlineFetch } from './http';
 import { webcrypto } from 'node:crypto';
 import {
@@ -8,8 +9,6 @@ import {
   handoffVerificationCode,
   type BrokerHandoffMessage,
 } from './handoff-crypto';
-
-const DEFAULT_HANDOFF_URL = 'https://handoff.feralfile.com';
 
 interface CreateChannelResponse {
   channelId: string;
@@ -34,7 +33,7 @@ export interface TopicHandoffPayload {
 }
 
 function brokerBaseUrl(value?: string): string {
-  return (value || process.env.FF1_HANDOFF_URL || DEFAULT_HANDOFF_URL).replace(/\/$/, '');
+  return (value || getFF1HandoffConfig().baseUrl).replace(/\/$/, '');
 }
 
 async function responseJson(response: Response, operation: string): Promise<unknown> {

@@ -375,3 +375,35 @@ npm run dev -- config validate
 ```
 
 If configuration is invalid, the CLI prints actionable errors and a non‑zero exit code.
+
+### Merged relayer and pairing broker
+
+The pairing broker is configured independently from command delivery. Set
+`ff1Handoff.baseUrl` in `config.json`, or `FF1_HANDOFF_URL` in the environment.
+Configuration wins over the environment. The default remains
+`https://handoff.feralfile.com` until the deployment cutover; selecting a custom
+relayer does not silently redirect pairing.
+
+For a local merged Worker, configure both endpoints:
+
+```json
+{
+  "ff1Relayer": { "baseUrl": "http://127.0.0.1:8787" },
+  "ff1Handoff": { "baseUrl": "http://127.0.0.1:8787" }
+}
+```
+
+Use the machine's reachable LAN address in the mobile app and FF1 settings.
+ff-app's `FF1_HANDOFF_URL` must address the same broker as the CLI. The Worker
+requires its local-only `DEV_INSECURE_LAN=true` flag for HTTP on a private LAN
+address. Production must use HTTPS. Broker URLs cannot include credentials,
+a query, or a fragment.
+
+This uses the `/v1/*` encrypted pairing exchange and the explicitly enabled
+legacy `/api/*` command adapter from feral-file/ff-relayer#25. Re-pair when
+switching deployments: an old topic is not valid under a different relayer
+HMAC key. CLI topic transfer is **not** a device-owned owner/controller grant.
+Do not send plaintext CLI commands over `/v2/*`; that migration depends on
+feral-file/feral-file#3551's shared endpoint authentication, encryption, replay
+protection, and device-enforced permissions/revocation. Keep the standalone
+broker and legacy endpoints until all clients pass the migration checks.

@@ -75,6 +75,8 @@ export interface Config {
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
   ff1Relayer?: FF1RelayerConfig;
+  /** ff1Handoff selects the short-lived pairing broker, including a merged relayer. */
+  ff1Handoff?: { baseUrl: string };
   indexer?: IndexerConfig;
 }
 
