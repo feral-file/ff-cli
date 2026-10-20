@@ -9,7 +9,13 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { approvalCode, controllerIdOf, parseProfile } from '../src/utilities/control/codec';
+import {
+  approvalCode,
+  controllerIdOf,
+  labelProblem,
+  parseProfile,
+  stripUnsafeLabelCharacters,
+} from '../src/utilities/control/codec';
 import { thumbprint } from '../src/utilities/control/jwk';
 import {
   createController,
@@ -24,8 +30,10 @@ import {
 } from '../src/utilities/control/pairing';
 import { parseHandoffPayload } from '../src/utilities/handoff-client';
 import {
+  CommandFailure,
   enrollController,
   formatControllerTable,
+  parseLabel,
   runUnpair,
   storeHandoffTopic,
 } from '../src/commands/helpers/device-control';
@@ -492,5 +500,67 @@ describe('unpair', () => {
       throw new Error('must not ask');
     });
     assert.equal(loadController(DEVICE_ID), null);
+  });
+});
+
+describe('controller labels', () => {
+  test('rejects control, bidi and invisible format characters', () => {
+    for (const bad of [
+      'a\u0007b',
+      'a\u0085b',
+      'evil\u202Etxt',
+      'zero\u200Bwidth',
+      'a\u2066b',
+      'a\uFEFFb',
+      'a\u00ADb',
+      'line\u2028sep',
+    ]) {
+      assert.ok(labelProblem(bad), JSON.stringify(bad));
+      assert.throws(
+        () => parseLabel(bad),
+        (e: unknown) =>
+          e instanceof CommandFailure && /invisible formatting/.test((e as Error).message)
+      );
+    }
+  });
+
+  test('accepts ordinary text, including non-ASCII and emoji', () => {
+    for (const ok of ['Studio Mac', 'Brandon’s 筆電', 'gallery 🎨']) {
+      assert.equal(labelProblem(ok), undefined);
+      assert.equal(parseLabel(ok), ok);
+    }
+    assert.throws(() => parseLabel('x'.repeat(65)), /1-64/);
+  });
+
+  test('the hostname-derived default drops unsafe characters', () => {
+    assert.equal(stripUnsafeLabelCharacters('my\u200Bhost\u202E'), 'myhost');
+  });
+
+  test('requestAccess invalid_request explains the label', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const access = await requestAccess(device, record, {
+      fetchFn: fakeFetch(() => ({ ok: false, code: 'invalid_request' })),
+      controllerStore: { dir: storeDir },
+    });
+    assert.equal(access.status, 'failed');
+    assert.match(access.status === 'failed' ? access.failure.details! : '', /--label/);
+  });
+
+  test('a busy answer keeps the enroll poll going', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    let polls = 0;
+    const fetchFn = fakeFetch(() => {
+      polls += 1;
+      return polls === 1
+        ? { publicCode: 'busy', status: 503 }
+        : { ok: true, res: { role: 'controller', nk: NK, profile: keys.device.profile } };
+    });
+    const result = await pollEnrollment(
+      device,
+      record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      { sleepFn: async () => undefined, storeOptions: { dir: storeDir } }
+    );
+    assert.equal(result.status, 'enrolled');
   });
 });

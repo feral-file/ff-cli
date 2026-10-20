@@ -12,7 +12,7 @@ import { type HandoffPayload, HandoffReceiver } from '../../utilities/handoff-cl
 import { storeTopicId } from '../../utilities/topic-store';
 import { createPrompt, promptYesNo } from './prompt';
 import type { FF1Device } from '../../types';
-import { controllerIdOf } from '../../utilities/control/codec';
+import { controllerIdOf, labelProblem } from '../../utilities/control/codec';
 import { isThumbprint } from '../../utilities/control/jwk';
 import {
   type ControllerRecord,
@@ -100,7 +100,8 @@ export function parseTimeoutMs(value: string | undefined): number {
 }
 
 /**
- * parseLabel validates `--label` against the protocol's 1-64 characters.
+ * parseLabel validates `--label`: 1-64 characters, no control or invisible
+ * formatting characters (the FF1 answers such a label with invalid_request).
  *
  * @param value - Flag value
  * @returns The label
@@ -111,9 +112,12 @@ export function parseLabel(value: string | undefined): string {
     return defaultControllerLabel();
   }
   const label = value.trim();
-  const length = [...label].length;
-  if (length < 1 || length > 64) {
-    throw new CommandFailure('--label must be 1-64 characters');
+  const problem = labelProblem(label);
+  if (problem) {
+    throw new CommandFailure(
+      `--label ${problem}.`,
+      'Use plain visible text, e.g. --label "studio-mac".'
+    );
   }
   return label;
 }

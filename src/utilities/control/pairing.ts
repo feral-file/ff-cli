@@ -25,6 +25,7 @@ import {
   type EnrollObject,
   approvalCode,
   controllerIdOf,
+  stripUnsafeLabelCharacters,
 } from './codec';
 import { publicOf, sameKey, thumbprint } from './jwk';
 import {
@@ -57,7 +58,8 @@ type PairDevice = FF1Device & { id: string };
  * @returns A 1-64 character label
  */
 export function defaultControllerLabel(): string {
-  const label = [...(os.hostname().trim() || 'ff-cli')].slice(0, 64).join('');
+  const cleaned = stripUnsafeLabelCharacters(os.hostname()).trim();
+  const label = [...cleaned].slice(0, 64).join('').trim();
   return label || 'ff-cli';
 }
 
@@ -176,6 +178,17 @@ export async function requestAccess(
         expiresAt: typeof res.expiresAt === 'number' ? res.expiresAt : undefined,
       };
     }
+  }
+  if (outcome.kind === 'reply' && outcome.reply.code === 'invalid_request') {
+    return {
+      status: 'failed',
+      failure: {
+        code: 'invalid_request',
+        error: `The FF1 rejected the access request for "${record.label}" as invalid.`,
+        details:
+          'Its label may contain characters the FF1 does not accept. Run the pairing again with a plain label, e.g. `--label "studio-mac"`.',
+      },
+    };
   }
   if (outcome.kind === 'reply' && outcome.reply.code === 'not_approved') {
     return {
@@ -302,6 +315,11 @@ function interpretEnrollOutcome(
       return { status: 'failed', failure: { code: 'invalid_grant', error: grant } };
     }
     return { status: 'enrolled', record: markEnrolled(record.deviceId, grant, storeOptions) };
+  }
+  // busy (§4.4): the FF1 was authenticating too many envelopes and did not
+  // run this one; the next poll is a new request anyway.
+  if (outcome.kind === 'public' && outcome.code === 'busy') {
+    return null;
   }
   if (outcome.kind === 'reply') {
     const code = outcome.reply.code;

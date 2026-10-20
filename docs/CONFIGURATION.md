@@ -349,7 +349,8 @@ encrypted, signed requests. ff-cli takes part as a controller:
 
 ```bash
 ff-cli device pair office                 # receive the profile, request access, wait
-ff-cli device pair office --label studio  # name the owner sees (default: hostname)
+ff-cli device pair office --label studio  # name the owner sees (default: hostname); 1-64 characters,
+                                          # no control or invisible formatting (bidi, zero-width) characters
 ff-cli device pair office --timeout 600   # wait longer for approval (seconds)
 ff-cli device pair office --resume        # continue after Ctrl-C or a timeout
 ```
@@ -409,6 +410,8 @@ Errors and what to do:
 | "This command needs owner access…" | `ssh` or controller management with a controller grant | An owner grants the owner role in the app |
 | "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset). These answers are not authenticated, so check the device address first | If the FF1 was factory reset: `ff-cli device unpair <name>`, then pair again |
 | "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, unpair and pair again |
+| "The FF1 is busy; try again." | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request) | Run the command again |
+| "The FF1 rejected the access request … as invalid." | The pairing label contains characters the FF1 refuses | Pair again with a plain `--label` |
 | "This FF1 has no owner under secure control yet…" | Nobody secured the FF1 in the app | In the app, choose **Secure this FF1**, then pair |
 
 Troubleshooting note:

@@ -54,6 +54,7 @@ const HEADLINES: Record<string, string> = {
   bad_signature: 'The FF1 rejected the request signature.',
   locked: 'The FF1 control store is locked (its identity or grants could not be read).',
   rate_limited: 'The FF1 is rate-limiting requests.',
+  busy: 'The FF1 is busy; try again.',
   expired: 'The FF1 rejected the request as expired.',
   replay: 'The FF1 rejected the request counter as already used.',
   invalid_request: 'The FF1 rejected the request as malformed.',

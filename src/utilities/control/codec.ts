@@ -317,6 +317,47 @@ export function buildRequestClaims(input: RequestInput, rk: Uint8Array): Request
   return claims;
 }
 
+/**
+ * UNSAFE_LABEL_CHARACTERS are characters a controller label must not contain:
+ * C0/C1 controls, every Unicode format character (Cf: zero-width spaces and
+ * joiners, bidi marks and isolates, the BOM, soft hyphen, …) and the line and
+ * paragraph separators. The device rejects the C0/C1 controls and its own
+ * invisible/bidi set (ffos-user devicename.HasUnsafeCharacters) with
+ * `invalid_request`; this set is a superset of that, so ff-cli never sends a
+ * label the device would refuse, and the owner's approval sheet cannot be
+ * spoofed with invisible or reordering characters.
+ */
+const UNSAFE_LABEL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f\p{Cf}\u2028\u2029]/u;
+
+/**
+ * labelProblem explains why a controller label is not acceptable (§5), or
+ * returns undefined when it is.
+ *
+ * @param label - Candidate label
+ * @returns A reason, or undefined
+ */
+export function labelProblem(label: string): string | undefined {
+  const length = [...label].length;
+  if (length < 1 || length > MAX_LABEL_CHARS) {
+    return 'must be 1-64 characters';
+  }
+  if (UNSAFE_LABEL_CHARACTERS.test(label)) {
+    return 'must not contain control characters or invisible formatting (bidi, zero-width) characters';
+  }
+  return undefined;
+}
+
+/**
+ * stripUnsafeLabelCharacters removes what labelProblem rejects, for deriving
+ * a default label from the hostname.
+ *
+ * @param value - Raw text
+ * @returns Text without unsafe characters
+ */
+export function stripUnsafeLabelCharacters(value: string): string {
+  return value.replace(new RegExp(UNSAFE_LABEL_CHARACTERS.source, 'gu'), '');
+}
+
 function assertCommand(cmd: unknown, req: unknown, enroll: unknown): void {
   if (typeof cmd !== 'string' || cmd.length === 0 || Buffer.byteLength(cmd) > 64) {
     throw new Error('cmd must be a 1-64 byte command name');
@@ -339,9 +380,9 @@ function assertEnroll(op: RequestOp, enroll: EnrollObject | undefined, cmd: unkn
   if (thumbprint(enroll.sig) !== ctl) {
     throw new Error('enroll.sig must be the signing key');
   }
-  const labelChars = [...enroll.label].length;
-  if (labelChars < 1 || labelChars > MAX_LABEL_CHARS) {
-    throw new Error('enroll label must be 1-64 characters');
+  const problem = labelProblem(enroll.label);
+  if (problem) {
+    throw new Error(`enroll label ${problem}`);
   }
   if (!CONTROL_PLATFORMS.includes(enroll.platform)) {
     throw new Error('enroll platform is invalid');

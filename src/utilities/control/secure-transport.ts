@@ -50,7 +50,9 @@ import { type ControlFailure, describeControlCode, unverifiedReplyFailure } from
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 750;
 const MAX_RETRY_DELAY_MS = 30_000;
-const PUBLIC_ERROR_STATUSES = new Set([401, 403]);
+// §4.4 public errors come back as LAN 401/403, and `busy` (the device was
+// authenticating too many envelopes at once; nothing was executed) as 503.
+const PUBLIC_ERROR_STATUSES = new Set([401, 403, 503]);
 
 export type Transport = 'lan' | 'relayer';
 
@@ -288,13 +290,16 @@ async function attemptLan(
 }
 
 /**
- * retryableReply reports whether an encrypted reply may be retried with a new
- * request: `internal_error` (§4.3: not executed, retry with a new ctr),
+ * retryableReply reports whether an answer may be retried with a new
+ * request: the public `busy` (§4.4: not executed), `internal_error` (§4.3: not executed, retry with a new ctr),
  * `rate_limited`, and a `command_failed` whose handler body is the router's
  * storm protection (`res.error == "rate_limited"`), which the plaintext path
  * sees as HTTP 429 and already retries.
  */
 function retryableReply(outcome: SecureOutcome): boolean {
+  if (outcome.kind === 'public') {
+    return outcome.code === 'busy';
+  }
   if (outcome.kind !== 'reply' || outcome.reply.ok) {
     return false;
   }

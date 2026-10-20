@@ -364,6 +364,69 @@ describe('secure displayPlaylist', () => {
     });
   }
 
+  test('play retries a public busy (LAN 503) with a new request', async () => {
+    enrolledRecord('controller');
+    const device = fakeDevice();
+    let casts = 0;
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const answer = device.handle(JSON.parse(String(init?.body)));
+      if (device.seen.at(-1)!.cmd === 'displayPlaylist' && casts++ === 0) {
+        return json(503, { error: { code: 'busy' } });
+      }
+      return json(answer.status, answer.json);
+    };
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        waitFn: async () => undefined,
+      }
+    );
+    assert.equal(result.success, true, result.error);
+    const casted = device.seen.filter((c) => c.cmd === 'displayPlaylist');
+    assert.equal(casted.length, 2);
+    assert.notEqual(casted[0].ctr, casted[1].ctr);
+    assert.notEqual(casted[0].rid, casted[1].rid);
+  });
+
+  test('a busy preflight does not stop the command', async () => {
+    enrolledRecord('owner');
+    const device = fakeDevice((claims) =>
+      claims.cmd === 'getDeviceStatus'
+        ? { publicCode: 'busy', status: 503 }
+        : { ok: true, res: { ok: true } }
+    );
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      { fetchFn: lanFetch(device), controllerStore: { dir: storeDir }, nowFn: () => NOW }
+    );
+    assert.equal(result.success, true, result.error);
+  });
+
+  test('busy from the relayer RPC is reported as busy', async () => {
+    enrolledRecord('controller');
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn: async (input) => {
+          if (new URL(input.toString()).origin === HOST) {
+            throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+          }
+          return json(200, { message: { error: { code: 'busy' } } });
+        },
+        getTopicIdFn: () => 'topic-secret',
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        waitFn: async () => undefined,
+        noticeFn: () => undefined,
+      }
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'The FF1 is busy; try again.');
+  });
+
   test('a command_failed that is not storm protection is not retried', async () => {
     enrolledRecord('controller');
     const device = fakeDevice((claims) =>
@@ -670,6 +733,27 @@ describe('secure sshAccess', () => {
     assert.equal(result.success, false);
     assert.match(result.error!, /owner access/);
     assert.match(result.details!, /owner role/);
+  });
+
+  test('ssh shows busy without retrying', async () => {
+    enrolledRecord('owner');
+    const device = fakeDevice((claims) =>
+      claims.cmd === 'sshAccess' ? { publicCode: 'busy', status: 503 } : { ok: true, res: {} }
+    );
+    const result = await sendSshAccessCommand(
+      { enabled: false },
+      {
+        fetchFn: async (_input, init) => {
+          const answer = device.handle(JSON.parse(String(init?.body)));
+          return json(answer.status, answer.json);
+        },
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+      }
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'The FF1 is busy; try again.');
+    assert.equal(device.seen.filter((c) => c.cmd === 'sshAccess').length, 1);
   });
 
   test('does not fall back to the relayer', async () => {
