@@ -89,7 +89,9 @@ function followUp(code: string, pair: string): string | undefined {
       return 'Ask an owner to give this controller the owner role in the Feral File app (Controllers), or run the command from an owner device.';
     case 'bad_envelope':
     case 'bad_signature':
-      return `The FF1's control identity may have changed (for example after a factory reset). Run \`ff-cli device unpair\` and then \`${pair}\`.`;
+      // Public errors are unauthenticated: anyone on the path can send one,
+      // so the advice is conditional and never pushes an unpair outright.
+      return `If this FF1 was factory reset, run \`ff-cli device unpair\` and then \`${pair}\`. Otherwise check the device address and try again.`;
     case 'locked':
       return 'The FF1 needs attention: restart it, and if the problem stays, factory reset it from the Feral File app.';
     case 'rate_limited':

@@ -28,6 +28,7 @@ import {
   DevicePublicError,
   concatKdf,
   openRequest,
+  sealReply,
   thumb,
   type Jwk,
 } from './helpers/control-device';
@@ -359,5 +360,49 @@ describe('notification ordering (§9 ep, seq)', () => {
     assert.equal(order.accept({ ep: 'AAAAAAAAAAA', seq: 2 }), false);
     assert.equal(order.accept({ ep: 'AAAAAAAAAAA', seq: 3 }), false);
     assert.equal(order.accept({ ep: 'BBBBBBBBBBB', seq: 1 }), true);
+  });
+});
+
+describe('reply payload segment is decoded strictly (§1)', () => {
+  const rk = Buffer.alloc(32, 7).toString('base64url');
+  const bind = { dev: device.dev, gen: device.gen, ctl: controllers.owner.ctl, rid: 'rid-strict' };
+  const claims = { v: 1, ...bind, iat: 1, ok: true, res: { ok: true } };
+
+  /** withTrailingBits flips the unused low bits of the last base64url character. */
+  function withTrailingBits(segment: string): string {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+    const unused = segment.length % 4 === 2 ? 4 : segment.length % 4 === 3 ? 2 : 0;
+    assert.ok(unused > 0, 'segment must end in a partial group');
+    const last = alphabet.indexOf(segment.at(-1)!);
+    return segment.slice(0, -1) + alphabet[last | ((1 << unused) - 1)];
+  }
+
+  test('a correctly signed reply opens (control)', async () => {
+    const compact = sealReply(device.sig, rk, claims);
+    assert.equal((await openReply(compact, b64uDecode(rk), profile.sig, bind)).ok, true);
+  });
+
+  test('rejects non-canonical trailing bits in the payload segment', async () => {
+    // Pad claims until the encoded payload ends in a partial base64 group.
+    let padded = { ...claims, res: { ok: true, pad: '' } };
+    while (Buffer.byteLength(JSON.stringify(padded)) % 3 === 0) {
+      padded = { ...padded, res: { ok: true, pad: `${padded.res.pad}x` } };
+    }
+    const compact = sealReply(device.sig, rk, padded, withTrailingBits);
+    await assert.rejects(
+      openReply(compact, b64uDecode(rk), profile.sig, bind),
+      /non-canonical base64url/
+    );
+  });
+
+  test('rejects padding in the payload segment', async () => {
+    let padded = { ...claims, res: { ok: true, pad: '' } };
+    while (Buffer.byteLength(JSON.stringify(padded)) % 3 === 0) {
+      padded = { ...padded, res: { ok: true, pad: `${padded.res.pad}x` } };
+    }
+    const compact = sealReply(device.sig, rk, padded, (seg) =>
+      seg.padEnd(Math.ceil(seg.length / 4) * 4, '=')
+    );
+    await assert.rejects(openReply(compact, b64uDecode(rk), profile.sig, bind), /base64url/);
   });
 });

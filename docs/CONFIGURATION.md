@@ -266,6 +266,8 @@ You can also manage devices independently with:
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
 - `ff-cli device unpair [name]` – Delete ff-cli's controller keys for an FF1.
+  Owner keys need confirmation (or `--yes`): if no other owner can reach the
+  FF1, deleting them leaves it without a reachable owner until a factory reset.
 
 Setup and `device add` both preserve existing devices. Adding a device with the same host as an existing one updates it in place.
 
@@ -405,7 +407,7 @@ Errors and what to do:
 | "This FF1 is secured and only accepts requests from paired controllers." | The FF1 refuses plaintext and ff-cli is not paired | `ff-cli device pair <name>`, approve in the app |
 | "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys | `ff-cli device pair <name>` (or `--resume`), approve in the app |
 | "This command needs owner access…" | `ssh` or controller management with a controller grant | An owner grants the owner role in the app |
-| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset) | `ff-cli device unpair <name>`, then pair again |
+| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset). These answers are not authenticated, so check the device address first | If the FF1 was factory reset: `ff-cli device unpair <name>`, then pair again |
 | "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, unpair and pair again |
 | "This FF1 has no owner under secure control yet…" | Nobody secured the FF1 in the app | In the app, choose **Secure this FF1**, then pair |
 

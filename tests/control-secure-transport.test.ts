@@ -16,10 +16,12 @@ import {
   type ControllerRecord,
   controllerFilePath,
   createController,
+  deleteController,
   loadController,
   markEnrolled,
   nextCounter,
   saveController,
+  updateLabel,
 } from '../src/utilities/control/controller-store';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
 import { sendSshAccessCommand } from '../src/utilities/ssh-access';
@@ -154,11 +156,71 @@ describe('controller key store', () => {
     assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
   });
 
-  test('breaks a fresh lock whose holder process has exited', () => {
+  test('breaks a lock whose holder process has exited once it is old enough', () => {
     enrolledRecord('owner');
     const dead = spawnSync(process.execPath, ['-e', '']).pid!;
-    fs.writeFileSync(`${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`, String(dead));
+    const lock = `${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`;
+    fs.writeFileSync(lock, `${dead}:token`);
+    const old = new Date(Date.now() - 5_000);
+    fs.utimesSync(lock, old, old);
     assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
+    assert.equal(fs.existsSync(lock), false);
+    assert.deepEqual(
+      fs.readdirSync(storeDir).filter((f) => f.endsWith('.stale')),
+      []
+    );
+  });
+
+  test('does not break a dead-holder lock younger than the minimum age', () => {
+    enrolledRecord('owner');
+    const dead = spawnSync(process.execPath, ['-e', '']).pid!;
+    const lock = `${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`;
+    fs.writeFileSync(lock, `${dead}:token`);
+    // nextCounter waits up to 5 s; the lock turns 1 s old meanwhile and is
+    // broken then, so the allocation succeeds only after that delay.
+    const started = Date.now();
+    assert.equal(nextCounter(DEVICE_ID, { dir: storeDir }).ctr, 1);
+    assert.ok(Date.now() - started >= 900);
+  });
+
+  test('unpair (deleteController) takes the counter lock', () => {
+    enrolledRecord('owner');
+    const lock = `${controllerFilePath(DEVICE_ID, { dir: storeDir })}.lock`;
+    fs.writeFileSync(lock, `${process.ppid}:other`);
+    assert.throws(() => deleteController(DEVICE_ID, { dir: storeDir }), /Timed out/);
+    assert.ok(loadController(DEVICE_ID, { dir: storeDir }));
+    fs.rmSync(lock);
+    assert.equal(deleteController(DEVICE_ID, { dir: storeDir }), true);
+  });
+
+  test('a label update re-reads under the lock and keeps a newer counter', () => {
+    const stale = createController(
+      { profile: parseProfile(keys.device.profile), label: 'a' },
+      { dir: storeDir }
+    );
+    nextCounter(DEVICE_ID, { dir: storeDir });
+    nextCounter(DEVICE_ID, { dir: storeDir });
+    assert.equal(stale.ctr, 0); // the caller's copy is out of date
+    const updated = updateLabel(DEVICE_ID, 'b', { dir: storeDir });
+    assert.equal(updated.ctr, 2);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 2);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.label, 'b');
+  });
+
+  test('a failed atomic write leaves no temp file with key material', () => {
+    // The target name is a non-empty directory, so the rename fails.
+    const target = controllerFilePath(DEVICE_ID, { dir: storeDir });
+    fs.mkdirSync(path.join(target, 'blocker'), { recursive: true });
+    assert.throws(() =>
+      createController(
+        { profile: parseProfile(keys.device.profile), label: 'x' },
+        { dir: storeDir }
+      )
+    );
+    assert.deepEqual(
+      fs.readdirSync(storeDir).filter((f) => f.endsWith('.tmp')),
+      []
+    );
   });
 
   test('releasing never removes a lock another process now holds', () => {
@@ -257,6 +319,64 @@ describe('secure displayPlaylist', () => {
       device.seen.map((c) => c.cmd),
       ['getDeviceStatus', 'displayPlaylist']
     );
+  });
+
+  for (const [name, first] of [
+    ['internal_error', { ok: false, code: 'internal_error' }],
+    ['rate_limited', { ok: false, code: 'rate_limited' }],
+    [
+      'storm-protection command_failed',
+      {
+        ok: false,
+        code: 'command_failed',
+        res: { ok: false, error: 'rate_limited', command: 'displayPlaylist', message: 'busy' },
+      },
+    ],
+  ] as const) {
+    test(`play retries ${name} with a new request (new ctr and rid)`, async () => {
+      enrolledRecord('controller');
+      let casts = 0;
+      const device = fakeDevice((claims) => {
+        if (claims.cmd !== 'displayPlaylist') {
+          return { ok: true, res: {} };
+        }
+        casts += 1;
+        return casts === 1 ? first : { ok: true, res: { ok: true } };
+      });
+      const waits: number[] = [];
+      const result = await sendPlaylistToDevice(
+        { playlist },
+        {
+          fetchFn: lanFetch(device),
+          controllerStore: { dir: storeDir },
+          nowFn: () => NOW,
+          waitFn: async (ms) => {
+            waits.push(ms);
+          },
+        }
+      );
+      assert.equal(result.success, true, result.error);
+      const casted = device.seen.filter((c) => c.cmd === 'displayPlaylist');
+      assert.equal(casted.length, 2);
+      assert.notEqual(casted[0].ctr, casted[1].ctr);
+      assert.notEqual(casted[0].rid, casted[1].rid);
+      assert.equal(waits.length, 1);
+    });
+  }
+
+  test('a command_failed that is not storm protection is not retried', async () => {
+    enrolledRecord('controller');
+    const device = fakeDevice((claims) =>
+      claims.cmd === 'displayPlaylist'
+        ? { ok: false, code: 'command_failed', res: { ok: false, error: 'playlistInvalid' } }
+        : { ok: true, res: {} }
+    );
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      { fetchFn: lanFetch(device), controllerStore: { dir: storeDir }, nowFn: () => NOW }
+    );
+    assert.equal(result.success, false);
+    assert.equal(device.seen.filter((c) => c.cmd === 'displayPlaylist').length, 1);
   });
 
   test('a retry after HTTP 429 is a new request with a new ctr and rid', async () => {

@@ -23,7 +23,14 @@ import {
   requestAccess,
 } from '../src/utilities/control/pairing';
 import { parseHandoffPayload } from '../src/utilities/handoff-client';
-import { enrollController, formatControllerTable } from '../src/commands/helpers/device-control';
+import {
+  enrollController,
+  formatControllerTable,
+  runUnpair,
+  storeHandoffTopic,
+} from '../src/commands/helpers/device-control';
+import { describeControlCode } from '../src/utilities/control/control-errors';
+import { markEnrolled } from '../src/utilities/control/controller-store';
 import { FakeFF1, thumb, type Jwk } from './helpers/control-device';
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'ff1-control-v1');
@@ -353,5 +360,137 @@ describe('controllers table', () => {
     assert.match(text, /revoked 2025-12-31 23:50/);
     assert.match(text, /359 263/);
     assert.ok(text.includes(keys.controllers.owner.ctl));
+  });
+});
+
+/** fakeFetch routes casts to a FakeFF1 with a custom decision. */
+function fakeFetch(decide: ConstructorParameters<typeof FakeFF1>[2], before?: () => void) {
+  const fake = new FakeFF1(
+    { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+    {},
+    decide
+  );
+  const fetchFn: typeof fetch = async (_i, init) => {
+    before?.();
+    const a = fake.handle(JSON.parse(String(init?.body)));
+    return json(a.status, a.json);
+  };
+  return fetchFn;
+}
+
+describe('pairing robustness', () => {
+  test('an unavailable keyring warns and lets pairing continue', () => {
+    const warnings: string[] = [];
+    const stored = storeHandoffTopic(
+      DEVICE_ID,
+      'topic-secret',
+      () => {
+        throw new Error('no secret service');
+      },
+      (m) => warnings.push(m)
+    );
+    assert.equal(stored, false);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /relayer fallback/);
+    assert.ok(!warnings[0].includes('topic-secret'));
+  });
+
+  test('an approval-code mismatch deletes the pending file this run created', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const fetchFn = fakeFetch(() => ({
+      ok: true,
+      res: { status: 'pending', code: '000000', expiresAt: 1 },
+    }));
+    await assert.rejects(
+      enrollController(device, created.record, 10_000, true, {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+      }),
+      /different approval code/
+    );
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+  });
+
+  test('Ctrl-C while requestAccess is in flight deletes the pending file', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const fetchFn = fakeFetch(
+      (claims) => ({
+        ok: true,
+        res: {
+          status: 'pending',
+          code: approvalCode(String(claims.ctl), keys.device.pins.sig),
+          expiresAt: 1,
+        },
+      }),
+      () => {
+        process.emit('SIGINT');
+      }
+    );
+    const previous = process.exitCode;
+    try {
+      await enrollController(device, created.record, 10_000, true, {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+      });
+      assert.equal(process.exitCode, 130);
+    } finally {
+      process.exitCode = previous;
+    }
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+  });
+
+  test('public bad_envelope / bad_signature advice is conditional', () => {
+    for (const code of ['bad_envelope', 'bad_signature']) {
+      const failure = describeControlCode(code, 'Office');
+      assert.match(failure.details!, /^If this FF1 was factory reset/);
+    }
+  });
+});
+
+describe('unpair', () => {
+  const originalCwd = process.cwd();
+  const originalXdg = process.env.XDG_CONFIG_HOME;
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'ff1-unpair-'));
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      JSON.stringify({ ff1Devices: { devices: [device] } })
+    );
+    process.chdir(home);
+    process.env.XDG_CONFIG_HOME = path.join(home, 'xdg');
+    prepareController(profile, 'x');
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK });
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    if (originalXdg === undefined) {
+      delete process.env.XDG_CONFIG_HOME;
+    } else {
+      process.env.XDG_CONFIG_HOME = originalXdg;
+    }
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test('owner keys are kept when the confirmation is declined', async () => {
+    const asked: string[] = [];
+    await assert.rejects(
+      runUnpair('Office', {}, async (q) => {
+        asked.push(q);
+        return false;
+      }),
+      /nothing was deleted/
+    );
+    assert.equal(asked.length, 1);
+    assert.ok(loadController(DEVICE_ID));
+  });
+
+  test('--yes deletes owner keys without asking', async () => {
+    await runUnpair('Office', { yes: true }, async () => {
+      throw new Error('must not ask');
+    });
+    assert.equal(loadController(DEVICE_ID), null);
   });
 });

@@ -71,9 +71,15 @@ const DIR_MODE = 0o700;
 const DEVICE_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const LOCK_RETRY_MS = 25;
 const LOCK_TIMEOUT_MS = 5_000;
-// A lock older than this is from a process that died mid-allocation; an
-// allocation holds the lock for one small file write.
-const LOCK_STALE_MS = 30_000;
+// A lock is held for one small synchronous file write. A lock whose recorded
+// holder PID is dead AND that is at least LOCK_MIN_STALE_MS old is stale; the
+// age floor keeps a breaker from racing a holder that has only just written
+// its token. A lock without a readable PID (the holder died between create
+// and write) is stale after LOCK_UNOWNED_STALE_MS. A lock whose PID is alive
+// (or was reused) is never broken automatically: the timeout error names the
+// file for the user to remove.
+const LOCK_MIN_STALE_MS = 1_000;
+const LOCK_UNOWNED_STALE_MS = 30_000;
 
 /**
  * controllersDir returns `<XDG_CONFIG_HOME or ~/.config>/ff-cli/controllers`,
@@ -272,13 +278,15 @@ function writeAtomic(file: string, contents: string): void {
   ensurePrivateDir(dir);
   const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.${Date.now()}.tmp`);
   const fd = fs.openSync(tmp, 'wx', FILE_MODE);
+  // Any failure before the rename (ENOSPC on write, fsync, close, rename)
+  // removes the temp file: it holds private keys and must not linger.
   try {
-    fs.writeFileSync(fd, contents, 'utf8');
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
-  }
-  try {
+    try {
+      fs.writeFileSync(fd, contents, 'utf8');
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
     fs.renameSync(tmp, file);
   } catch (error) {
     fs.rmSync(tmp, { force: true });
@@ -348,11 +356,44 @@ export function createController(
  */
 export function deleteController(deviceId: string, options: ControllerStoreOptions = {}): boolean {
   const file = controllerFilePath(deviceId, options);
-  if (!fs.existsSync(file)) {
-    return false;
-  }
-  fs.rmSync(file);
-  return true;
+  // Under the lock, so a concurrent nextCounter cannot re-create the file
+  // (resurrecting it) after the delete.
+  return withControllerLock(file, () => {
+    if (!fs.existsSync(file)) {
+      return false;
+    }
+    fs.rmSync(file);
+    return true;
+  });
+}
+
+/**
+ * updateLabel changes a record's label as a locked re-read + save, so a
+ * counter allocated concurrently by another process is never rolled back.
+ *
+ * @param deviceId - FF1 device ID
+ * @param label - New label
+ * @param options - Optional directory override
+ * @returns The updated record
+ * @throws {Error} When the file is missing or corrupt
+ */
+export function updateLabel(
+  deviceId: string,
+  label: string,
+  options: ControllerStoreOptions = {}
+): ControllerRecord {
+  const file = controllerFilePath(deviceId, options);
+  return withControllerLock(file, () => {
+    const record = loadController(deviceId, options);
+    if (!record) {
+      throw new Error(`No controller file for ${deviceId}`);
+    }
+    if (record.label !== label) {
+      record.label = label;
+      saveController(record, options);
+    }
+    return record;
+  });
 }
 
 /** sleepSync blocks briefly without spinning the CPU (lock retry only). */
@@ -363,9 +404,9 @@ function sleepSync(ms: number): void {
 /**
  * withControllerLock runs fn while holding `<file>.lock`, created with O_EXCL
  * so two ff-cli processes cannot allocate the same counter. The lock records
- * the holder's PID; a lock whose holder is gone (killed mid-allocation) or
- * that is older than LOCK_STALE_MS is broken. fn must be synchronous, so a
- * JS-level signal handler can never run while the lock is held.
+ * the holder's PID and a unique token; see isStaleLock for when it is broken.
+ * fn must be synchronous, so a JS-level signal handler can never run while
+ * the lock is held.
  */
 function withControllerLock<T>(file: string, fn: () => T): T {
   const lock = `${file}.lock`;
@@ -387,12 +428,15 @@ function withControllerLock<T>(file: string, fn: () => T): T {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
         throw error;
       }
-      if (isStaleLock(lock)) {
-        breakStaleLock(lock);
+      const stale = readStaleLock(lock);
+      if (stale !== null) {
+        breakStaleLock(lock, stale);
         continue;
       }
       if (Date.now() > deadline) {
-        throw new Error(`Timed out waiting for controller lock ${lock}`);
+        throw new Error(
+          `Timed out waiting for controller lock ${lock}. If no other ff-cli command is running, delete that file and retry.`
+        );
       }
       sleepSync(LOCK_RETRY_MS);
     }
@@ -405,29 +449,42 @@ function withControllerLock<T>(file: string, fn: () => T): T {
 }
 
 /**
- * breakStaleLock moves a stale lock aside with rename, which only one of
- * several concurrent breakers can win (the losers get ENOENT and simply retry
- * the O_EXCL create). Deleting it in place instead would let a slow breaker
- * delete a lock another process had just re-created and now holds.
+ * breakStaleLock moves a lock judged stale aside with rename, which only one
+ * of several concurrent breakers can win (losers get ENOENT and retry the
+ * O_EXCL create). The moved file is then re-read: if it is no longer the lock
+ * that was judged stale, another process re-created the lock between the
+ * check and the rename, and we just moved a LIVE lock. It is linked back; if
+ * that fails (a third process created a new lock meanwhile) two holders could
+ * exist, so this fails with a lock error instead of proceeding.
+ *
+ * @param lock - Lock path
+ * @param judged - Contents of the lock when it was judged stale
+ * @throws {Error} When a live lock was displaced and cannot be restored
  */
-function breakStaleLock(lock: string): void {
+function breakStaleLock(lock: string, judged: string): void {
   const aside = `${lock}.${process.pid}.${randomUUID()}.stale`;
   try {
     fs.renameSync(lock, aside);
   } catch {
     return; // someone else broke it first
   }
-  if (isStaleLock(aside)) {
+  let moved: string | null;
+  try {
+    moved = fs.readFileSync(aside, 'utf8');
+  } catch {
+    moved = null;
+  }
+  if (moved === judged) {
     fs.rmSync(aside, { force: true });
     return;
   }
-  // The lock was re-created by a live holder between our check and the
-  // rename: put it back if the name is still free, else drop our copy.
   try {
     fs.linkSync(aside, lock);
   } catch {
-    // a newer lock exists; ours was the live one only if it still matches,
-    // which cannot be restored safely, so the holder's release is a no-op
+    fs.rmSync(aside, { force: true });
+    throw new Error(
+      `Controller lock ${lock} changed while it was being recovered; retry the command.`
+    );
   }
   fs.rmSync(aside, { force: true });
 }
@@ -443,16 +500,28 @@ function releaseLock(lock: string, token: string): void {
   }
 }
 
-/** isStaleLock reports whether a lock's holder is gone or the lock is too old. */
-function isStaleLock(lock: string): boolean {
+/**
+ * readStaleLock returns the lock's contents when it is stale, else null.
+ * Stale means: the recorded holder PID is dead and the lock is at least
+ * LOCK_MIN_STALE_MS old, or there is no readable PID and the lock is older
+ * than LOCK_UNOWNED_STALE_MS.
+ *
+ * @param lock - Lock path
+ * @returns Contents judged stale, or null
+ */
+function readStaleLock(lock: string): string | null {
   try {
-    const pid = Number(fs.readFileSync(lock, 'utf8').split(':')[0]);
-    if (Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid && !processExists(pid)) {
-      return true;
+    const contents = fs.readFileSync(lock, 'utf8');
+    const age = Date.now() - fs.statSync(lock).mtimeMs;
+    const pid = Number(contents.split(':')[0]);
+    const hasPid = contents !== '' && Number.isSafeInteger(pid) && pid > 0;
+    if (hasPid) {
+      const dead = pid !== process.pid && !processExists(pid);
+      return dead && age >= LOCK_MIN_STALE_MS ? contents : null;
     }
-    return Date.now() - fs.statSync(lock).mtimeMs > LOCK_STALE_MS;
+    return age > LOCK_UNOWNED_STALE_MS ? contents : null;
   } catch {
-    return false;
+    return null;
   }
 }
 

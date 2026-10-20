@@ -142,7 +142,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `--label <label>`, `--timeout <seconds>`, `--resume`
 - `device controllers [name]` – List an FF1's paired controllers and pending requests (owner only)
 - `device revoke <controller-id> [name]` – Revoke a controller or deny its pending request (owner only)
-- `device unpair [name]` – Delete ff-cli's controller keys for an FF1
+- `device unpair [name]` – Delete ff-cli's controller keys for an FF1 (owner keys ask first; `-y, --yes` skips)
 - `device rename <name> <new-name>` – Rename a configured FF1 device (host, API key, and default status are untouched)
 - `device remove <name>` – Remove a configured FF1 device
 - `device default <name>` – Set the default FF1 device (used when `-d` is omitted)

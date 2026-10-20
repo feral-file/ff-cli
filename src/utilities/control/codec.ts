@@ -532,13 +532,21 @@ async function verifyReplyJws(jws: string, devSig: PublicJwk): Promise<Uint8Arra
   if (b64uDecode(parts[2]).length !== ES256_SIG_LEN) {
     throw new ControlFormatError('reply signature length');
   }
+  // Decode the payload segment strictly ourselves (§1: no padding, no
+  // non-zero trailing bits): jose's decoder is lenient, and two segments
+  // that decode to the same claims must not both be accepted.
+  const strictPayload = b64uDecode(parts[1]);
+  let payload: Uint8Array;
   try {
     const key = await importJWK({ ...publicOf(devSig) }, 'ES256');
-    const { payload } = await compactVerify(jws, key, { algorithms: ['ES256'] });
-    return payload;
+    ({ payload } = await compactVerify(jws, key, { algorithms: ['ES256'] }));
   } catch {
     throw new ControlFormatError('reply signature');
   }
+  if (Buffer.compare(Buffer.from(payload), Buffer.from(strictPayload)) !== 0) {
+    throw new ControlFormatError('reply payload decoding mismatch');
+  }
+  return strictPayload;
 }
 
 /**

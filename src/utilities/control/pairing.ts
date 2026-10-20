@@ -33,7 +33,7 @@ import {
   createController,
   loadController,
   markEnrolled,
-  saveController,
+  updateLabel,
 } from './controller-store';
 import {
   type SecureOutcome,
@@ -96,11 +96,7 @@ export function prepareController(
     existing = null; // corrupt: replaced below with fresh keys
   }
   if (existing && sameIdentity(existing.profile, profile)) {
-    if (existing.label !== label) {
-      existing.label = label;
-      saveController(existing, options);
-    }
-    return { record: existing, reused: true };
+    return { record: updateLabel(profile.dev, label, options), reused: true };
   }
   return { record: createController({ profile, label }, options), reused: false };
 }

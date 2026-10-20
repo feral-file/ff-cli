@@ -211,9 +211,16 @@ function openInnerJws(jwsText: string, grants: Record<string, Jwk>): OpenedReque
 }
 
 /** sealReply builds a §4.1 reply the way the device does. */
-export function sealReply(devSig: Jwk, rk: string, claims: Record<string, unknown>): string {
+export function sealReply(
+  devSig: Jwk,
+  rk: string,
+  claims: Record<string, unknown>,
+  mutatePayloadSegment: (segment: string) => string = (segment) => segment
+): string {
   const header = `{"alg":"ES256","kid":"${thumb(devSig)}","typ":"ff1-res+jws"}`;
-  const input = `${b64(header)}.${b64(JSON.stringify(claims))}`;
+  // The mutation is applied BEFORE signing, so a non-canonical segment still
+  // carries a valid signature: only strict decoding can reject it.
+  const input = `${b64(header)}.${mutatePayloadSegment(b64(JSON.stringify(claims)))}`;
   const jws = `${input}.${esSign(devSig, input)}`;
   return gcmSeal(
     unb64(rk),

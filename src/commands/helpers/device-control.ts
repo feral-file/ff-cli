@@ -10,6 +10,7 @@ import chalk from 'chalk';
 import { resolveConfiguredDevice } from '../../utilities/ff1-compatibility';
 import { type HandoffPayload, HandoffReceiver } from '../../utilities/handoff-client';
 import { storeTopicId } from '../../utilities/topic-store';
+import { createPrompt, promptYesNo } from './prompt';
 import type { FF1Device } from '../../types';
 import { controllerIdOf } from '../../utilities/control/codec';
 import { isThumbprint } from '../../utilities/control/jwk';
@@ -146,7 +147,7 @@ export async function runPair(name: string | undefined, options: PairOptions): P
     return;
   }
   if (payload.topicId) {
-    storeTopicId(device.id, payload.topicId);
+    storeHandoffTopic(device.id, payload.topicId);
   }
   const { record, reused } = prepareController(payload.profile, label);
   console.log(
@@ -155,6 +156,36 @@ export async function runPair(name: string | undefined, options: PairOptions): P
     )
   );
   await enrollController(device, record, timeoutMs, !reused);
+}
+
+/**
+ * storeHandoffTopic stores the v2 handoff's relayer topic. On a v2 handoff
+ * the topic only enables the relayer fallback; the controller pairing works
+ * without it, so an unavailable keyring (headless Linux has no secret
+ * service) is a warning, not a failed pairing. The topic is never printed.
+ *
+ * @param deviceId - FF1 device ID
+ * @param topicId - Relayer topic from the handoff
+ * @param storeFn - Keyring writer (tests inject a failing one)
+ * @param warnFn - Warning sink
+ * @returns True when the topic was stored
+ */
+export function storeHandoffTopic(
+  deviceId: string,
+  topicId: string,
+  storeFn: (deviceId: string, topicId: string) => void = storeTopicId,
+  warnFn: (message: string) => void = (m) => console.warn(chalk.yellow(m))
+): boolean {
+  try {
+    storeFn(deviceId, topicId);
+    return true;
+  } catch (error) {
+    warnFn(
+      `Warning: the operating system secure storage is unavailable (${(error as Error).message}). ` +
+        'Pairing continues, but the relayer fallback for this FF1 will not be available until it is.'
+    );
+    return false;
+  }
 }
 
 /** receiveHandoff runs the existing broker handoff and always closes the channel. */
@@ -214,39 +245,62 @@ export async function enrollController(
   deps: SecureTransportDeps = {}
 ): Promise<void> {
   const ctl = controllerIdOf(record.keys);
-  console.log(`\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`);
-  const access = await requestAccess(device, record, deps);
-  if (access.status === 'failed') {
-    // A pending controller file switches every command to envelopes. When
-    // nobody can approve it (the FF1 has no secure owner yet: not_approved)
-    // or the request never got through, a file created by THIS run must not
-    // be left behind, or play/ssh would stop working on an FF1 that still
-    // accepts plaintext. A reused file belonged to an earlier pairing; keep it.
+  // A pending controller file switches every command to envelopes, so a file
+  // created by THIS run is removed whenever the run ends without a request the
+  // owner can approve: refused (an FF1 with no secure owner answers
+  // not_approved), unreachable, a code mismatch, or Ctrl-C before the request
+  // was confirmed. A reused file belonged to an earlier pairing; keep it.
+  const discard = () => {
     if (createdNow) {
       deleteController(device.id, deps.controllerStore);
     }
-    throw new CommandFailure(access.failure.error, access.failure.details);
-  }
-  if (access.status === 'pending') {
-    const code = localApprovalCode(record);
-    // The device signs its code with the pinned devSig over the same inputs,
-    // so a mismatch cannot be a man-in-the-middle; it is a protocol bug.
-    if (access.code !== code) {
-      throw new CommandFailure('The FF1 reported a different approval code than ff-cli computed.');
+  };
+  // SIGINT handling is installed before requestAccess, so a Ctrl-C while the
+  // request is in flight is seen and cleaned up instead of killing the process.
+  const result = await withInterrupt(async (cancelled) => {
+    console.log(
+      `\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`
+    );
+    const access = await requestAccess(device, record, deps);
+    if (access.status === 'failed') {
+      discard();
+      throw new CommandFailure(access.failure.error, access.failure.details);
     }
-    console.log('\nOn an owner’s phone, open the Feral File app and approve this request.');
-    console.log('Approve it only if the app shows this code:');
-    console.log(`\n  ${chalk.bold.cyan(formatCode(code))}\n`);
-    console.log(chalk.dim(`Controller ID: ${ctl}`));
-    console.log(chalk.dim(`Waiting up to ${Math.round(timeoutMs / 1000)}s for approval...`));
-  }
-  const result = await withInterrupt((cancelled) =>
-    pollEnrollment(device, record, deps, {
+    if (cancelled()) {
+      discard();
+      return { status: 'interrupted-early' as const };
+    }
+    if (access.status === 'pending') {
+      const code = localApprovalCode(record);
+      // The device signs its code with the pinned devSig over the same
+      // inputs, so a mismatch cannot be a man-in-the-middle; it is a bug.
+      if (access.code !== code) {
+        discard();
+        throw new CommandFailure(
+          'The FF1 reported a different approval code than ff-cli computed.'
+        );
+      }
+      console.log('\nOn an owner’s phone, open the Feral File app and approve this request.');
+      console.log('Approve it only if the app shows this code:');
+      console.log(`\n  ${chalk.bold.cyan(formatCode(code))}\n`);
+      console.log(chalk.dim(`Controller ID: ${ctl}`));
+      console.log(chalk.dim(`Waiting up to ${Math.round(timeoutMs / 1000)}s for approval...`));
+    }
+    return pollEnrollment(device, record, deps, {
       timeoutMs,
       cancelled,
       storeOptions: deps.controllerStore,
-    })
-  );
+    });
+  });
+  if (result.status === 'interrupted-early') {
+    console.log(
+      chalk.yellow(
+        `\nPairing interrupted. Run \`${pairCommand(deviceLabel(device))}\` to start again.`
+      )
+    );
+    process.exitCode = 130;
+    return;
+  }
   reportEnrollment(device, result);
 }
 
@@ -501,20 +555,63 @@ export async function runRevoke(ctl: string, name: string | undefined): Promise<
 }
 
 /**
+ * confirmInteractively asks a yes/no question on a TTY and refuses (false)
+ * when stdin is not interactive, so scripts must pass --yes explicitly.
+ *
+ * @param question - Question text
+ * @returns The answer
+ */
+async function confirmInteractively(question: string): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    return false;
+  }
+  const prompt = createPrompt();
+  try {
+    return await promptYesNo(prompt.ask, question, false);
+  } finally {
+    prompt.close();
+  }
+}
+
+/**
  * runUnpair is `ff-cli device unpair [name]`: delete the local controller
  * file. The FF1 keeps the grant until an owner revokes it, so the message
  * says so and prints the controller ID to revoke.
  *
+ * An OWNER grant is the device's recovery path, so deleting it asks first
+ * (or needs --yes): the last reachable owner's keys cannot be recreated.
+ *
  * @param name - Optional device name
+ * @param options - `yes` skips the owner confirmation
+ * @param confirmFn - Confirmation prompt (tests inject one)
  */
-export async function runUnpair(name: string | undefined): Promise<void> {
+export async function runUnpair(
+  name: string | undefined,
+  options: { yes?: boolean } = {},
+  confirmFn: (question: string) => Promise<boolean> = confirmInteractively
+): Promise<void> {
   const device = requirePairableDevice(name);
   let ctl: string | undefined;
+  let role: string | undefined;
   try {
     const record = loadController(device.id);
     ctl = record ? controllerIdOf(record.keys) : undefined;
+    role = record?.role;
   } catch {
     ctl = undefined; // corrupt file: delete it anyway
+  }
+  if (role === 'owner' && !options.yes) {
+    console.log(
+      chalk.yellow(
+        `\nff-cli is an OWNER of ${deviceLabel(device)}. If no other owner can reach this FF1, deleting these keys leaves it without a reachable owner until a factory reset.`
+      )
+    );
+    if (!(await confirmFn('Delete the owner keys anyway?'))) {
+      throw new CommandFailure(
+        'Unpair cancelled; nothing was deleted.',
+        'Pass --yes to skip this check.'
+      );
+    }
   }
   if (!deleteController(device.id)) {
     console.log(chalk.dim(`\nff-cli has no controller keys for ${deviceLabel(device)}.\n`));
