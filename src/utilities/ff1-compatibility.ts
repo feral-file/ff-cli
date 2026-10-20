@@ -7,6 +7,9 @@ import { getFF1DeviceConfig } from '../config';
 import { findConfiguredDeviceIndex } from './device-lookup';
 import type { FF1Device, FF1DeviceConfig } from '../types';
 import * as logger from '../logger';
+import type { ControllerRecord } from './control/controller-store';
+import { type SecureTransportDeps, runSecureCommand } from './control/secure-transport';
+import { describeControlCode } from './control/control-errors';
 
 type FetchFunction = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -28,15 +31,24 @@ interface ResolveDeviceOptions {
 
 interface CompatibilityCheckOptions {
   fetchFn?: FetchFunction;
+  /**
+   * The device's enrolled controller record. When present the probe is sent
+   * as a secure envelope (ff1-control-v1): a secured FF1 refuses plaintext on
+   * the LAN, so a plaintext probe would always fail there.
+   */
+  controller?: { record: ControllerRecord; deps?: SecureTransportDeps };
 }
 
 interface FF1VersionProbe {
-  version: string;
+  version?: string;
+  /** Set when the device refused the probe with an authorization answer. */
+  refusal?: { error: string; details?: string };
 }
 
 export interface FF1CompatibilityResult {
   compatible: boolean;
   error?: string;
+  details?: string;
   version?: string;
 }
 
@@ -131,11 +143,13 @@ export async function assertFF1CommandCompatibility(
     options.fetchFn || ((input: string, init?: RequestInit) => fetchWithTimeout(input, init ?? {}));
   const policy = getCommandPolicy(command);
 
-  const versionResult = await detectFF1VersionSafely(
-    device.host,
-    buildVersionHeaders(device),
-    fetchFn
-  );
+  const versionResult =
+    options.controller && device.id
+      ? await detectFF1VersionSecurely(device as FF1Device & { id: string }, options.controller)
+      : await detectFF1VersionSafely(device, buildVersionHeaders(device), fetchFn);
+  if (versionResult?.refusal) {
+    return { compatible: false, ...versionResult.refusal };
+  }
   return resolveCompatibility(device, command, policy, versionResult);
 }
 
@@ -154,18 +168,18 @@ function getCommandPolicy(command: FF1Command): FF1CommandPolicy {
 /**
  * Detect FF1 version and recover compatibility when detection fails.
  *
- * @param {string} host - Device host URL
+ * @param {FF1Device} device - Target device
  * @param {Object} headers - Request headers
  * @param {Function} fetchFn - Fetch implementation
  * @returns {Promise<FF1VersionProbe | null>} Detected version metadata
  */
 async function detectFF1VersionSafely(
-  host: string,
+  device: FF1Device,
   headers: Record<string, string>,
   fetchFn: FetchFunction
 ): Promise<FF1VersionProbe | null> {
   try {
-    return await detectFF1Version(host, headers, fetchFn);
+    return await detectFF1Version(device, headers, fetchFn);
   } catch (error) {
     logger.debug('FF1 version detection failed; continuing with command', (error as Error).message);
     return null;
@@ -187,7 +201,7 @@ function resolveCompatibility(
   policy: FF1CommandPolicy,
   versionResult: FF1VersionProbe | null
 ): FF1CompatibilityResult {
-  if (!versionResult) {
+  if (!versionResult?.version) {
     logger.warn(`Could not verify FF1 OS version for ${device.name || device.host}`);
     return { compatible: true };
   }
@@ -219,27 +233,31 @@ function resolveCompatibility(
  *
  * Reads `message.installedVersion` from the device status response.
  *
- * @param {string} host - Device host URL
+ * @param {FF1Device} device - Target device
  * @param {Record<string, string>} headers - Request headers (e.g. API-KEY)
  * @param {FetchFunction} fetchFn - Fetch implementation
- * @returns {Promise<FF1VersionProbe | null>} Version probe or null if unavailable
+ * @returns {Promise<FF1VersionProbe | null>} Version probe, a refusal, or null if unavailable
  * @example
- * const probe = await detectFF1Version('http://ff1.local', {}, fetch);
+ * const probe = await detectFF1Version(device, {}, fetch);
  */
 async function detectFF1Version(
-  host: string,
+  device: FF1Device,
   headers: Record<string, string>,
   fetchFn: FetchFunction
 ): Promise<FF1VersionProbe | null> {
   try {
-    const response = await fetchFn(`${host}/api/cast`, {
+    const response = await fetchFn(`${device.host}/api/cast`, {
       method: 'POST',
       headers: { ...headers, 'Content-Type': 'application/json' },
       body: JSON.stringify({ command: 'getDeviceStatus', request: {} }),
     });
 
     if (!response.ok) {
-      return null;
+      return refusalFromPublicError(
+        response.status,
+        await response.text(),
+        device.name || device.id || device.host
+      );
     }
 
     const data = (await response.json()) as { message?: { installedVersion?: string } };
@@ -252,6 +270,80 @@ async function detectFF1Version(
   } catch (_error) {
     return null;
   }
+}
+
+/**
+ * refusalFromPublicError recognizes a secured FF1 refusing a plaintext LAN
+ * cast (ff1-control-v1 §4.4, HTTP 403 `enrollment_required`). That answer
+ * means every plaintext command will be refused, so the preflight stops with
+ * the pairing guidance instead of sending the real command into the same 403.
+ * Any other failure keeps the historical "could not verify" behavior.
+ *
+ * @param status - HTTP status
+ * @param body - Response body text
+ * @param label - Device name for the pair command
+ * @returns A refusal probe, or null
+ */
+function refusalFromPublicError(
+  status: number,
+  body: string,
+  label: string
+): FF1VersionProbe | null {
+  if (status !== 401 && status !== 403) {
+    return null;
+  }
+  try {
+    const code = (JSON.parse(body) as { error?: { code?: unknown } })?.error?.code;
+    if (code === 'enrollment_required' || code === 'locked') {
+      return { refusal: describeControlCode(code, label) };
+    }
+  } catch {
+    // Not a control-protocol answer.
+  }
+  return null;
+}
+
+/**
+ * detectFF1VersionSecurely runs the getDeviceStatus probe as a secure
+ * envelope over the LAN only (no retry, no relayer: the probe never had
+ * either). A protocol refusal (revoked, unknown controller, …) stops the
+ * command with actionable guidance; an unreachable device degrades to
+ * "could not verify", exactly like the plaintext probe.
+ *
+ * @param device - Device with a stable ID
+ * @param controller - Enrolled controller record and transport seams
+ * @returns Version probe, refusal, or null
+ */
+async function detectFF1VersionSecurely(
+  device: FF1Device & { id: string },
+  controller: { record: ControllerRecord; deps?: SecureTransportDeps }
+): Promise<FF1VersionProbe | null> {
+  const result = await runSecureCommand(
+    {
+      device,
+      record: controller.record,
+      cmd: 'getDeviceStatus',
+      req: {},
+      relayerFallback: false,
+      retry: false,
+    },
+    controller.deps
+  );
+  if (!result.success) {
+    if (result.code) {
+      return { refusal: { error: result.error!, details: result.details } };
+    }
+    logger.debug('Secure FF1 version probe failed; continuing with command', result.error);
+    return null;
+  }
+  // res is the handler's existing body; accept both the bare status object
+  // and the `{message:{…}}` wrapper the plaintext LAN reply uses.
+  const res = result.response as {
+    installedVersion?: unknown;
+    message?: { installedVersion?: unknown };
+  };
+  const version = res?.installedVersion ?? res?.message?.installedVersion;
+  return typeof version === 'string' && version ? { version } : null;
 }
 
 /**

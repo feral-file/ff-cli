@@ -230,3 +230,71 @@ export function sealNotification(nk: string, claims: Record<string, unknown>): s
     Buffer.from(JSON.stringify(claims))
   );
 }
+
+/** FakeAnswer is what a FakeFF1 handler decides for one opened request. */
+export type FakeAnswer =
+  | { ok: true; res?: unknown }
+  | { ok: false; code: string; res?: unknown }
+  | { publicCode: string; status?: number };
+
+/**
+ * FakeFF1 answers `ff1Envelope` casts like the device: it opens the request
+ * with the fixture device keys, enforces one use per ctr, records what it saw
+ * and replies with a reply sealed under the request's rk.
+ */
+export class FakeFF1 {
+  readonly seen: Array<Record<string, unknown>> = [];
+  private readonly used = new Set<string>();
+
+  constructor(
+    private readonly keys: { dev: string; gen: string; sig: Jwk; enc: Jwk },
+    private readonly grants: Record<string, Jwk>,
+    private readonly decide: (claims: Record<string, unknown>) => FakeAnswer = () => ({
+      ok: true,
+      res: { ok: true },
+    })
+  ) {}
+
+  /** handle returns the HTTP status and JSON body for a LAN cast body. */
+  handle(body: { command?: string; request?: { v?: number; jwe?: string } }): {
+    status: number;
+    json: unknown;
+  } {
+    if (body.command !== 'ff1Envelope' || body.request?.v !== 1 || !body.request.jwe) {
+      return { status: 403, json: { error: { code: 'enrollment_required' } } };
+    }
+    let opened: OpenedRequest;
+    try {
+      opened = openRequest(body.request.jwe, this.keys.enc, this.grants);
+    } catch (error) {
+      const code = error instanceof DevicePublicError ? error.code : 'bad_envelope';
+      return { status: 401, json: { error: { code } } };
+    }
+    const claims = opened.claims;
+    this.seen.push(claims);
+    const replayKey = `${opened.kid}:${String(claims.ctr)}`;
+    const answer: FakeAnswer = this.used.has(replayKey)
+      ? { ok: false, code: 'replay' }
+      : this.decide(claims);
+    this.used.add(replayKey);
+    if ('publicCode' in answer) {
+      return { status: answer.status ?? 401, json: { error: { code: answer.publicCode } } };
+    }
+    const reply: Record<string, unknown> = {
+      v: 1,
+      dev: this.keys.dev,
+      gen: this.keys.gen,
+      ctl: opened.kid,
+      rid: claims.rid,
+      iat: claims.iat,
+      ok: answer.ok,
+    };
+    if (!answer.ok) {
+      reply.code = answer.code;
+    }
+    if (answer.res !== undefined) {
+      reply.res = answer.res;
+    }
+    return { status: 200, json: { v: 1, jwe: sealReply(this.keys.sig, String(claims.rk), reply) } };
+  }
+}

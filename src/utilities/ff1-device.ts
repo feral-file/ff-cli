@@ -10,6 +10,16 @@ import type { FF1Device, Playlist } from '../types';
 import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-compatibility';
 import { sendPlaylistViaRelayer } from './ff1-relayer';
 import { getTopicId } from './topic-store';
+import type { ControllerStoreOptions, ControllerRecord } from './control/controller-store';
+import {
+  findEnvelopeAnswer,
+  findSecureController,
+  runSecureCommand,
+} from './control/secure-transport';
+import { describeControlCode } from './control/control-errors';
+import { isTransientDeviceNetworkError, parseRetryAfterMs } from './device-network';
+
+export { isTransientDeviceNetworkError, parseRetryAfterMs };
 
 const SEND_RETRY_ATTEMPTS = 3;
 const SEND_RETRY_BASE_DELAY_MS = 750;
@@ -17,6 +27,16 @@ const RATE_LIMIT_STATUS = 429;
 // Cap how long a device-supplied Retry-After can stall the CLI, so a buggy or
 // hostile device cannot pin a command for minutes/hours.
 const MAX_RETRY_DELAY_MS = 30_000;
+// PUBLIC_CONTROL_CODES are the ff1-control-v1 §4.4 public errors a secured
+// FF1 can answer a plaintext cast with (LAN 401/403, relayer RPC message).
+const PUBLIC_CONTROL_CODES = new Set([
+  'bad_envelope',
+  'unknown_controller',
+  'bad_signature',
+  'enrollment_required',
+  'envelope_required',
+  'locked',
+]);
 
 interface SendPlaylistParams {
   playlist: Playlist;
@@ -40,6 +60,10 @@ export interface FF1DeviceDependencies {
   getRelayerConfigFn?: () => { baseUrl: string; apiKey?: string };
   waitFn?: (delayMs: number) => Promise<void>;
   noticeFn?: (message: string) => void;
+  /** Controller key store location (tests); defaults to the user config dir. */
+  controllerStore?: ControllerStoreOptions;
+  /** Unix-seconds clock for secure requests (tests). */
+  nowFn?: () => number;
 }
 
 interface DeliveryDependencies {
@@ -48,6 +72,8 @@ interface DeliveryDependencies {
   getRelayerConfigFn: () => { baseUrl: string; apiKey?: string };
   waitFn: (delayMs: number) => Promise<void>;
   noticeFn: (message: string) => void;
+  controllerStore?: ControllerStoreOptions;
+  nowFn?: () => number;
 }
 
 /** Find an FF1 `ok` flag through the nested cast response envelopes. */
@@ -72,90 +98,6 @@ function waitForRetry(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
-}
-
-/**
- * isTransientDeviceNetworkError returns true when a send failure is likely temporary.
- *
- * This classifier intentionally targets resolver and route-level failures that are
- * common on local mDNS/Wi-Fi environments. Permanent command errors should surface
- * immediately without retry loops.
- *
- * @param {unknown} error - Error thrown by fetch
- * @returns {boolean} True when retrying is likely to recover
- */
-export function isTransientDeviceNetworkError(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  const networkCodes = new Set([
-    'EHOSTUNREACH',
-    'ENETUNREACH',
-    'ENOTFOUND',
-    'EAI_AGAIN',
-    'ETIMEDOUT',
-    'ECONNREFUSED',
-    'ECONNRESET',
-  ]);
-
-  const message = error.message || '';
-  const messageLooksTransient =
-    message.includes('fetch failed') ||
-    message.includes('getaddrinfo') ||
-    message.includes('EHOSTUNREACH') ||
-    message.includes('ENOTFOUND') ||
-    message.includes('ETIMEDOUT') ||
-    message.includes('network timeout') ||
-    message.includes('No route to host');
-
-  if (messageLooksTransient) {
-    return true;
-  }
-
-  const causeCode =
-    error.cause &&
-    typeof error.cause === 'object' &&
-    'code' in error.cause &&
-    typeof (error.cause as { code?: unknown }).code === 'string'
-      ? (error.cause as { code: string }).code
-      : undefined;
-
-  return Boolean(causeCode && networkCodes.has(causeCode));
-}
-
-/**
- * parseRetryAfterMs converts an HTTP `Retry-After` header into milliseconds.
- *
- * Supports both forms from RFC 7231: a delta-seconds integer (e.g. "5") and an
- * HTTP-date (e.g. "Wed, 21 Oct 2025 07:28:00 GMT"). Returns undefined when the
- * header is absent or unparseable, so callers can fall back to their own
- * backoff. A past date clamps to 0 (retry immediately).
- *
- * @param {string | null | undefined} headerValue - Raw Retry-After header value
- * @returns {number | undefined} Delay in milliseconds, or undefined if unknown
- */
-export function parseRetryAfterMs(headerValue: string | null | undefined): number | undefined {
-  if (!headerValue) {
-    return undefined;
-  }
-
-  const trimmed = headerValue.trim();
-  if (/^\d+$/.test(trimmed)) {
-    return Number(trimmed) * 1000;
-  }
-
-  // A valid HTTP-date always contains letters (month/day names, or the ISO
-  // 'T'/'Z'). Requiring one rejects bare numeric junk (e.g. "-5", "5.5") that
-  // Date.parse would otherwise misinterpret as a date.
-  if (/[a-zA-Z]/.test(trimmed)) {
-    const dateMs = Date.parse(trimmed);
-    if (!Number.isNaN(dateMs)) {
-      return Math.max(0, dateMs - Date.now());
-    }
-  }
-
-  return undefined;
 }
 
 /**
@@ -201,6 +143,8 @@ export async function sendPlaylistToDevice(
     getRelayerConfigFn: overrides.getRelayerConfigFn ?? getFF1RelayerConfig,
     waitFn: overrides.waitFn ?? waitForRetry,
     noticeFn: overrides.noticeFn ?? logger.always,
+    controllerStore: overrides.controllerStore,
+    nowFn: overrides.nowFn,
   };
   let device: FF1Device | undefined;
   try {
@@ -221,15 +165,32 @@ export async function sendPlaylistToDevice(
     }
     device = resolved.device;
 
+    // A stored controller file means this FF1 was paired under the control
+    // protocol (ff1-control-v1): every command goes as a secure envelope and
+    // the legacy plaintext path below is never used for it.
+    const secure = findSecureController(device, dependencies.controllerStore);
+    if (secure.failure) {
+      return { success: false, error: secure.failure.error, details: secure.failure.details };
+    }
+
     const compatibility = await assertFF1CommandCompatibility(device, 'displayPlaylist', {
       fetchFn: dependencies.fetchFn,
+      controller: secure.record
+        ? { record: secure.record, deps: secureDeps(dependencies) }
+        : undefined,
     });
     if (!compatibility.compatible) {
       return {
         success: false,
         error: compatibility.error || 'FF1 OS does not support playlist casting',
-        details: compatibility.version ? `Detected version ${compatibility.version}` : undefined,
+        details:
+          compatibility.details ??
+          (compatibility.version ? `Detected version ${compatibility.version}` : undefined),
       };
+    }
+
+    if (secure.record) {
+      return sendPlaylistSecurely(playlist, device, secure.record, dependencies);
     }
 
     logger.info(`Sending playlist to FF1 device: ${device.host}`);
@@ -358,6 +319,12 @@ export async function sendPlaylistToDevice(
       logger.error(`Failed to cast to device: ${response.status} ${response.statusText}`);
       logger.debug(`Error details: ${errorText}`);
 
+      const publicCode = publicControlCode(response.status, errorText);
+      if (publicCode) {
+        const failure = describeControlCode(publicCode, device.name || device.id || device.host);
+        return { success: false, error: failure.error, details: failure.details };
+      }
+
       if (response.status === RATE_LIMIT_STATUS) {
         const deviceLabel = device.name || device.host;
         return {
@@ -439,6 +406,104 @@ export async function sendPlaylistToDevice(
 }
 
 /**
+ * secureDeps forwards the delivery seams to the secure transport.
+ *
+ * @param dependencies - Resolved delivery dependencies
+ * @returns Secure transport dependencies
+ */
+function secureDeps(dependencies: DeliveryDependencies) {
+  return {
+    fetchFn: dependencies.fetchFn,
+    getTopicIdFn: dependencies.getTopicIdFn,
+    getRelayerConfigFn: dependencies.getRelayerConfigFn,
+    waitFn: dependencies.waitFn,
+    noticeFn: dependencies.noticeFn,
+    controllerStore: dependencies.controllerStore,
+    nowFn: dependencies.nowFn,
+  };
+}
+
+/**
+ * sendPlaylistSecurely delivers displayPlaylist as a secure envelope with the
+ * same retry budget and LAN-then-relayer fallback as the plaintext path. The
+ * `req` is the unchanged plaintext request object (§3.3).
+ *
+ * @param playlist - DP-1 playlist
+ * @param device - Device with a stored controller record
+ * @param record - Enrolled controller record
+ * @param dependencies - Delivery seams
+ * @returns Send result
+ */
+async function sendPlaylistSecurely(
+  playlist: Playlist,
+  device: FF1Device,
+  record: ControllerRecord,
+  dependencies: DeliveryDependencies
+): Promise<SendPlaylistResult> {
+  logger.info(`Sending playlist to FF1 device (secure): ${device.host}`);
+  const result = await runSecureCommand(
+    {
+      device: device as FF1Device & { id: string },
+      record,
+      cmd: 'displayPlaylist',
+      req: { dp1_call: playlist, intent: { action: 'now_display' } },
+      relayerFallback: true,
+      retry: true,
+    },
+    secureDeps(dependencies)
+  );
+  const deviceName = device.name || device.host;
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error,
+      details: result.details,
+      transport: result.transport,
+    };
+  }
+  if (nestedCastOk(result.response) === false) {
+    return {
+      success: false,
+      error: `Device "${deviceName}" rejected the display command`,
+      details: JSON.stringify(result.response),
+      transport: result.transport,
+    };
+  }
+  const viaRelayer = result.transport === 'relayer';
+  return {
+    success: true,
+    device: device.host,
+    deviceName,
+    response: result.response,
+    message: viaRelayer
+      ? 'Playlist successfully sent through the FF1 relayer'
+      : 'Playlist successfully sent to FF1 device',
+    transport: result.transport,
+  };
+}
+
+/**
+ * publicControlCode extracts a control-protocol public error (§4.4) from a
+ * LAN 401/403, e.g. a secured FF1 refusing plaintext with
+ * `enrollment_required`. Other bodies return undefined.
+ *
+ * @param status - HTTP status
+ * @param body - Response text
+ * @returns The code, or undefined
+ */
+function publicControlCode(status: number, body: string): string | undefined {
+  if (status !== 401 && status !== 403) {
+    return undefined;
+  }
+  try {
+    const code = (JSON.parse(body) as { error?: { code?: unknown } })?.error?.code;
+    return typeof code === 'string' && PUBLIC_CONTROL_CODES.has(code) ? code : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Fall back to the relayer only after LAN reachability is exhausted.
  *
  * Topic lookup is keyed by the stable physical device ID and happens only at
@@ -501,6 +566,13 @@ async function fallbackToRelayer(input: {
       details: result.details,
       transport: 'relayer',
     };
+  }
+  // An enrolled or enforced FF1 answers a plaintext relayer cast it will not
+  // run with a public error as the RPC message (ff1-control-v1 §4.4/§7.2).
+  const refusal = findEnvelopeAnswer(result.response)?.code;
+  if (refusal && PUBLIC_CONTROL_CODES.has(refusal)) {
+    const failure = describeControlCode(refusal, input.device.name ?? input.device.id);
+    return { success: false, error: failure.error, details: failure.details, transport: 'relayer' };
   }
   return {
     success: true,

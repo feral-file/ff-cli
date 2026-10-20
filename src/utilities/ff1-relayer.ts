@@ -40,6 +40,43 @@ export async function sendPlaylistViaRelayer(input: {
   playlist: Playlist;
   fetchFn?: typeof fetch;
 }): Promise<RelayerCastResult> {
+  const result = await sendCastViaRelayer({
+    ...input,
+    body: {
+      command: 'displayPlaylist',
+      request: {
+        dp1_call: input.playlist,
+        intent: { action: 'now_display' },
+      },
+    },
+  });
+  if (result.success && nestedOk(result.response) === false) {
+    return {
+      success: false,
+      error: 'FF1 rejected the relayer display command',
+      details: JSON.stringify(result.response),
+    };
+  }
+  return result;
+}
+
+/**
+ * sendCastViaRelayer posts one cast body to the relayer topic endpoint and
+ * returns the parsed JSON response without interpreting the device's answer.
+ * It is shared by the legacy plaintext Play path and the secure `ff1Envelope`
+ * path (ff1-control-v1 §10: the envelope rides the same topic cast).
+ *
+ * @param input - Relayer endpoint, optional compatibility key, paired topic,
+ * cast body, and optional fetch implementation.
+ * @returns The parsed relayer response, or a structured failure.
+ */
+export async function sendCastViaRelayer(input: {
+  baseUrl: string;
+  apiKey?: string;
+  topicId: string;
+  body: Record<string, unknown>;
+  fetchFn?: typeof fetch;
+}): Promise<RelayerCastResult> {
   // Production default rides the shared deadline (#101 review).
   const fetchFn = input.fetchFn ?? defaultDeadlineFetch;
   let url: URL;
@@ -66,13 +103,7 @@ export async function sendPlaylistViaRelayer(input: {
       // the mobile request shape and topic query parameter.
       method: 'POST',
       headers,
-      body: JSON.stringify({
-        command: 'displayPlaylist',
-        request: {
-          dp1_call: input.playlist,
-          intent: { action: 'now_display' },
-        },
-      }),
+      body: JSON.stringify(input.body),
     });
   } catch (error) {
     return {
@@ -108,13 +139,6 @@ export async function sendPlaylistViaRelayer(input: {
         details: bodyText.slice(0, 200),
       };
     }
-  }
-  if (nestedOk(data) === false) {
-    return {
-      success: false,
-      error: 'FF1 rejected the relayer display command',
-      details: bodyText,
-    };
   }
   return { success: true, response: data };
 }
