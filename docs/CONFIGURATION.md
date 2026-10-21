@@ -221,9 +221,9 @@ FEED_BASE_URLS=https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/ap
 
 ## tokenSource
 
-Token data for `find`, `build`, and `enrich` (title, artist, description, playable source, still image, and on-chain provenance) comes from one service per run:
+Token data for `find`, `build`, and `enrich` (title, artist, description, playable source, on-chain provenance, and a still image where the service supplies one) comes from one service per run:
 
-- `raster` (default): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build no longer waits for indexing jobs.
+- `raster` (default): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build no longer waits for indexing jobs. No still image is supplied for now: Raster's preview renditions refuse non-browser clients, so items and `enrich` get no thumbnail from Raster.
 - `indexer` (**deprecated**): the Feral File indexer (ff-indexer-v2). Kept so the vendor can be switched back while Raster is evaluated; it will be removed. Selecting it prints a warning on every run.
 
 ```json
