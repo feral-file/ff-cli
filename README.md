@@ -75,9 +75,9 @@ Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{sl
 
 **Known limitations**
 
-- **CryptoPunks (original)** don't index — the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)).
 - **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series — Raster's curation is effectively the series allowlist.
-- **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)) — retry clears or use `--limit N`.
+- **Contract-only `build` requirements** (a `build_playlist` without `tokenIds`) need the deprecated `tokenSource: "indexer"`; Raster cannot list a contract. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#tokensource).
+- **Feral File metadata on Raster is a snapshot.** A work whose metadata changed after Raster indexed it (for example an evolving work) plays the version Raster recorded.
 
 ## Use with Claude Code
 

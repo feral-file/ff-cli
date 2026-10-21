@@ -1,10 +1,19 @@
 /**
- * NFT Indexer Client
- * This module provides functions to interact with NFT indexing services
- * to retrieve comprehensive token information.
+ * NFT Indexer Client (ff-indexer-v2).
+ *
+ * @deprecated The Feral File indexer is no longer the default token source.
+ * Raster (src/utilities/token-source-raster.ts) answers token lookups unless
+ * `tokenSource: "indexer"` is configured, and this module is kept only so the
+ * vendor can be switched back during the feral-file#3576 experiment. It is
+ * reached exclusively through src/utilities/token-source-indexer.ts and will
+ * be deleted, together with that adapter, once Raster has proven itself.
+ * Do not add new callers.
+ *
+ * Vendor-neutral item construction (convertToDP1Item and the standard/chain
+ * helpers) lives in src/utilities/token-item.ts and is re-exported here only
+ * so existing tests keep their import paths.
  */
 
-const { PlaylistItemBuilder, ProvenanceBuilder, ContractBuilder } = require('dp1-js');
 // The production endpoint is hardcoded, as PROJECT_SPEC states, and stays
 // that way. INDEXER_API_URL is a test hook, not configuration: the
 // find-command suite spawns the CLI as a child process, so the only way to
@@ -21,8 +30,14 @@ const GRAPHQL_ENDPOINT =
     : 'https://indexer.feralfile.com/graphql';
 const { fetchWithTimeout } = require('./http');
 const logger = require('../logger');
-const { applyTimingToItemBuilder, buildDefaultDisplay } = require('./playlist-builder');
-const { buildInlineManifestForToken } = require('./ref-manifest');
+const {
+  convertToDP1Item,
+  detectTokenStandard,
+  extractArtistName,
+  getBestMediaUrl,
+  normalizeCidStandard,
+  resolveTokenStandard,
+} = require('./token-item');
 
 // Polling configuration (in milliseconds)
 const POLLING_INTERVAL_MS = 2000; // Poll every 2 seconds
@@ -110,170 +125,6 @@ function buildTokensListQuery(params = {}) {
       }
     }
   `;
-}
-
-/**
- * Initialize indexer (no-op for compatibility)
- *
- * The indexer endpoint is now hardcoded to the Feral File production endpoint.
- * This function is kept for backwards compatibility but does nothing.
- *
- * @deprecated This function is no longer needed as the endpoint is hardcoded
- * @param {Object} _config - Unused config parameter
- */
-function initializeIndexer(_config) {
-  logger.debug('[NFT Indexer] Using endpoint:', GRAPHQL_ENDPOINT);
-}
-
-/**
- * detectTokenStandard guesses a token standard from a chain name and an address.
- *
- * This is the last-resort fallback, not the answer. It sees no token — only a
- * chain name and an address format — so it cannot tell ERC-721 from ERC-1155
- * and answers `erc721` for every EVM contract. It is still needed in two
- * places: a lookup by coordinate has to build *some* CID before the indexer has
- * been asked anything (see buildTokenCID), and a token row that arrived without
- * a `standard` field has nothing better to offer.
- *
- * Prefer, in order: the indexer row's own `standard`, a caller's assertion, and
- * only then this. On-chain detection is deliberately not attempted here — the
- * indexer already stores the answer and selecting it costs nothing.
- *
- * @param {string} chain - Blockchain network
- * @param {string} contractAddress - Contract address
- * @returns {string} Token standard (erc721, erc1155, fa2, or other)
- */
-function detectTokenStandard(chain, contractAddress) {
-  const lowerChain = chain.toLowerCase();
-
-  // Tezos contracts use FA2 standard
-  if (lowerChain === 'tezos' || contractAddress.startsWith('KT')) {
-    return 'fa2';
-  }
-
-  // Ethereum: erc721 is a guess, not a reading. Only the indexer row or a
-  // caller's assertion can distinguish an ERC-1155 token from an ERC-721 one.
-  if (lowerChain === 'ethereum') {
-    return 'erc721';
-  }
-
-  return 'other';
-}
-
-/**
- * Token standards the indexer keys CIDs on. A standard outside this set —
- * asserted by a caller or arriving on a row — says nothing the CID can carry,
- * so detection decides instead.
- */
-const CID_STANDARDS = new Set(['erc721', 'erc1155', 'fa2']);
-
-/**
- * normalizeCidStandard returns a standard the CID format can carry, or ''.
- *
- * Both the indexer row and a caller's assertion are untrusted strings from
- * outside this module ('ERC1155', ' fa2 ', 'ERC-1155', undefined). Anything not
- * in CID_STANDARDS is treated as absent rather than passed through, so a
- * misspelled standard never reaches a CID or a DP-1 `provenance.contract`.
- *
- * @param {unknown} value - Candidate standard
- * @returns {string} Normalized standard, or '' when it is not one we can use
- */
-function normalizeCidStandard(value) {
-  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
-  return CID_STANDARDS.has(normalized) ? normalized : '';
-}
-
-/**
- * resolveTokenStandard picks the standard a CID is built with.
- *
- * detectTokenStandard cannot tell ERC-721 from ERC-1155 — it has only a chain
- * and an address, and answers erc721 for every EVM contract. The indexer keys
- * the two differently (`eip155:1:erc721:…` and `eip155:1:erc1155:…`), so an
- * ERC-1155 token looked up by detection alone is simply never found. When the
- * caller knows the standard — a DP-1 playlist carries it in
- * `provenance.contract.standard` — that assertion wins.
- *
- * @param {string} chain - Blockchain network
- * @param {string} contractAddress - Contract address
- * @param {string} [asserted] - Standard the caller vouches for, if any
- * @returns {string} Token standard for the CID
- */
-function resolveTokenStandard(chain, contractAddress, asserted) {
-  return normalizeCidStandard(asserted) || detectTokenStandard(chain, contractAddress);
-}
-
-/**
- * CAIP-2 namespaces mapped to the chain values DP-1 `provenance.contract` allows.
- *
- * The indexer names a token's chain in CAIP-2 (`eip155:1`, `tezos:mainnet`),
- * which is authoritative: it comes from the row rather than from the caller's
- * guess at which network an address belongs to. Namespaces outside this map
- * have no DP-1 equivalent, so they fall back to the caller's chain name.
- */
-const CAIP2_NAMESPACE_TO_DP1_CHAIN = {
-  eip155: 'evm',
-  tezos: 'tezos',
-  bitmark: 'bitmark',
-};
-
-/**
- * dp1ChainFromCaip2 derives a DP-1 chain from a CAIP-2 chain id.
- *
- * @param {unknown} caip2Chain - CAIP-2 chain id from an indexer row, e.g. `eip155:1`
- * @returns {string} DP-1 chain (`evm`, `tezos`, `bitmark`), or '' when unknown or absent
- */
-function dp1ChainFromCaip2(caip2Chain) {
-  if (typeof caip2Chain !== 'string') {
-    return '';
-  }
-  const namespace = caip2Chain.trim().toLowerCase().split(':')[0];
-  return CAIP2_NAMESPACE_TO_DP1_CHAIN[namespace] || '';
-}
-
-/**
- * Client chain names mapped to the chain values DP-1 `provenance.contract` allows.
- *
- * This is for DP-1 provenance output, NOT for indexer queries: the indexer uses
- * `eth`/`tez`/`bmk` while DP-1 uses `evm`/`tezos`/`bitmark`. It answers only for
- * tokens that reached us without an indexer row — a caller-supplied coordinate.
- */
-const CHAIN_NAME_TO_DP1_CHAIN = {
-  ethereum: 'evm',
-  polygon: 'evm',
-  arbitrum: 'evm',
-  optimism: 'evm',
-  base: 'evm',
-  zora: 'evm',
-  tezos: 'tezos', // DP1 spec uses 'tezos', not 'tez'
-  bitmark: 'bitmark', // DP1 spec uses 'bitmark', not 'bmk'
-};
-
-/**
- * resolveDp1Chain picks the DP-1 chain for a token's `provenance.contract`.
- *
- * The row's CAIP-2 chain and the caller's chain name are not two guesses to try
- * in turn — they are different claims, and the row's is the network the indexer
- * recorded. So a token carrying a row chain is answered from that chain alone:
- * a namespace with no DP-1 equivalent becomes `other`, never the caller's name.
- * Falling through would be actively wrong, because the owner and contract paths
- * label every non-KT address `ethereum` before mapping — a Solana row would
- * inherit that label and be published as an EVM contract. `other` is a true
- * statement about a chain DP-1 cannot name; `evm` is a false one.
- *
- * The name map answers only when the token has no row chain at all, which is a
- * token assembled from a caller-supplied coordinate rather than an indexer row.
- *
- * @param {Object} token - Token in the internal standard format
- * @param {string} [token.caip2Chain] - CAIP-2 chain from the indexer row, when it came from one
- * @param {string} [token.chain] - Client chain name the caller inferred
- * @returns {string} DP-1 chain (`evm`, `tezos`, `bitmark`, or `other`)
- */
-function resolveDp1Chain(token) {
-  const rowChain = typeof token.caip2Chain === 'string' ? token.caip2Chain.trim() : '';
-  if (rowChain) {
-    return dp1ChainFromCaip2(rowChain) || 'other';
-  }
-  return CHAIN_NAME_TO_DP1_CHAIN[String(token.chain || '').toLowerCase()] || 'other';
 }
 
 /**
@@ -403,87 +254,6 @@ async function queryTokenDataFromIndexer(tokenCID) {
 }
 
 /**
- * Extract artist name from artists array
- *
- * Converts the new artists array format to a single artist name string.
- *
- * @param {Array} artists - Array of artist objects with did and name
- * @returns {string} Artist name or empty string
- */
-function extractArtistName(artists) {
-  if (!Array.isArray(artists) || artists.length === 0) {
-    return '';
-  }
-  // Use first artist's name, or join multiple if needed
-  return artists[0]?.name || '';
-}
-
-/**
- * Check whether a media URL can be used as DP1 item source.
- *
- * @param {string} url - Candidate media URL
- * @returns {boolean} True when URL is usable in DP1 source
- */
-function isUsableSourceUrl(url) {
-  if (!url || typeof url !== 'string') {
-    return false;
-  }
-
-  if (url.startsWith('data:')) {
-    return false;
-  }
-
-  if (url.length > 1024) {
-    return false;
-  }
-
-  return true;
-}
-
-/**
- * getBestMediaUrl picks a DP1-usable URL from indexer `display` and `media_assets`.
- *
- * Order: display.animation_url, transcoded asset URLs (source + variants), display.image_url.
- *
- * @param {Object} display - Token `display` field (merged presentation from indexer)
- * @param {Array<Object>} mediaAssets - Token `media_assets` rows
- * @returns {Object} Object with url and thumbnail properties
- */
-function getBestMediaUrl(display = {}, mediaAssets = []) {
-  const urlsFromAssets = [];
-  for (const asset of Array.isArray(mediaAssets) ? mediaAssets : []) {
-    if (asset?.source_url) {
-      urlsFromAssets.push(asset.source_url);
-    }
-    const v = asset?.variants;
-    if (v && typeof v === 'object') {
-      for (const val of Object.values(v)) {
-        if (typeof val === 'string') {
-          urlsFromAssets.push(val);
-        }
-      }
-    }
-  }
-
-  const candidates = [display?.animation_url, ...urlsFromAssets, display?.image_url];
-
-  for (const candidate of candidates) {
-    if (isUsableSourceUrl(candidate)) {
-      return {
-        url: candidate,
-        thumbnail: display.image_url || '',
-      };
-    }
-  }
-
-  const imageUrl = display.image_url || '';
-  return {
-    url: imageUrl,
-    thumbnail: imageUrl,
-  };
-}
-
-/**
  * Map indexer token row (GraphQL `display` + `media_assets`) to internal standard format.
  *
  * Treats `display` as the authoritative merged presentation from the server. When `display`
@@ -549,175 +319,6 @@ function mapIndexerDataToStandardFormat(indexerData, chain, standard) {
       burned: indexerData.burned || false,
     },
   };
-}
-
-/**
- * Convert token data to DP1 item format
- *
- * Extracts source URL from indexer data with proper priority:
- * animation_url > image.url, ensuring the best quality media is used.
- *
- * When the token carries description, artist, or a still image distinct from
- * the source, the item also gets an inline Ref Manifest (see ref-manifest.ts).
- *
- * @param {Object} tokenData - Token data in standard format
- * @param {number} [duration] - Explicit display seconds; omit for auto timing
- *   (video/audio play natural length per DP-1 §4.1)
- * @returns {Object} DP1 item with source URL from indexer
- */
-function convertToDP1Item(tokenData, duration) {
-  const { token } = tokenData;
-
-  if (!token) {
-    return {
-      success: false,
-      error: tokenData.error || 'Invalid token data',
-    };
-  }
-
-  // Generate deterministic ID for this item based on contract + tokenId
-  // Use a simple hash to create a consistent ID
-  const crypto = require('crypto');
-  const idSource = `${token.contractAddress}-${token.tokenId}`;
-  const hash = crypto.createHash('sha256').update(idSource).digest('hex');
-  // Format as UUID-like string for consistency
-  const itemId = `${hash.substr(0, 8)}-${hash.substr(8, 4)}-${hash.substr(12, 4)}-${hash.substr(16, 4)}-${hash.substr(20, 12)}`;
-
-  // Get source URL from indexer data
-  // Priority: animation_url > image.url (from getBestMediaUrl)
-  const candidateSourceUrls = [
-    token.animation_url || token.animationUrl,
-    token.image && typeof token.image === 'object' ? token.image.url : '',
-  ]
-    .map((value) => String(value || ''))
-    .filter(Boolean);
-
-  let sourceUrl = candidateSourceUrls.find((url) => isUsableSourceUrl(url)) || '';
-  if (!sourceUrl) {
-    sourceUrl = candidateSourceUrls[0] || '';
-  }
-
-  // Validate source URL
-  if (!sourceUrl) {
-    logger.warn('[NFT Indexer] No source URL found for token:', {
-      contractAddress: token.contractAddress,
-      tokenId: token.tokenId,
-    });
-    return {
-      success: false,
-      error: 'No source URL available',
-    };
-  }
-
-  // Skip data URIs (base64-encoded content)
-  if (sourceUrl.startsWith('data:')) {
-    logger.debug('[NFT Indexer] Skipping token with data URI:', {
-      contractAddress: token.contractAddress,
-      tokenId: token.tokenId,
-    });
-    return {
-      success: false,
-      error: 'Source is a data URI (not supported)',
-    };
-  }
-
-  // Skip URLs that exceed DP1 spec limit (1024 characters)
-  if (sourceUrl.length > 1024) {
-    logger.debug('[NFT Indexer] Skipping token with source URL too long:', {
-      contractAddress: token.contractAddress,
-      tokenId: token.tokenId,
-      urlLength: sourceUrl.length,
-    });
-    return {
-      success: false,
-      error: `Source URL too long (${sourceUrl.length} chars, max 1024)`,
-    };
-  }
-
-  // Build via dp1-js PlaylistItemBuilder so leaf blocks match DP-1 AJV schema.
-  const itemBuilder = new PlaylistItemBuilder()
-    .id(itemId)
-    .source(sourceUrl)
-    .license('open')
-    .provenance(
-      new ProvenanceBuilder().type('onChain').contract(
-        new ContractBuilder()
-          .chain(resolveDp1Chain(token))
-          .standard(token.standard || detectTokenStandard(token.chain, token.contractAddress))
-          .address(token.contractAddress)
-          .tokenId(String(token.tokenId))
-      )
-    );
-
-  // Add title if available (valid DP1 field)
-  if (token.name) {
-    itemBuilder.title(token.name);
-  }
-
-  // Carry description, artist, and still image inline (DP-1 Playlist Extension
-  // §3.6). These are the fields the indexer returns that have no PlaylistItem
-  // home; before inline manifests existed they were mapped and then dropped on
-  // the floor here. The helper returns undefined when the token has nothing
-  // beyond its title, so thin tokens stay thin.
-  const inlineManifest = buildInlineManifestForToken(token, { sourceUrl });
-  if (inlineManifest) {
-    itemBuilder.inlineManifest(inlineManifest);
-  }
-
-  applyTimingToItemBuilder(
-    itemBuilder,
-    { mimeType: token.image?.mimeType, sourceUrl },
-    duration,
-    buildDefaultDisplay()
-  );
-
-  let dp1Item;
-  try {
-    dp1Item = itemBuilder.build();
-  } catch (error) {
-    return {
-      success: false,
-      error: error instanceof Error ? error.message : String(error),
-    };
-  }
-
-  logger.debug('[NFT Indexer] ✓ Converted to DP1:', {
-    title: token.name,
-    source: sourceUrl ? sourceUrl.substring(0, 60) + '...' : '(no source URL)',
-  });
-
-  return {
-    success: true,
-    item: dp1Item,
-    still: stillOf(token),
-  };
-}
-
-/**
- * stillOf names the token's still image as the indexer identifies it, or ''.
- *
- * This is `display.image_url`, the field the indexer reserves for a still and
- * the same one `buildInlineManifestForToken` writes into `thumbnails.default`.
- * It is returned beside the DP-1 item rather than inside it because the item
- * only carries the still when it differs from the item's own source, and a
- * consumer building a manifest against a *different* source (see
- * enrich-playlist.ts) needs the still regardless. Nothing about the URL's
- * shape is inspected: the indexer's word that it is an image is the evidence,
- * and a suffix check would reject the extensionless CDN URLs it commonly
- * returns.
- *
- * @param {Object} token - Token in the internal standard format
- * @returns {string} http(s) still URL, or '' when the indexer named none
- */
-function stillOf(token) {
-  const image = token.image;
-  // Only `thumbnail` qualifies. `image.url` is the media getBestMediaUrl
-  // selected as the source, which is the live rendition whenever one exists —
-  // exactly what must never land in a thumbnail slot.
-  const candidate =
-    typeof image === 'string' ? image : typeof image === 'object' && image ? image.thumbnail : '';
-  const trimmed = String(candidate || '').trim();
-  return trimmed.startsWith('http://') || trimmed.startsWith('https://') ? trimmed : '';
 }
 
 /**
@@ -1389,8 +990,6 @@ async function queryTokensByContract(contractAddress, limit = 100, offset = 0) {
 }
 
 module.exports = {
-  // Initialization
-  initializeIndexer,
   // Primary functions (return DP1 items)
   getNFTTokenInfo,
   // Batch processing

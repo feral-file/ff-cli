@@ -18,7 +18,6 @@ process.emitWarning = function (warning: unknown, type?: WarningType, ctor?: unk
   return originalEmitWarning.apply(this, [warning as never, type as never, ctor as never]);
 } as unknown as typeof process.emitWarning;
 
-import { getConfig } from './config';
 import type {
   Requirement,
   PlaylistSettings,
@@ -160,10 +159,6 @@ export async function buildPlaylistDirect(
   const playlistSettings = applyPlaylistDefaults(params.playlistSettings);
 
   const utilities = getUtilities();
-  const config = getConfig();
-
-  // Initialize utilities with config (indexer endpoint, API key, etc.)
-  utilities.initializeUtilities(config);
 
   return await utilities.buildPlaylistDirect({ requirements, playlistSettings }, options);
 }

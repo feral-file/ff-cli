@@ -27,6 +27,10 @@ npm run dev -- config show
 - **generativeDuration** (number, seconds)
   - Display duration stamped on generative/interactive (HTML) works, which have no intrinsic runtime and no end-of-stream event. Defaults to **60s** (override via `DEFAULT_GENERATIVE_DURATION`).
   - Set to **0** to omit the duration entirely, so a conformant player parks on the work open-ended instead of rotating. Note: some players (including FF1) require every item to carry a `duration` and will reject a playlist whose items omit it — keep this non-zero unless you know your player tolerates an absent duration.
+- **tokenSource** (`"raster"` | `"indexer"`)
+  - Which service `find`, `build`, and `enrich` read token data from. Defaults to `raster`. See [tokenSource](#tokensource).
+- **ipfsGateways** (object)
+  - Gateways used to turn bare `ipfs://` sources into HTTPS URLs. See [ipfsGateways](#ipfsgateways).
 
 ## browser
 
@@ -215,9 +219,57 @@ Environment variable alternative:
 FEED_BASE_URLS=https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1,https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1
 ```
 
-## find (Raster API)
+## tokenSource
 
-`ff-cli find` resolves tokens, series, and artist addresses through Raster's public GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)). No configuration is required; two environment variables adjust the integration:
+Token data for `find`, `build`, and `enrich` (title, artist, description, playable source, still image, and on-chain provenance) comes from one service per run:
+
+- `raster` (default): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build no longer waits for indexing jobs.
+- `indexer` (**deprecated**): the Feral File indexer (ff-indexer-v2). Kept so the vendor can be switched back while Raster is evaluated; it will be removed. Selecting it prints a warning on every run.
+
+```json
+{ "tokenSource": "raster" }
+```
+
+Environment variable alternative:
+
+```env
+FF_TOKEN_SOURCE=raster
+```
+
+There is no fallback between the two. A token Raster does not cover, or one that was burned, is reported as unresolved rather than looked up elsewhere.
+
+Raster has no way to list a contract's tokens. With `tokenSource: "raster"`, a `build_playlist` requirement without `tokenIds` fails with a message saying so, and a `query_address` requirement for an address that holds nothing is not retried as a contract. Give token ids, an owner address, or run `find` on the series URL instead.
+
+Only Ethereum mainnet and Tezos mainnet tokens are built. Tokens on other chains in a wallet or series are skipped and counted.
+
+## ipfsGateways
+
+Raster returns many sources as bare `ipfs://` CIDs, which the FF1 cannot load. ff-cli rewrites them through a gateway:
+
+- `ipfsGateways.feralFile`: used for Feral File works. Default `https://ipfs.feralfile.com/ipfs/`.
+- `ipfsGateways.default`: used for everything else. Default `https://ipfs.filebase.io/ipfs/`.
+
+A bare origin such as `https://gateway.example` is accepted and normalized to `https://gateway.example/ipfs/`. Sources on the retired `cdn.feralfileassets.com` host are rewritten to `cdn.artworks.feralfile.io`.
+
+```json
+{
+  "ipfsGateways": {
+    "feralFile": "https://ipfs.feralfile.com/ipfs/",
+    "default": "https://ipfs.filebase.io/ipfs/"
+  }
+}
+```
+
+Environment variable alternative:
+
+```env
+IPFS_GATEWAY_FERAL_FILE=https://ipfs.feralfile.com/ipfs/
+IPFS_GATEWAY_DEFAULT=https://ipfs.filebase.io/ipfs/
+```
+
+## Raster API
+
+`find` resolves tokens, series, and artist addresses through Raster's public GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)), and with the default `tokenSource` so do `build` and `enrich`. No configuration is required; two environment variables adjust the integration:
 
 ```env
 # API key sent as the x-api-key header. The API currently answers without

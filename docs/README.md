@@ -178,7 +178,7 @@ cat params.json | ff-cli build -o playlist.json
 
 `params.json` should include `requirements` and optional `playlistSettings`. See `examples/params-example.json`. Each requirement has a `type`:
 
-- `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
+- `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`. Omitting `tokenIds` asks for random tokens from the contract, which only the deprecated indexer token source supports.
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
 - `query_address` — `ownerAddress`, optional `quantity` (random selection)
 - `fetch_feed` — `playlistName`, `quantity`
@@ -211,8 +211,8 @@ copied from another document, or written before inline manifests existed has no
 and an empty tile in the app's grid — the app can draw a thumbnail from an
 image, video, or SVG source, but not from a live HTML work.
 
-`ff-cli enrich` fills that in from the indexer, keyed on each item's
-`provenance.contract`:
+`ff-cli enrich` fills that in from the configured token source (Raster by
+default), keyed on each item's `provenance.contract`:
 
 ```bash
 ff-cli enrich playlist.json --assume-ethereum
@@ -222,8 +222,8 @@ ff-cli enrich playlist.json --assume-ethereum --force   # replace existing manif
 
 `--assume-ethereum` is needed for most playlists. DP-1 records an EVM
 coordinate as `chain: "evm"`, which names Ethereum, Polygon, Arbitrum,
-Optimism, Base and Zora alike, and the indexer's answer collapses back to the
-same word. Enrichment will not pick one for you, because the wrong member
+Optimism, Base and Zora alike, and the token source's answer collapses back to
+the same word. Enrichment will not pick one for you, because the wrong member
 returns a different artwork's artist and still — into a document you then sign.
 
 It writes `inlineManifest` and nothing else. Items with no

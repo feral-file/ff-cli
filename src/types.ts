@@ -56,9 +56,29 @@ export interface FF1RelayerConfig {
   apiKey?: string;
 }
 
-export interface IndexerConfig {
-  endpoint: string;
-  apiKey?: string;
+/**
+ * TokenSourceName names the vendor that answers token lookups.
+ *
+ * `raster` is the default. `indexer` keeps the deprecated ff-indexer-v2 path
+ * reachable during the feral-file#3576 experiment and will be removed with it.
+ */
+export type TokenSourceName = 'raster' | 'indexer';
+
+/**
+ * IpfsGatewayConfig maps bare `ipfs://` sources to HTTPS. Raster returns raw
+ * CIDs for most Feral File works, which the FF1 display path cannot load.
+ * Feral File works go through Feral File's own gateway; everything else uses
+ * `default`.
+ */
+export interface IpfsGatewayConfig {
+  feralFile?: string;
+  default?: string;
+}
+
+/** TokenSourceConfig is the resolved, validated token source selection. */
+export interface TokenSourceConfig {
+  source: TokenSourceName;
+  ipfsGateways: { feralFile: string; default: string };
 }
 
 export interface Config {
@@ -75,7 +95,8 @@ export interface Config {
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
   ff1Relayer?: FF1RelayerConfig;
-  indexer?: IndexerConfig;
+  tokenSource?: TokenSourceName;
+  ipfsGateways?: IpfsGatewayConfig;
 }
 
 export interface ValidationResult {

@@ -18,6 +18,11 @@
     "role": "curator",
     "curatorName": "YOUR_CURATOR_NAME"
   },
+  "tokenSource": "raster",
+  "ipfsGateways": {
+    "feralFile": "https://ipfs.feralfile.com/ipfs/",
+    "default": "https://ipfs.filebase.io/ipfs/"
+  },
   "ff1Relayer": {
     "baseUrl": "https://tv-cast-coordination.autonomy-system.workers.dev"
   },
