@@ -297,10 +297,13 @@ function topicRequiredMessage(device: FF1Device): string {
   const label = device.name || device.host;
   const pairCommand = `ff-cli device pair ${quoteArg(label)}`;
   const base = `This FF1 requires ff-cli to be paired before SSH access can be changed.`;
+  // Securing first makes the pairing an owner grant, which keeps working once
+  // the FF1 no longer has a relayer topic (feral-file#3551 relay v2).
+  const secure = `In the Feral File app, choose "Secure this FF1" for this device if it is offered`;
   if (!device.id) {
-    return `${base} Re-add the device with its ID (ff-cli device add --id <FF1 device ID>), then run \`${pairCommand}\` and choose "Pair with ff-cli" in the Feral File app.`;
+    return `${base} Re-add the device with its ID (ff-cli device add --id <FF1 device ID>). ${secure}, then run \`${pairCommand}\` and choose "Pair with ff-cli".`;
   }
-  return `${base} Run \`${pairCommand}\` and choose "Pair with ff-cli" in the Feral File app, then retry.`;
+  return `${base} ${secure}, then run \`${pairCommand}\` and choose "Pair with ff-cli", then retry.`;
 }
 
 /** quoteArg double-quotes a shell argument that contains whitespace or quotes. */

@@ -510,6 +510,40 @@ describe('secure displayPlaylist', () => {
     assert.equal(device.seen.at(-1)!.ctr, 5);
   });
 
+  test('a connection reset after the request was sent is never resent on any route', async () => {
+    enrolledRecord('controller');
+    const device = fakeDevice();
+    const relayed: string[] = [];
+    const fetchFn: typeof fetch = async (input, init) => {
+      const url = new URL(input.toString());
+      if (url.origin !== HOST) {
+        relayed.push(url.toString());
+        throw new Error('the relayer must not be used');
+      }
+      const answer = device.handle(JSON.parse(String(init?.body)));
+      if (device.seen.at(-1)?.cmd === 'displayPlaylist') {
+        // Delivered and run, then the socket dropped before the reply.
+        throw new Error('fetch failed', { cause: { code: 'ECONNRESET' } });
+      }
+      return json(answer.status, answer.json);
+    };
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn,
+        getTopicIdFn: () => 'topic-secret',
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        waitFn: async () => undefined,
+        noticeFn: () => undefined,
+      }
+    );
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /Outcome unknown/);
+    assert.equal(relayed.length, 0);
+    assert.equal(device.seen.filter((c) => c.cmd === 'displayPlaylist').length, 1);
+  });
+
   test('maps an encrypted access_revoked to pairing guidance', async () => {
     enrolledRecord('controller');
     const device = fakeDevice(() => ({ ok: false, code: 'access_revoked' }));

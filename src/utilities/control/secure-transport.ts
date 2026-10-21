@@ -27,7 +27,11 @@ import { getFF1RelayerConfig } from '../../config';
 import type { FF1Device } from '../../types';
 import { getTopicId } from '../topic-store';
 import { sendCastViaRelayer } from '../ff1-relayer';
-import { isTransientDeviceNetworkError, parseRetryAfterMs } from '../device-network';
+import {
+  isConnectPhaseNetworkError,
+  isTransientDeviceNetworkError,
+  parseRetryAfterMs,
+} from '../device-network';
 import {
   type EnrollObject,
   type ReplyClaims,
@@ -357,6 +361,12 @@ export async function sendSecureRequest(
           ...(isDeadlineError(error) ? { timedOut: true } : {}),
         };
       }
+      // §14.4: a command may be sent again (new ctr, LAN or relayer) only when
+      // the failure proves it never left this machine. requestAccess and
+      // enroll are idempotent on the FF1 (§5.2, §5.3), so they keep retrying.
+      if (request.op === 'cmd' && !isConnectPhaseNetworkError(error)) {
+        return outcomeUnknown(request, error as Error);
+      }
       if (attempt < attempts) {
         logger.warn(
           `Transient network error (attempt ${attempt}/${attempts}): ${(error as Error).message}`
@@ -381,6 +391,22 @@ export async function sendSecureRequest(
     }
   }
   return last!;
+}
+
+/**
+ * outcomeUnknown reports a command whose LAN request may have reached the FF1
+ * (the connection broke after it was opened). It is not sent again, so a
+ * non-idempotent command cannot run twice.
+ */
+function outcomeUnknown(request: SecureRequest, lanError: Error): SecureOutcome {
+  const label = request.device.name || request.device.host;
+  logger.debug(`Ambiguous LAN failure: ${lanError.message}`);
+  return {
+    kind: 'failed',
+    error: `Outcome unknown: the connection to "${label}" broke after the request was sent (${lanError.message})`,
+    details:
+      'The FF1 may already have run it, so ff-cli did not send it again. Check the FF1, then run the command again if it did not take effect.',
+  };
 }
 
 /**

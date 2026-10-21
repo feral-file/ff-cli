@@ -55,6 +55,50 @@ export function isTransientDeviceNetworkError(error: unknown): boolean {
   return Boolean(causeCode && networkCodes.has(causeCode));
 }
 
+// Codes that can only come from opening the connection (resolving the name,
+// routing, or a refused/timed-out TCP connect): the request bytes were never
+// written, so the FF1 cannot have run it.
+const CONNECT_PHASE_CODES = new Set([
+  'ECONNREFUSED',
+  'EHOSTUNREACH',
+  'ENETUNREACH',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
+
+/**
+ * isConnectPhaseNetworkError reports a send failure that proves the request
+ * never reached the FF1, so sending it again (even on another route, with a new
+ * counter) cannot run it twice. `fetch failed` on its own, ECONNRESET, a closed
+ * socket or a response timeout may follow a delivered request, and are not
+ * connect-phase (feral-file#3551 spec §14.4).
+ *
+ * @param {unknown} error - Error thrown by fetch
+ * @returns {boolean} True when the failure happened before any request byte was sent
+ */
+export function isConnectPhaseNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const causes: unknown[] = [error, error.cause];
+  const cause = error.cause as { errors?: unknown } | undefined;
+  if (cause && Array.isArray(cause.errors)) {
+    // Happy-eyeballs connects report one error per address.
+    causes.push(...cause.errors);
+  }
+  return causes.some((candidate) => {
+    if (!candidate || typeof candidate !== 'object') {
+      return false;
+    }
+    const { code, syscall } = candidate as { code?: unknown; syscall?: unknown };
+    if (typeof code !== 'string') {
+      return false;
+    }
+    return CONNECT_PHASE_CODES.has(code) || (code === 'ETIMEDOUT' && syscall === 'connect');
+  });
+}
+
 /**
  * parseRetryAfterMs converts an HTTP `Retry-After` header into milliseconds.
  *

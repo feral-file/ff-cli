@@ -104,6 +104,7 @@ describe('sshAccess topic proof header (#3551 phase 0)', () => {
     assert.match(result.error ?? '', /requires ff-cli to be paired/);
     assert.match(result.error ?? '', /ff-cli device pair "Living Room"/);
     assert.match(result.error ?? '', /Pair with ff-cli/);
+    assert.match(result.error ?? '', /Secure this FF1/);
   });
 
   test('topic_required on a device without an ID tells the user to re-add it first', async () => {

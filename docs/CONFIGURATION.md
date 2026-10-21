@@ -323,6 +323,11 @@ need no additional key. Deployments that retain the cloud-edge compatibility
 gate may receive `ff1Relayer.apiKey` or `FF1_RELAYER_API_KEY`; ff-cli never
 bundles that shared key.
 
+Relayer access for paired CLIs will move to relay v2, which routes by FF1
+device ID instead of a topic (feral-file#3551). Nothing changes yet: this
+version still uses the topic relayer, and the controller keys and pairing carry
+over unchanged.
+
 On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
 Compatibility checks:
