@@ -265,7 +265,7 @@ You can also manage devices independently with:
   and any pending requests (owner only).
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
-- `ff-cli device unpair [name]` – Delete ff-cli's controller keys for an FF1.
+- `ff-cli device unpair [name]` – Delete ff-cli's controller keys for an FF1. It always asks first (owner keys get a stronger warning); `-y, --yes` skips the question.
   Owner keys need confirmation (or `--yes`): if no other owner can reach the
   FF1, deleting them leaves it without a reachable owner until a factory reset.
 

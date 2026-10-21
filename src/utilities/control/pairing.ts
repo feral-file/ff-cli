@@ -251,6 +251,12 @@ export interface EnrollPollOptions {
    */
   refresh?: () => Promise<unknown>;
   refreshMs?: number;
+  /**
+   * When the wait started (default: now). The device's pending request
+   * lives at most 10 minutes from the first requestAccess, so the caller
+   * starts the clock there rather than at the first poll.
+   */
+  startedAtMs?: number;
 }
 
 /**
@@ -306,7 +312,8 @@ export async function pollEnrollment(
   const interval = options.intervalMs ?? ENROLL_POLL_INTERVAL_MS;
   const nowMs = options.nowMsFn ?? Date.now;
   const sleep = options.sleepFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline = nowMs() + (options.timeoutMs ?? DEFAULT_PAIR_TIMEOUT_MS);
+  const deadline =
+    (options.startedAtMs ?? nowMs()) + (options.timeoutMs ?? DEFAULT_PAIR_TIMEOUT_MS);
   const refreshMs = options.refreshMs ?? PENDING_REFRESH_MS;
   let refreshedAt = nowMs();
   const label = device.name || device.id;
@@ -365,7 +372,8 @@ function interpretEnrollOutcome(
         failure: {
           code,
           error: 'The access request was denied or expired before it was approved.',
-          details: `Run \`ff-cli device pair ${label}\` again and approve it in the Feral File app.`,
+          // The controller file is kept, so the same keys can ask again.
+          details: `To ask again, run \`ff-cli device pair ${label} --resume\` and approve it in the Feral File app.`,
         },
       };
     }

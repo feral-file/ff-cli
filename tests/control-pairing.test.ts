@@ -42,6 +42,7 @@ import {
   formatControllerTable,
   parseLabel,
   parseTimeoutMs,
+  runPair,
   runUnpair,
   storeHandoffTopic,
 } from '../src/commands/helpers/device-control';
@@ -227,7 +228,34 @@ describe('pairing', () => {
     );
     assert.equal(result.status, 'failed');
     assert.match(result.status === 'failed' ? result.failure.error : '', /denied or expired/);
+    // The file is kept, so the same keys ask again with --resume.
+    assert.match(result.status === 'failed' ? result.failure.details! : '', /--resume/);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, undefined);
+  });
+
+  test('the approval wait counts from when the request was first sent', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(1000);
+    let now = 100_000;
+    let polls = 0;
+    const result = await pollEnrollment(
+      device,
+      record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      {
+        timeoutMs: 10_000,
+        startedAtMs: 92_000,
+        nowMsFn: () => now,
+        sleepFn: async (ms) => {
+          polls += 1;
+          now += ms;
+        },
+        storeOptions: { dir: storeDir },
+      }
+    );
+    assert.equal(result.status, 'timeout');
+    // 2 s left of the 10 s wait: polls at 100 s and 102 s only.
+    assert.equal(polls, 2);
   });
 
   test('a long wait re-sends requestAccess before the pending request lapses', async () => {
@@ -492,6 +520,20 @@ describe('pairing', () => {
     await confirmReplacement(device, profile, {}, async () => true, store);
   });
 
+  test('promotion replaces a corrupt main record instead of failing', () => {
+    const store = { dir: storeDir };
+    const old = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    createController({ profile: old, label: 'old' }, store);
+    const next = prepareController(profile, 'x', store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, stagingStore(store));
+    fs.writeFileSync(path.join(storeDir, `${DEVICE_ID}.json`), '{"v":1,"v":1}');
+
+    const promoted = promoteStagedController(DEVICE_ID, store);
+    assert.equal(controllerIdOf(promoted.keys), controllerIdOf(next.record.keys));
+    assert.equal(loadController(DEVICE_ID, store)!.role, 'owner');
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+  });
+
   test('a corrupt controller file is replaced by a fresh pairing', () => {
     createController({ profile, label: 'x' }, { dir: storeDir });
     fs.writeFileSync(path.join(storeDir, `${DEVICE_ID}.json`), '{"v":1,"v":1}');
@@ -754,6 +796,31 @@ describe('unpair', () => {
     );
     assert.equal(asked.length, 1);
     assert.ok(loadController(DEVICE_ID));
+  });
+
+  test('controller keys also ask first', async () => {
+    saveController({ ...loadController(DEVICE_ID)!, role: 'controller' });
+    const asked: string[] = [];
+    await assert.rejects(
+      runUnpair('Office', {}, async (q) => {
+        asked.push(q);
+        return false;
+      }),
+      /nothing was deleted/
+    );
+    assert.deepEqual(asked, ['Delete the controller keys?']);
+    assert.ok(loadController(DEVICE_ID));
+  });
+
+  test('pair refuses to start over an approved but unfinished replacement', async () => {
+    const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    const staged = prepareController(reset, 'y');
+    assert.equal(staged.staged, true);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, stagingStore());
+    await assert.rejects(runPair('Office', {}), /approved but not finished/);
+    // Both grants are still there for --resume to promote.
+    assert.ok(loadController(DEVICE_ID, stagingStore())!.role);
+    assert.ok(loadController(DEVICE_ID)!.role);
   });
 
   test('--yes deletes owner keys without asking', async () => {

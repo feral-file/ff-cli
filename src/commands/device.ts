@@ -59,7 +59,7 @@ deviceCommand
   .command('unpair')
   .description("Delete ff-cli's controller keys for an FF1")
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
-  .option('-y, --yes', 'Delete owner keys without asking')
+  .option('-y, --yes', 'Delete the keys without asking')
   .action(async (name: string | undefined, options: { yes?: boolean }) => {
     await runControlAction('Error:', () => runUnpair(name, options));
   });

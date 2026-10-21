@@ -389,7 +389,12 @@ export function promoteStagedController(
       // An earlier promotion that crashed before the remove already wrote
       // these keys; the main file may have advanced its counter since, so it
       // is kept as is.
-      const current = loadController(deviceId, options);
+      let current: ControllerRecord | null;
+      try {
+        current = loadController(deviceId, options);
+      } catch {
+        current = null; // corrupt: the enrolled staged record replaces it
+      }
       if (!current || !sameKeys(current.keys, record.keys)) {
         saveController(record, options);
         fs.rmSync(from, { force: true });

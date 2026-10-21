@@ -168,6 +168,15 @@ export async function runPair(name: string | undefined, options: PairOptions): P
     await enrollController(device, record, timeoutMs, false, {}, staged !== null);
     return;
   }
+  // A staged replacement that already enrolled is this computer's confirmed
+  // grant; a new pairing would overwrite or drop it. --resume promotes it.
+  dropStagedController(device.id, true);
+  if (enrolledStagedPairing(device.id)) {
+    throw new CommandFailure(
+      `An earlier pairing with ${deviceLabel(device)} was approved but not finished.`,
+      `Run \`${pairCommand(deviceLabel(device))} --resume\` to finish it.`
+    );
+  }
   const payload = await receiveHandoff(device);
   if (payload.v === 1) {
     storeTopicId(device.id, payload.topicId);
@@ -185,6 +194,16 @@ export async function runPair(name: string | undefined, options: PairOptions): P
     )
   );
   await enrollController(device, record, timeoutMs, !reused, {}, staged);
+}
+
+/** enrolledStagedPairing reports whether the staging store holds an enrolled record. */
+function enrolledStagedPairing(deviceId: string): boolean {
+  try {
+    const staged = loadController(deviceId, stagingStore());
+    return staged !== null && isEnrolled(staged);
+  } catch {
+    return false; // corrupt: nothing usable to keep
+  }
 }
 
 /**
@@ -346,6 +365,7 @@ export async function enrollController(
   // SIGINT handling is installed before requestAccess, so a Ctrl-C while the
   // request is in flight is seen and cleaned up instead of killing the process.
   const result = await withInterrupt(async (cancelled) => {
+    const startedAtMs = Date.now();
     console.log(
       `\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`
     );
@@ -398,6 +418,7 @@ export async function enrollController(
       cancelled,
       storeOptions: pairDeps.controllerStore,
       refresh: () => requestAccess(device, record, pairDeps),
+      startedAtMs,
     });
     if (enrolled.status === 'enrolled' && staged) {
       return { status: 'enrolled' as const, record: promoteStagedController(device.id, mainStore) };
@@ -690,11 +711,12 @@ async function confirmInteractively(question: string): Promise<boolean> {
  * file. The FF1 keeps the grant until an owner revokes it, so the message
  * says so and prints the controller ID to revoke.
  *
- * An OWNER grant is the device's recovery path, so deleting it asks first
- * (or needs --yes): the last reachable owner's keys cannot be recreated.
+ * Deleting keys always asks first (or needs --yes), like Remove in the app
+ * (§14.3). An OWNER grant gets a stronger warning: it is the device's
+ * recovery path and the last reachable owner's keys cannot be recreated.
  *
  * @param name - Optional device name
- * @param options - `yes` skips the owner confirmation
+ * @param options - `yes` skips the confirmation
  * @param confirmFn - Confirmation prompt (tests inject one)
  */
 export async function runUnpair(
@@ -705,20 +727,29 @@ export async function runUnpair(
   const device = requirePairableDevice(name);
   let ctl: string | undefined;
   let role: string | undefined;
+  let present = false;
   try {
     const record = loadController(device.id);
     ctl = record ? controllerIdOf(record.keys) : undefined;
     role = record?.role;
+    present = record !== null;
   } catch {
     ctl = undefined; // corrupt file: delete it anyway
+    present = true;
   }
-  if (role === 'owner' && !options.yes) {
+  if (present && !options.yes) {
     console.log(
       chalk.yellow(
-        `\nff-cli is an OWNER of ${deviceLabel(device)}. If no other owner can reach this FF1, deleting these keys leaves it without a reachable owner until a factory reset.`
+        role === 'owner'
+          ? `\nff-cli is an OWNER of ${deviceLabel(device)}. If no other owner can reach this FF1, deleting these keys leaves it without a reachable owner until a factory reset.`
+          : `\nff-cli loses its access to ${deviceLabel(device)}. Pairing again needs an owner's approval.`
       )
     );
-    if (!(await confirmFn('Delete the owner keys anyway?'))) {
+    if (
+      !(await confirmFn(
+        role === 'owner' ? 'Delete the owner keys anyway?' : 'Delete the controller keys?'
+      ))
+    ) {
       throw new CommandFailure(
         'Unpair cancelled; nothing was deleted.',
         'Pass --yes to skip this check.'
