@@ -31,10 +31,12 @@ import { publicOf, sameKey, thumbprint } from './jwk';
 import {
   type ControllerRecord,
   type ControllerStoreOptions,
+  ControllerFileCorruptError,
   createController,
   dropStagedController,
   loadController,
   markEnrolled,
+  setAsideCorruptController,
   stagingStore,
   updateLabel,
 } from './controller-store';
@@ -43,7 +45,7 @@ import {
   type SecureTransportDeps,
   sendSecureRequest,
 } from './secure-transport';
-import { type ControlFailure, describeControlCode } from './control-errors';
+import { type ControlFailure, describeControlCode, pairCommand } from './control-errors';
 import { isB64uOfLength, isPlainObject } from './strict-json';
 
 /** ENROLL_POLL_INTERVAL_MS is the op:enroll polling period. */
@@ -108,8 +110,13 @@ export function prepareController(
   let existing: ControllerRecord | null = null;
   try {
     existing = loadController(profile.dev, options);
-  } catch {
-    existing = null; // corrupt: replaced below with fresh keys
+  } catch (error) {
+    if (!(error instanceof ControllerFileCorruptError)) {
+      throw error; // unreadable: its keys may be fine, never write over them
+    }
+    // Corrupt: moved aside (it may hold the only copy of an owner key), then
+    // replaced below with fresh keys.
+    setAsideCorruptController(profile.dev, options);
   }
   if (existing && sameIdentity(existing.profile, profile)) {
     // A staged record left by an abandoned replacement pairing is for
@@ -211,14 +218,25 @@ export async function requestAccess(
     };
   }
   if (outcome.kind === 'reply' && outcome.reply.code === 'not_approved') {
+    // §5.2: the FF1 answers not_approved both when it has no owner yet
+    // (legacy) and for a key whose request an owner denied a few minutes ago.
     return {
       status: 'failed',
       failure: {
         code: 'not_approved',
-        error: 'This FF1 has no owner under secure control yet, so nobody can approve ff-cli.',
+        error:
+          'The FF1 did not accept the access request: an owner denied it in the last few minutes, or this FF1 has no owner under secure control yet.',
         details:
-          'In the Feral File app, open this FF1 and choose "Secure this FF1" first, then run the pairing again. Until then ff-cli keeps using unpaired access.',
+          'If it was denied, ask an owner and run the pairing again in a few minutes. If it has no owner yet, choose "Secure this FF1" in the Feral File app first; until then ff-cli keeps using unpaired access.',
       },
+    };
+  }
+  // The LAN request hit its deadline and may not have arrived; asking again
+  // is a refresh on the FF1 (§5.2), so the caller retries it like busy.
+  if (outcome.kind === 'failed' && outcome.timedOut) {
+    return {
+      status: 'failed',
+      failure: { code: 'timeout', error: `The FF1 did not answer in time (${outcome.error}).` },
     };
   }
   return { status: 'failed', failure: failureFrom(outcome, label) };
@@ -373,7 +391,7 @@ function interpretEnrollOutcome(
           code,
           error: 'The access request was denied or expired before it was approved.',
           // The controller file is kept, so the same keys can ask again.
-          details: `To ask again, run \`ff-cli device pair ${label} --resume\` and approve it in the Feral File app.`,
+          details: `To ask again, run \`${pairCommand(label)} --resume\` and approve it in the Feral File app.`,
         },
       };
     }
@@ -382,7 +400,9 @@ function interpretEnrollOutcome(
   // trying until the deadline. Protocol answers (codes) are never transient.
   if (
     outcome.kind === 'failed' &&
-    (outcome.unreachable || (outcome.transport === 'relayer' && !outcome.code))
+    (outcome.unreachable ||
+      outcome.timedOut || // enroll is idempotent (§5.3): asking again is safe
+      (outcome.transport === 'relayer' && !outcome.code))
   ) {
     return null;
   }

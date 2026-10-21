@@ -225,12 +225,26 @@ function serializeControllerRecord(record: ControllerRecord): string {
 }
 
 /**
+ * ControllerFileCorruptError is thrown by loadController for a file that was
+ * read but does not parse. A file that could not be read at all (EACCES, EIO,
+ * a Windows lock) throws a plain Error instead: its keys may be fine, so no
+ * caller may treat it as absent and write over it.
+ */
+export class ControllerFileCorruptError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ControllerFileCorruptError';
+  }
+}
+
+/**
  * loadController reads the controller file for a device, or null when none.
  *
  * @param deviceId - FF1 device ID
  * @param options - Optional directory override
  * @returns The record, or null when the file does not exist
- * @throws {Error} When the file exists but is unreadable or corrupt
+ * @throws {ControllerFileCorruptError} When the file exists but is corrupt
+ * @throws {Error} When the file exists but cannot be read
  */
 export function loadController(
   deviceId: string,
@@ -244,7 +258,9 @@ export function loadController(
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
     }
-    throw new Error(`Cannot read controller file ${file}: ${(error as Error).message}`);
+    throw new Error(
+      `Cannot read controller file ${file}: ${(error as Error).message}. Its keys were not changed; fix the file's permissions (or close the program holding it) and try again.`
+    );
   }
   try {
     const record = parseControllerRecord(text);
@@ -254,10 +270,52 @@ export function loadController(
     return record;
   } catch (error) {
     // The message comes from the validator and never echoes key material.
-    throw new Error(
-      `Controller file ${file} is corrupt (${(error as Error).message}). Run \`ff-cli device unpair\` and pair again.`
+    throw new ControllerFileCorruptError(
+      `Controller file ${file} is corrupt (${(error as Error).message}). Run \`ff-cli device pair\` again; it moves the file aside before pairing.`
     );
   }
+}
+
+/**
+ * renameCorruptAside renames a corrupt controller file to
+ * `<id>.json.corrupt-<unix seconds>` so a new pairing never writes over it
+ * (it may still be the only copy of an owner key). The caller holds the
+ * file's lock.
+ *
+ * @param file - Controller file path
+ * @returns The new path
+ */
+function renameCorruptAside(file: string): string {
+  const aside = `${file}.corrupt-${Math.floor(Date.now() / 1000)}`;
+  fs.renameSync(file, aside);
+  return aside;
+}
+
+/**
+ * setAsideCorruptController moves the device's controller file aside when it
+ * is (still) corrupt; a readable or missing file is left alone.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Optional directory override
+ * @returns The new path, or null when nothing was moved
+ * @throws {Error} When the file cannot be read
+ */
+export function setAsideCorruptController(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): string | null {
+  const file = controllerFilePath(deviceId, options);
+  return withControllerLock(file, () => {
+    try {
+      loadController(deviceId, options);
+      return null;
+    } catch (error) {
+      if (!(error instanceof ControllerFileCorruptError)) {
+        throw error;
+      }
+      return renameCorruptAside(file);
+    }
+  });
 }
 
 /** ensurePrivateDir creates the controllers directory 0700 (tightening an existing one). */
@@ -392,8 +450,13 @@ export function promoteStagedController(
       let current: ControllerRecord | null;
       try {
         current = loadController(deviceId, options);
-      } catch {
-        current = null; // corrupt: the enrolled staged record replaces it
+      } catch (error) {
+        if (!(error instanceof ControllerFileCorruptError)) {
+          throw error; // unreadable: its keys may be fine, keep both files
+        }
+        // Corrupt: kept aside, and the enrolled staged record replaces it.
+        renameCorruptAside(to);
+        current = null;
       }
       if (!current || !sameKeys(current.keys, record.keys)) {
         saveController(record, options);

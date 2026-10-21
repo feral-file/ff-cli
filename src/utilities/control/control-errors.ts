@@ -38,8 +38,21 @@ const PAIRING_CODES = new Set([
  * @returns Shell-ready command text
  */
 export function pairCommand(label: string): string {
-  const quoted = /[\s"'$`\\]/.test(label) ? JSON.stringify(label) : label;
-  return `ff-cli device pair ${quoted}`;
+  return `ff-cli device pair ${shellArg(label)}`;
+}
+
+/**
+ * unpairCommand renders the unpair command for a device label.
+ *
+ * @param label - Device name or ID
+ * @returns Shell-ready command text
+ */
+export function unpairCommand(label: string): string {
+  return `ff-cli device unpair ${shellArg(label)}`;
+}
+
+function shellArg(label: string): string {
+  return /[\s"'$`\\]/.test(label) ? JSON.stringify(label) : label;
 }
 
 const HEADLINES: Record<string, string> = {
@@ -91,9 +104,10 @@ function followUp(code: string, pair: string): string | undefined {
       return 'Ask an owner to give this controller the owner role in the Feral File app (Controllers), or run the command from an owner device.';
     case 'bad_envelope':
     case 'bad_signature':
-      // Public errors are unauthenticated: anyone on the path can send one,
-      // so the advice is conditional and never pushes an unpair outright.
-      return `If this FF1 was factory reset, run \`ff-cli device unpair\` and then \`${pair}\`. Otherwise check the device address and try again.`;
+      // Public errors are unauthenticated: anyone on the path can send one
+      // (or the address now reaches another FF1), so the advice never
+      // deletes keys: a new pairing keeps the current ones until approved.
+      return `Check that the device address still reaches this FF1. If it was factory reset, run \`${pair}\`; the current keys are kept until the new pairing is approved. Do not unpair.`;
     case 'locked':
       return 'The FF1 needs attention: restart it, and if the problem stays, factory reset it from the Feral File app.';
     case 'rate_limited':
@@ -102,9 +116,9 @@ function followUp(code: string, pair: string): string | undefined {
     case 'expired':
       return "Check that this computer's clock is correct, then try again.";
     case 'replay':
-      return `If this keeps happening, the controller file was restored from an old copy: run \`ff-cli device unpair\` and then \`${pair}\`.`;
+      return `If this keeps happening, the controller file was restored from an old copy: run \`${pair}\`; the current keys are kept until the new pairing is approved.`;
     case 'invalid_request':
-      return 'This is an ff-cli bug; please report it with `ff-cli --version`.';
+      return 'Check that the clocks of this computer and the FF1 are correct (the FF1 refuses a request dated more than 5 minutes ahead of its clock). If they are, this is an ff-cli bug; please report it with `ff-cli --version`.';
     default:
       return undefined;
   }
@@ -118,10 +132,11 @@ function followUp(code: string, pair: string): string | undefined {
  * @param reason - Verification failure reason
  * @returns The failure
  */
-export function unverifiedReplyFailure(reason: string): ControlFailure {
+export function unverifiedReplyFailure(reason: string, deviceLabel?: string): ControlFailure {
+  const pair = deviceLabel ? pairCommand(deviceLabel) : 'ff-cli device pair <name>';
   return {
     code: 'invalid_reply',
     error: 'The reply did not verify against the paired FF1 identity and was discarded.',
-    details: `${reason}. If the FF1 was factory reset, run \`ff-cli device unpair\` and pair again.`,
+    details: `${reason}. Check that the device address still reaches this FF1. If it was factory reset, run \`${pair}\`; the current keys are kept until the new pairing is approved. Do not unpair.`,
   };
 }

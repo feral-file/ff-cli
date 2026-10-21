@@ -397,7 +397,11 @@ profile directory, so keep `%USERPROFILE%\.config` private to your account.
 Treat the file like an SSH private key: anyone who copies it can act as this
 controller until an owner revokes it. Do not restore it from an old backup —
 the counter inside must only grow, and an FF1 rejects reused counters
-(`replay`). If that happens, run `ff-cli device unpair` and pair again.
+(`replay`). If that happens, run `ff-cli device pair <name>` again: the current
+keys stay in place until the new pairing is approved. A controller file that
+cannot be read (permissions, a program holding it) is never overwritten; a
+corrupt one is moved aside to `<device ID>.json.corrupt-<time>` (after a
+question, or `--yes`) before a new pairing.
 `device remove` keeps the file, so re-adding the same FF1 keeps its pairing.
 
 Requests go to `POST /api/cast` as
@@ -415,11 +419,12 @@ Errors and what to do:
 | "This FF1 is secured and only accepts requests from paired controllers." | The FF1 refuses plaintext and ff-cli is not paired | `ff-cli device pair <name>`, approve in the app |
 | "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys | `ff-cli device pair <name>` (or `--resume`), approve in the app |
 | "This command needs owner access…" | `ssh` or controller management with a controller grant | An owner grants the owner role in the app |
-| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset). These answers are not authenticated, so check the device address first | If the FF1 was factory reset: `ff-cli device unpair <name>`, then pair again |
-| "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, unpair and pair again |
+| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is approved). Do not unpair |
+| "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, `ff-cli device pair <name>`. Do not unpair |
 | "The FF1 is busy; try again." | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request) | Run the command again |
 | "The FF1 rejected the access request … as invalid." | The pairing label contains characters the FF1 refuses | Pair again with a plain `--label` |
-| "This FF1 has no owner under secure control yet…" | Nobody secured the FF1 in the app | In the app, choose **Secure this FF1**, then pair |
+| "The FF1 did not accept the access request…" | An owner denied it in the last few minutes, or nobody secured the FF1 in the app | Wait a few minutes and pair again, or in the app choose **Secure this FF1**, then pair |
+| "The FF1 rejected the request as malformed." | Usually a clock more than 5 minutes ahead of the FF1's | Fix the clock on this computer (or let the FF1 finish setting its time), then retry |
 
 Troubleshooting note:
 

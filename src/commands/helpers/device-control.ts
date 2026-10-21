@@ -17,6 +17,7 @@ import { isThumbprint } from '../../utilities/control/jwk';
 import {
   type ControllerRecord,
   type ControllerStoreOptions,
+  ControllerFileCorruptError,
   controllerFilePath,
   deleteController,
   dropStagedController,
@@ -171,6 +172,9 @@ export async function runPair(name: string | undefined, options: PairOptions): P
   // A staged replacement that already enrolled is this computer's confirmed
   // grant; a new pairing would overwrite or drop it. --resume promotes it.
   dropStagedController(device.id, true);
+  // An unreadable controller file fails here, before the app handoff, not
+  // after it; a corrupt one is handled (asked about, moved aside) below.
+  loadUnlessCorrupt(device.id);
   if (enrolledStagedPairing(device.id)) {
     throw new CommandFailure(
       `An earlier pairing with ${deviceLabel(device)} was approved but not finished.`,
@@ -196,14 +200,29 @@ export async function runPair(name: string | undefined, options: PairOptions): P
   await enrollController(device, record, timeoutMs, !reused, {}, staged);
 }
 
+/**
+ * loadUnlessCorrupt loads a controller file, mapping a corrupt one to the
+ * string 'corrupt'. An unreadable file still throws: its keys may be fine,
+ * so nothing may treat it as absent and write over it.
+ */
+function loadUnlessCorrupt(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): ControllerRecord | null | 'corrupt' {
+  try {
+    return loadController(deviceId, options);
+  } catch (error) {
+    if (error instanceof ControllerFileCorruptError) {
+      return 'corrupt';
+    }
+    throw error;
+  }
+}
+
 /** enrolledStagedPairing reports whether the staging store holds an enrolled record. */
 function enrolledStagedPairing(deviceId: string): boolean {
-  try {
-    const staged = loadController(deviceId, stagingStore());
-    return staged !== null && isEnrolled(staged);
-  } catch {
-    return false; // corrupt: nothing usable to keep
-  }
+  const staged = loadUnlessCorrupt(deviceId, stagingStore());
+  return staged !== null && staged !== 'corrupt' && isEnrolled(staged);
 }
 
 /**
@@ -226,11 +245,24 @@ export async function confirmReplacement(
   confirmFn: (question: string) => Promise<boolean> = confirmInteractively,
   storeOptions: ControllerStoreOptions = {}
 ): Promise<void> {
-  let existing: ControllerRecord | null;
-  try {
-    existing = loadController(device.id, storeOptions);
-  } catch {
-    return; // corrupt: nothing usable to keep
+  const existing = loadUnlessCorrupt(device.id, storeOptions);
+  if (existing === 'corrupt') {
+    if (options.yes) {
+      return;
+    }
+    console.log(
+      chalk.yellow(
+        `\nThe controller file for ${deviceLabel(device)} is corrupt. It is moved aside (not deleted) and replaced by the new pairing; ` +
+          'if it held this computer’s only owner keys for this FF1, the FF1 may need another owner or a factory reset.'
+      )
+    );
+    if (!(await confirmFn('Move it aside and pair again?'))) {
+      throw new CommandFailure(
+        'Pairing cancelled; the controller file was left as it is.',
+        'Pass --yes to skip this check.'
+      );
+    }
+    return;
   }
   if (
     !existing ||
@@ -370,17 +402,26 @@ export async function enrollController(
       `\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`
     );
     let access = await requestAccess(device, record, pairDeps);
-    // busy / rate_limited (§4.4, §5.2) changed nothing on the FF1: ask again
+    // busy / rate_limited (§4.4, §5.2) changed nothing on the FF1, and a
+    // request that hit its deadline is refreshed by asking again: retry
     // within the approval wait instead of making the user redo the handoff.
     for (
       let left = Math.floor(timeoutMs / REQUEST_ACCESS_RETRY_MS);
       access.status === 'failed' &&
-      (access.failure.code === 'busy' || access.failure.code === 'rate_limited') &&
+      (access.failure.code === 'busy' ||
+        access.failure.code === 'rate_limited' ||
+        access.failure.code === 'timeout') &&
       left > 0 &&
       !cancelled();
       left -= 1
     ) {
-      console.log(chalk.dim('The FF1 is handling other requests; asking again in 10s...'));
+      console.log(
+        chalk.dim(
+          access.failure.code === 'timeout'
+            ? 'The FF1 did not answer in time; asking again in 10s...'
+            : 'The FF1 is handling other requests; asking again in 10s...'
+        )
+      );
       await wait(REQUEST_ACCESS_RETRY_MS);
       if (cancelled()) {
         break;
@@ -471,8 +512,17 @@ function reportEnrollment(
       );
       process.exitCode = 130;
       return;
-    default:
-      throw new CommandFailure(result.failure.error, result.failure.details);
+    default: {
+      // The controller file is kept after a failed poll, so --resume asks
+      // again with the same keys; no new app handoff is needed.
+      const details = result.failure.details ?? '';
+      throw new CommandFailure(
+        result.failure.error,
+        details.includes('--resume')
+          ? details
+          : `${details ? `${details} ` : ''}To try again with the same keys, run \`${resume}\`.`
+      );
+    }
   }
 }
 
@@ -733,9 +783,21 @@ export async function runUnpair(
     ctl = record ? controllerIdOf(record.keys) : undefined;
     role = record?.role;
     present = record !== null;
-  } catch {
+  } catch (error) {
+    if (!(error instanceof ControllerFileCorruptError)) {
+      throw error; // unreadable: deleting it may remove a working owner key
+    }
     ctl = undefined; // corrupt file: delete it anyway
     present = true;
+  }
+  // An approved but unfinished replacement pairing is deleted too; its role
+  // decides the warning as much as the main file's does.
+  const staged = loadUnlessCorrupt(device.id, stagingStore());
+  if (staged !== null) {
+    present = true;
+    if (staged !== 'corrupt' && staged.role === 'owner') {
+      role = 'owner';
+    }
   }
   if (present && !options.yes) {
     console.log(

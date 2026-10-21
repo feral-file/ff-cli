@@ -46,7 +46,10 @@ import {
   runUnpair,
   storeHandoffTopic,
 } from '../src/commands/helpers/device-control';
-import { describeControlCode } from '../src/utilities/control/control-errors';
+import {
+  describeControlCode,
+  unverifiedReplyFailure,
+} from '../src/utilities/control/control-errors';
 import { markEnrolled } from '../src/utilities/control/controller-store';
 import { FakeFF1, thumb, type Jwk } from './helpers/control-device';
 
@@ -334,6 +337,53 @@ describe('pairing', () => {
     assert.equal(result.status, 'enrolled');
   });
 
+  test('a request that hits its deadline keeps the enroll poll going', async () => {
+    const { record } = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(0);
+    let calls = 0;
+    const stalled: typeof fetch = async (input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      }
+      return fetchFn(input, init);
+    };
+    const result = await pollEnrollment(
+      device,
+      record,
+      { fetchFn: stalled, controllerStore: { dir: storeDir }, getTopicIdFn: () => null },
+      { sleepFn: async () => undefined, storeOptions: { dir: storeDir } }
+    );
+    assert.equal(result.status, 'enrolled');
+    assert.equal(calls, 2);
+  });
+
+  test('a requestAccess that hits its deadline is asked again, keeping the file', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(0);
+    let calls = 0;
+    const stalled: typeof fetch = async (input, init) => {
+      calls += 1;
+      if (calls === 1) {
+        throw new DOMException('The operation was aborted due to timeout', 'TimeoutError');
+      }
+      return fetchFn(input, init);
+    };
+    const log = console.log;
+    console.log = () => undefined;
+    try {
+      await enrollController(device, created.record, 60_000, true, {
+        fetchFn: stalled,
+        controllerStore: { dir: storeDir },
+        getTopicIdFn: () => null,
+        waitFn: async () => undefined,
+      });
+    } finally {
+      console.log = log;
+    }
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, 'controller');
+  });
+
   test('an FF1 with no secure owner yet is explained', async () => {
     const { record } = prepareController(profile, 'x', { dir: storeDir });
     const fake = new FakeFF1(
@@ -368,7 +418,7 @@ describe('pairing', () => {
     const created = prepareController(profile, 'x', { dir: storeDir });
     await assert.rejects(
       enrollController(device, created.record, 10_000, true, deps),
-      /no owner under secure control/
+      /no owner under secure control yet/
     );
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
 
@@ -424,7 +474,7 @@ describe('pairing', () => {
         { fetchFn: refusing, controllerStore: store },
         true
       ),
-      /no owner under secure control/
+      /no owner under secure control yet/
     );
     const kept = loadController(DEVICE_ID, store)!;
     assert.equal(controllerIdOf(kept.keys), controllerIdOf(first.keys));
@@ -520,7 +570,7 @@ describe('pairing', () => {
     await confirmReplacement(device, profile, {}, async () => true, store);
   });
 
-  test('promotion replaces a corrupt main record instead of failing', () => {
+  test('promotion moves a corrupt main record aside instead of failing', () => {
     const store = { dir: storeDir };
     const old = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
     createController({ profile: old, label: 'old' }, store);
@@ -532,14 +582,72 @@ describe('pairing', () => {
     assert.equal(controllerIdOf(promoted.keys), controllerIdOf(next.record.keys));
     assert.equal(loadController(DEVICE_ID, store)!.role, 'owner');
     assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+    assert.ok(fs.readdirSync(storeDir).some((f) => f.startsWith(`${DEVICE_ID}.json.corrupt-`)));
   });
 
-  test('a corrupt controller file is replaced by a fresh pairing', () => {
+  test('a corrupt controller file is moved aside, then replaced by a fresh pairing', () => {
     createController({ profile, label: 'x' }, { dir: storeDir });
     fs.writeFileSync(path.join(storeDir, `${DEVICE_ID}.json`), '{"v":1,"v":1}');
     const result = prepareController(profile, 'x', { dir: storeDir });
     assert.equal(result.reused, false);
     assert.ok(loadController(DEVICE_ID, { dir: storeDir }));
+    const aside = fs
+      .readdirSync(storeDir)
+      .filter((f) => f.startsWith(`${DEVICE_ID}.json.corrupt-`));
+    assert.equal(aside.length, 1);
+    assert.equal(fs.readFileSync(path.join(storeDir, aside[0]), 'utf8'), '{"v":1,"v":1}');
+  });
+
+  test(
+    'an unreadable controller file is never replaced',
+    { skip: process.platform === 'win32' || process.getuid?.() === 0 },
+    async () => {
+      const store = { dir: storeDir };
+      const first = createController({ profile, label: 'x' }, store);
+      markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+      const file = path.join(storeDir, `${DEVICE_ID}.json`);
+      const before = fs.readFileSync(file, 'utf8');
+      fs.chmodSync(file, 0o000);
+      try {
+        assert.throws(
+          () => prepareController(profile, 'x', store),
+          /Cannot read controller file.*keys were not changed/
+        );
+        const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+        await assert.rejects(
+          confirmReplacement(device, reset, { yes: true }, async () => true, store),
+          /Cannot read controller file/
+        );
+      } finally {
+        fs.chmodSync(file, 0o600);
+      }
+      assert.equal(fs.readFileSync(file, 'utf8'), before);
+      assert.equal(
+        controllerIdOf(loadController(DEVICE_ID, store)!.keys),
+        controllerIdOf(first.keys)
+      );
+      assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+    }
+  );
+
+  test('replacing a corrupt controller file asks first', async () => {
+    const store = { dir: storeDir };
+    createController({ profile, label: 'x' }, store);
+    fs.writeFileSync(path.join(storeDir, `${DEVICE_ID}.json`), '{"v":1,"v":1}');
+    await assert.rejects(
+      confirmReplacement(device, profile, {}, async () => false, store),
+      /left as it is/
+    );
+    await confirmReplacement(device, profile, {}, async () => true, store);
+    await confirmReplacement(
+      device,
+      profile,
+      { yes: true },
+      async () => {
+        throw new Error('must not ask');
+      },
+      store
+    );
   });
 });
 
@@ -750,11 +858,17 @@ describe('pairing robustness', () => {
     );
   });
 
-  test('public bad_envelope / bad_signature advice is conditional', () => {
-    for (const code of ['bad_envelope', 'bad_signature']) {
-      const failure = describeControlCode(code, 'Office');
-      assert.match(failure.details!, /^If this FF1 was factory reset/);
+  test('advice on unauthenticated or replay errors never says unpair', () => {
+    for (const code of ['bad_envelope', 'bad_signature', 'replay']) {
+      const failure = describeControlCode(code, 'Living Room');
+      assert.match(failure.details!, /ff-cli device pair "Living Room"/);
+      assert.doesNotMatch(failure.details!, /run `ff-cli device unpair/);
     }
+    assert.doesNotMatch(
+      unverifiedReplyFailure('bad signature').details!,
+      /run `ff-cli device unpair/
+    );
+    assert.match(describeControlCode('invalid_request', 'Office').details!, /clock/);
   });
 });
 
@@ -821,6 +935,22 @@ describe('unpair', () => {
     // Both grants are still there for --resume to promote.
     assert.ok(loadController(DEVICE_ID, stagingStore())!.role);
     assert.ok(loadController(DEVICE_ID)!.role);
+  });
+
+  test('a staged owner record gets the owner warning', async () => {
+    saveController({ ...loadController(DEVICE_ID)!, role: 'controller' });
+    const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    prepareController(reset, 'y');
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, stagingStore());
+    const asked: string[] = [];
+    await assert.rejects(
+      runUnpair('Office', {}, async (q) => {
+        asked.push(q);
+        return false;
+      }),
+      /nothing was deleted/
+    );
+    assert.deepEqual(asked, ['Delete the owner keys anyway?']);
   });
 
   test('--yes deletes owner keys without asking', async () => {

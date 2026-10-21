@@ -45,7 +45,13 @@ import {
   loadController,
   nextCounter,
 } from './controller-store';
-import { type ControlFailure, describeControlCode, unverifiedReplyFailure } from './control-errors';
+import {
+  type ControlFailure,
+  describeControlCode,
+  pairCommand,
+  unpairCommand,
+  unverifiedReplyFailure,
+} from './control-errors';
 
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 750;
@@ -100,6 +106,12 @@ export type SecureOutcome =
       code?: string;
       /** The LAN could not be reached (and no relayer route was taken). */
       unreachable?: boolean;
+      /**
+       * The LAN request hit its deadline: it may or may not have reached the
+       * FF1, so only an idempotent request (the enroll poll) may treat it as
+       * transient.
+       */
+      timedOut?: boolean;
     };
 
 /** AttemptResult classifies one LAN attempt for the retry loop. */
@@ -149,7 +161,7 @@ export function findSecureController(
       failure: {
         code: 'pending',
         error: 'Pairing ff-cli with this FF1 is not finished.',
-        details: `Run \`ff-cli device pair ${device.name ?? device.id} --resume\` and approve the request in the Feral File app on an owner's phone, or run \`ff-cli device unpair ${device.name ?? device.id}\` to go back to unpaired access.`,
+        details: `Run \`${pairCommand(device.name ?? device.id)} --resume\` and approve the request in the Feral File app on an owner's phone, or run \`${unpairCommand(device.name ?? device.id)}\` to go back to unpaired access.`,
       },
     };
   }
@@ -283,7 +295,7 @@ async function attemptLan(
     final: {
       kind: 'failed',
       error: `Device "${request.device.name || request.device.host}" accepted the request (HTTP ${response.status}) but returned no secure reply`,
-      details: `${issue}. If this FF1 was downgraded to firmware without secure control, run \`ff-cli device unpair\`.`,
+      details: `${issue}. Check that the device address still reaches this FF1; ff-cli keeps its keys. Only if you know this FF1 now runs firmware without secure control, run \`${unpairCommand(request.device.name ?? request.device.id)}\`.`,
       transport: 'lan',
     },
   };
@@ -311,6 +323,11 @@ function retryableReply(outcome: SecureOutcome): boolean {
   return code === 'command_failed' && res?.error === 'rate_limited';
 }
 
+/** isDeadlineError reports a request aborted by its fetch deadline. */
+function isDeadlineError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
+}
+
 /**
  * sendSecureRequest delivers one logical command and returns its outcome.
  *
@@ -334,7 +351,11 @@ export async function sendSecureRequest(
       result = await attemptLan(request, sealed, record, deps);
     } catch (error) {
       if (!isTransientDeviceNetworkError(error)) {
-        return { kind: 'failed', error: (error as Error).message };
+        return {
+          kind: 'failed',
+          error: (error as Error).message,
+          ...(isDeadlineError(error) ? { timedOut: true } : {}),
+        };
       }
       if (attempt < attempts) {
         logger.warn(

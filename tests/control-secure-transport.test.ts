@@ -257,7 +257,8 @@ describe('controller key store', () => {
       (error: Error) =>
         /corrupt/.test(error.message) &&
         !error.message.includes(record.keys.sig.d) &&
-        /unpair/.test(error.message)
+        /device pair/.test(error.message) &&
+        !/unpair/.test(error.message)
     );
   });
 
