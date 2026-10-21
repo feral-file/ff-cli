@@ -19,8 +19,11 @@ import {
 import { thumbprint } from '../src/utilities/control/jwk';
 import {
   createController,
+  dropStagedController,
   loadController,
   nextCounter,
+  promoteStagedController,
+  saveController,
   stagingStore,
 } from '../src/utilities/control/controller-store';
 import {
@@ -38,6 +41,7 @@ import {
   formatCode,
   formatControllerTable,
   parseLabel,
+  parseTimeoutMs,
   runUnpair,
   storeHandoffTopic,
 } from '../src/commands/helpers/device-control';
@@ -226,6 +230,35 @@ describe('pairing', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, undefined);
   });
 
+  test('a long wait re-sends requestAccess before the pending request lapses', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    const { fetchFn } = pairingDevice(1000);
+    let now = 0;
+    let refreshes = 0;
+    const result = await pollEnrollment(
+      device,
+      created.record,
+      { fetchFn, controllerStore: { dir: storeDir } },
+      {
+        timeoutMs: 600_000,
+        intervalMs: 60_000,
+        refreshMs: 240_000,
+        nowMsFn: () => now,
+        sleepFn: async (ms) => {
+          now += ms;
+        },
+        refresh: async () => {
+          refreshes += 1;
+        },
+        storeOptions: { dir: storeDir },
+      }
+    );
+    assert.equal(result.status, 'timeout');
+    assert.equal(refreshes, 2); // at 240 s and 480 s
+    assert.throws(() => parseTimeoutMs('601'), /between 10 and 600/);
+    assert.equal(parseTimeoutMs('600'), 600_000);
+  });
+
   test('times out and stops when cancelled', async () => {
     const { record } = prepareController(profile, 'x', { dir: storeDir });
     const { fetchFn } = pairingDevice(1000);
@@ -384,6 +417,47 @@ describe('pairing', () => {
     assert.equal(controllerIdOf(now.keys), controllerIdOf(replacing.record.keys));
     assert.equal(now.role, 'controller');
     assert.equal(now.profile.gen, profile.gen);
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+  });
+
+  test('a promotion that stopped before removing the staged file is finished without rolling back ctr', () => {
+    const store = { dir: storeDir };
+    const old = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    createController({ profile: old, label: 'old' }, store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+    const next = prepareController(profile, 'x', store);
+    assert.equal(next.staged, true);
+    const enrolled = markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, stagingStore(store));
+    // Crash window: main rewritten, staged not yet removed; main then sends.
+    saveController(enrolled, store);
+    nextCounter(DEVICE_ID, store);
+    nextCounter(DEVICE_ID, store);
+
+    const promoted = promoteStagedController(DEVICE_ID, store);
+    assert.equal(promoted.ctr, 2);
+    assert.equal(loadController(DEVICE_ID, store)!.ctr, 2);
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+
+    // The --resume path drops such a file instead of resuming with it.
+    saveController(enrolled, stagingStore(store));
+    assert.equal(dropStagedController(DEVICE_ID, true, store), true);
+    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
+    assert.equal(loadController(DEVICE_ID, store)!.ctr, 2);
+  });
+
+  test('a staged pairing for another identity is kept for --resume until a same-identity pairing supersedes it', () => {
+    const store = { dir: storeDir };
+    const first = prepareController(profile, 'a', store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+    const reset = parseProfile({ ...keys.device.profile, gen: 'AAAAAAAAAAAAAAAAAAAAAA' });
+    prepareController(reset, 'b', store);
+    // An abandoned replacement is still the pairing --resume continues.
+    assert.equal(dropStagedController(DEVICE_ID, true, store), false);
+    assert.ok(loadController(DEVICE_ID, stagingStore(store)));
+
+    const again = prepareController(profile, 'a', store);
+    assert.equal(again.reused, true);
+    assert.equal(controllerIdOf(again.record.keys), controllerIdOf(first.record.keys));
     assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
   });
 
@@ -580,6 +654,30 @@ describe('pairing robustness', () => {
       /rate-limiting/
     );
     assert.equal(waits.length, 2);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+  });
+
+  test('Ctrl-C during the retry wait exits 130 without asking again', async () => {
+    const created = prepareController(profile, 'x', { dir: storeDir });
+    let requests = 0;
+    const fetchFn = fakeFetch(() => {
+      requests += 1;
+      return { ok: false, code: 'rate_limited' };
+    });
+    const previous = process.exitCode;
+    try {
+      await enrollController(device, created.record, 60_000, true, {
+        fetchFn,
+        controllerStore: { dir: storeDir },
+        waitFn: async () => {
+          process.emit('SIGINT');
+        },
+      });
+      assert.equal(process.exitCode, 130);
+    } finally {
+      process.exitCode = previous;
+    }
+    assert.equal(requests, 1);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
   });
 

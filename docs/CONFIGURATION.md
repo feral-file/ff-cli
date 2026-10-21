@@ -351,7 +351,7 @@ encrypted, signed requests. ff-cli takes part as a controller:
 ff-cli device pair office                 # receive the profile, request access, wait
 ff-cli device pair office --label studio  # name the owner sees (default: hostname); 1-64 characters,
                                           # no control or invisible formatting (bidi, zero-width) characters
-ff-cli device pair office --timeout 600   # wait longer for approval (seconds)
+ff-cli device pair office --timeout 600   # wait longer for approval (seconds, at most 600)
 ff-cli device pair office --resume        # continue after Ctrl-C or a timeout
 ff-cli device pair office --yes           # replace a pairing for another FF1 identity without asking
 ```

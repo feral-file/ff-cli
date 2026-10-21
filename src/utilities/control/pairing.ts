@@ -32,6 +32,7 @@ import {
   type ControllerRecord,
   type ControllerStoreOptions,
   createController,
+  dropStagedController,
   loadController,
   markEnrolled,
   stagingStore,
@@ -49,6 +50,17 @@ import { isB64uOfLength, isPlainObject } from './strict-json';
 export const ENROLL_POLL_INTERVAL_MS = 2_000;
 /** DEFAULT_PAIR_TIMEOUT_MS matches the device's 5-minute pending lifetime. */
 export const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60_000;
+/**
+ * MAX_PAIR_TIMEOUT_MS is the device's cap on a pending request's whole life,
+ * refreshes included (§5.2); waiting longer can never end in approval.
+ */
+export const MAX_PAIR_TIMEOUT_MS = 10 * 60_000;
+/**
+ * PENDING_REFRESH_MS is how often the poll re-sends requestAccess so the
+ * device's 5-minute pending TTL (counted from the last request) never lapses
+ * while ff-cli is still waiting.
+ */
+export const PENDING_REFRESH_MS = 4 * 60_000;
 
 type PairDevice = FF1Device & { id: string };
 
@@ -100,6 +112,10 @@ export function prepareController(
     existing = null; // corrupt: replaced below with fresh keys
   }
   if (existing && sameIdentity(existing.profile, profile)) {
+    // A staged record left by an abandoned replacement pairing is for
+    // another identity; this pairing supersedes it, and --resume must not
+    // pick it up later.
+    dropStagedController(profile.dev, false, options);
     return { record: updateLabel(profile.dev, label, options), reused: true, staged: false };
   }
   const staged = existing !== null;
@@ -228,6 +244,13 @@ export interface EnrollPollOptions {
   /** Returns true when the user interrupted (Ctrl-C). */
   cancelled?: () => boolean;
   storeOptions?: ControllerStoreOptions;
+  /**
+   * Re-sends requestAccess every refreshMs (default PENDING_REFRESH_MS) so
+   * the pending request outlives the device's TTL; its outcome is ignored
+   * (a denial shows up on the next enroll poll as not_approved).
+   */
+  refresh?: () => Promise<unknown>;
+  refreshMs?: number;
 }
 
 /**
@@ -284,10 +307,16 @@ export async function pollEnrollment(
   const nowMs = options.nowMsFn ?? Date.now;
   const sleep = options.sleepFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const deadline = nowMs() + (options.timeoutMs ?? DEFAULT_PAIR_TIMEOUT_MS);
+  const refreshMs = options.refreshMs ?? PENDING_REFRESH_MS;
+  let refreshedAt = nowMs();
   const label = device.name || device.id;
   while (nowMs() <= deadline) {
     if (options.cancelled?.()) {
       return { status: 'cancelled' };
+    }
+    if (options.refresh && nowMs() - refreshedAt >= refreshMs) {
+      refreshedAt = nowMs();
+      await options.refresh();
     }
     const outcome = await sendSecureRequest(
       { device, op: 'enroll', enroll: enrollObject(record), relayerFallback: true, retry: false },

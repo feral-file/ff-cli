@@ -139,7 +139,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
 - `device pair [name]` – Pair ff-cli with an FF1 through Feral File mobile: on current FF OS, request controller access and wait for an owner to approve it (prints a 6-digit approval code); on older FF OS, receive relayer access
-  - Options: `--label <label>`, `--timeout <seconds>`, `--resume`
+  - Options: `--label <label>`, `--timeout <seconds>` (10–600, default 300), `--resume`, `-y, --yes` (replace an enrolled pairing for a different FF1 identity without asking)
 - `device controllers [name]` – List an FF1's paired controllers and pending requests (owner only)
 - `device revoke <controller-id> [name]` – Revoke a controller or deny its pending request (owner only)
 - `device unpair [name]` – Delete ff-cli's controller keys for an FF1 (owner keys ask first; `-y, --yes` skips)

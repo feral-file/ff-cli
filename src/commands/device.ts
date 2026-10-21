@@ -31,7 +31,7 @@ deviceCommand
     '--label <label>',
     "Name the owner sees when approving (default: this computer's hostname)"
   )
-  .option('--timeout <seconds>', 'How long to wait for owner approval (default: 300)')
+  .option('--timeout <seconds>', 'How long to wait for owner approval, 10-600 (default: 300)')
   .option('--resume', 'Continue an interrupted pairing without a new app handoff')
   .option('-y, --yes', 'Replace an existing pairing for another FF1 identity without asking')
   .action(async (name: string | undefined, options: PairOptions) => {

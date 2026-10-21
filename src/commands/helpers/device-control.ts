@@ -19,6 +19,7 @@ import {
   type ControllerStoreOptions,
   controllerFilePath,
   deleteController,
+  dropStagedController,
   isEnrolled,
   loadController,
   promoteStagedController,
@@ -26,6 +27,7 @@ import {
 } from '../../utilities/control/controller-store';
 import {
   DEFAULT_PAIR_TIMEOUT_MS,
+  MAX_PAIR_TIMEOUT_MS,
   defaultControllerLabel,
   localApprovalCode,
   pollEnrollment,
@@ -94,7 +96,8 @@ function deviceLabel(device: FF1Device): string {
 }
 
 /**
- * parseTimeoutMs validates `--timeout <seconds>` (10 s to 1 h).
+ * parseTimeoutMs validates `--timeout <seconds>` (10 s to the device's
+ * 10-minute cap on a pending request).
  *
  * @param value - Flag value
  * @returns Milliseconds
@@ -105,8 +108,11 @@ export function parseTimeoutMs(value: string | undefined): number {
     return DEFAULT_PAIR_TIMEOUT_MS;
   }
   const seconds = Number(value);
-  if (!Number.isInteger(seconds) || seconds < 10 || seconds > 3600) {
-    throw new CommandFailure('--timeout must be a whole number of seconds between 10 and 3600');
+  if (!Number.isInteger(seconds) || seconds < 10 || seconds * 1000 > MAX_PAIR_TIMEOUT_MS) {
+    throw new CommandFailure(
+      `--timeout must be a whole number of seconds between 10 and ${MAX_PAIR_TIMEOUT_MS / 1000}`,
+      'The FF1 drops an access request 10 minutes after it was first made, so waiting longer cannot succeed.'
+    );
   }
   return seconds * 1000;
 }
@@ -147,7 +153,10 @@ export async function runPair(name: string | undefined, options: PairOptions): P
   const label = parseLabel(options.label);
   if (options.resume) {
     // A staged pairing (one that will replace an existing record) wins: it is
-    // the one the last run was waiting on.
+    // the one the last run was waiting on. One whose keys the main file
+    // already holds was promoted by a run that stopped before removing it;
+    // its counter is stale, so the main file is used.
+    dropStagedController(device.id, true);
     const staged = loadController(device.id, stagingStore());
     const record = staged ?? loadController(device.id);
     if (!record) {
@@ -353,15 +362,18 @@ export async function enrollController(
     ) {
       console.log(chalk.dim('The FF1 is handling other requests; asking again in 10s...'));
       await wait(REQUEST_ACCESS_RETRY_MS);
+      if (cancelled()) {
+        break;
+      }
       access = await requestAccess(device, record, pairDeps);
-    }
-    if (access.status === 'failed') {
-      discard();
-      throw new CommandFailure(access.failure.error, access.failure.details);
     }
     if (cancelled()) {
       discard();
       return { status: 'interrupted-early' as const };
+    }
+    if (access.status === 'failed') {
+      discard();
+      throw new CommandFailure(access.failure.error, access.failure.details);
     }
     // §14.3: `approved` for a key that holds no grant here is treated as
     // pending, so the code is always shown before an owner can approve.
@@ -385,6 +397,7 @@ export async function enrollController(
       timeoutMs,
       cancelled,
       storeOptions: pairDeps.controllerStore,
+      refresh: () => requestAccess(device, record, pairDeps),
     });
     if (enrolled.status === 'enrolled' && staged) {
       return { status: 'enrolled' as const, record: promoteStagedController(device.id, mainStore) };

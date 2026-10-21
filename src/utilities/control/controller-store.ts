@@ -386,11 +386,67 @@ export function promoteStagedController(
       }
       // Rewritten rather than renamed: the staging directory is a different
       // directory, and writeAtomic gives the same durability as every write.
-      saveController(record, options);
+      // An earlier promotion that crashed before the remove already wrote
+      // these keys; the main file may have advanced its counter since, so it
+      // is kept as is.
+      const current = loadController(deviceId, options);
+      if (!current || !sameKeys(current.keys, record.keys)) {
+        saveController(record, options);
+        fs.rmSync(from, { force: true });
+        return record;
+      }
       fs.rmSync(from, { force: true });
-      return record;
+      return current;
     })
   );
+}
+
+/**
+ * dropStagedController removes the device's staged record when it is no
+ * longer the pairing to continue: `onlyIfPromoted` drops it only when the
+ * main file already holds its keys (a promotion that crashed before the
+ * remove), otherwise it is dropped unconditionally (a same-identity pairing
+ * superseded it).
+ *
+ * @param deviceId - FF1 device ID
+ * @param onlyIfPromoted - Drop only a staged record whose keys the main file holds
+ * @param options - Main store options
+ * @returns True when a staged file was removed
+ */
+export function dropStagedController(
+  deviceId: string,
+  onlyIfPromoted: boolean,
+  options: ControllerStoreOptions = {}
+): boolean {
+  const staged = stagingStore(options);
+  const from = controllerFilePath(deviceId, staged);
+  const to = controllerFilePath(deviceId, options);
+  return withControllerLock(to, () =>
+    withControllerLock(from, () => {
+      if (!fs.existsSync(from)) {
+        return false;
+      }
+      if (onlyIfPromoted) {
+        let record: ControllerRecord | null;
+        let current: ControllerRecord | null;
+        try {
+          record = loadController(deviceId, staged);
+          current = loadController(deviceId, options);
+        } catch {
+          return false; // corrupt: leave both for the user to see
+        }
+        if (!record || !current || !sameKeys(current.keys, record.keys)) {
+          return false;
+        }
+      }
+      fs.rmSync(from, { force: true });
+      return true;
+    })
+  );
+}
+
+function sameKeys(a: ControllerKeys, b: ControllerKeys): boolean {
+  return a.sig.d === b.sig.d && a.enc.d === b.enc.d;
 }
 
 /**

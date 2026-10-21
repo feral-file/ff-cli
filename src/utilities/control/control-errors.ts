@@ -58,7 +58,8 @@ const HEADLINES: Record<string, string> = {
   expired: 'The FF1 rejected the request as expired.',
   replay: 'The FF1 rejected the request counter as already used.',
   invalid_request: 'The FF1 rejected the request as malformed.',
-  internal_error: 'The FF1 could not record the request and did not run it.',
+  internal_error:
+    'The FF1 could not confirm it recorded the request; a command was not run, but a pairing or controller change may have been applied.',
   invitation_invalid: 'The FF1 rejected the invitation.',
   command_failed: 'The FF1 ran the command, but it failed.',
 };
