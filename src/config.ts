@@ -42,7 +42,7 @@ function loadConfig(): Config {
     feed: {
       baseURLs: process.env.FEED_BASE_URLS
         ? process.env.FEED_BASE_URLS.split(',')
-        : ['https://feed.feralfile.com/api/v1'],
+        : ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'],
     },
   };
 
@@ -225,7 +225,7 @@ export function getFeedConfig(): {
     urls = [feedConfig.baseURL];
   } else {
     // Default feed URL
-    urls = ['https://feed.feralfile.com/api/v1'];
+    urls = ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'];
   }
 
   return {
