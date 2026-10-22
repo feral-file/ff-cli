@@ -83,6 +83,13 @@ export interface ControllerRecord {
   expiresAt?: number;
   /** Present when the profile was pinned from an owner's registration result. */
   registration?: RegistrationRecord;
+  /**
+   * Whether the FF1's last verified getDeviceStatus listed `relayV2` in
+   * `control.transports` (absent field: lan and relayer only). Absent until a
+   * verified status is seen. Commands use a derived relay v2 endpoint only
+   * when this is true (config.ts resolveV2Endpoint).
+   */
+  relayV2?: boolean;
   /** Last counter allocated; the next request uses ctr + 1. */
   ctr: number;
   createdAt: number;
@@ -184,7 +191,7 @@ export function parseControllerRecord(text: string): ControllerRecord {
   const obj = strictObject(
     parseStrictJson(text),
     ['v', 'deviceId', 'gen', 'pins', 'profile', 'keys', 'label', 'ctr', 'createdAt'],
-    ['role', 'nk', 'enrolledAt', 'expiresAt', 'registration'],
+    ['role', 'nk', 'enrolledAt', 'expiresAt', 'registration', 'relayV2'],
     'controller file'
   );
   if (uintMember(obj, 'v') !== 1) {
@@ -237,6 +244,12 @@ export function parseControllerRecord(text: string): ControllerRecord {
   }
   if ('registration' in obj) {
     record.registration = parseRegistrationRecord(obj.registration);
+  }
+  if ('relayV2' in obj) {
+    if (typeof obj.relayV2 !== 'boolean') {
+      throw new ControlFormatError('controller file relayV2 is invalid');
+    }
+    record.relayV2 = obj.relayV2;
   }
   return record;
 }
@@ -302,6 +315,9 @@ function serializeControllerRecord(record: ControllerRecord): string {
   }
   if (record.registration !== undefined) {
     body.registration = record.registration;
+  }
+  if (record.relayV2 !== undefined) {
+    body.relayV2 = record.relayV2;
   }
   return `${JSON.stringify(body, null, 2)}\n`;
 }
@@ -1049,6 +1065,30 @@ export function markEnrolled(
     }
     saveController(record, options);
     return record;
+  });
+}
+
+/**
+ * recordRelayV2 stores whether the FF1's latest verified status advertises
+ * relay v2, under the controller lock so a concurrent counter allocation is
+ * not lost. A missing file (unpaired meanwhile) is left alone.
+ *
+ * @param deviceId - Device ID
+ * @param relayV2 - Whether `control.transports` contained "relayV2"
+ * @param options - Store options
+ */
+export function recordRelayV2(
+  deviceId: string,
+  relayV2: boolean,
+  options: ControllerStoreOptions = {}
+): void {
+  const file = controllerFilePath(deviceId, options);
+  withControllerLock(file, () => {
+    const record = loadController(deviceId, options);
+    if (record && record.relayV2 !== relayV2) {
+      record.relayV2 = relayV2;
+      saveController(record, options);
+    }
   });
 }
 

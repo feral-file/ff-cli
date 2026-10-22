@@ -985,8 +985,15 @@ describe('secure generic carrier integration', () => {
     };
   }
 
-  async function sendOverCarrier(mode: Mode, overrides: { v2TimeoutMs?: number } = {}) {
+  async function sendOverCarrier(
+    mode: Mode,
+    overrides: { v2TimeoutMs?: number } = {},
+    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true }
+  ) {
     const record = enrolledRecord('owner');
+    if (route.relayV2 !== undefined) {
+      record.relayV2 = route.relayV2;
+    }
     const device = fakeDevice();
     const previous = globalThis.WebSocket;
     const sent: string[] = [];
@@ -1010,6 +1017,7 @@ describe('secure generic carrier integration', () => {
           getRelayerConfigFn: () => ({
             baseUrl: 'https://legacy.test',
             v2Endpoint: 'wss://v2.test',
+            ...(route.v2Explicit ? { v2Explicit: true } : {}),
           }),
           getTopicIdFn: () => 'optional-topic',
           noticeFn: () => undefined,
@@ -1059,6 +1067,47 @@ describe('secure generic carrier integration', () => {
     assert.equal((outcome as { unreachable?: boolean }).unreachable, undefined);
     assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
     assert.equal(device.seen.length, 1);
+  });
+
+  test('a derived endpoint is not used for an FF1 that has not advertised relay v2', async () => {
+    for (const relayV2 of [undefined, false]) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier('verified', {}, { relayV2 });
+      assert.equal(outcome.kind, 'reply');
+      assert.deepEqual(sent, [], 'no v2 attempt');
+      assert.equal(legacyCalls, 1);
+    }
+  });
+
+  test('a derived endpoint is used for an FF1 whose verified status advertised relay v2', async () => {
+    const { outcome, sent, legacyCalls } = await sendOverCarrier('verified', {}, { relayV2: true });
+    assert.equal(outcome.kind, 'reply');
+    assert.deepEqual(sent, ['peers']);
+    assert.equal(legacyCalls, 0);
+  });
+
+  test('a verified getDeviceStatus records whether the FF1 advertises relay v2', async () => {
+    for (const [control, expected] of [
+      [{ state: 'secured', transports: ['lan', 'relayer', 'relayV2'] }, true],
+      [{ state: 'secured' }, false],
+    ] as const) {
+      const record = enrolledRecord('owner');
+      const device = fakeDevice(() => ({ ok: true, res: { installedVersion: '2.0.0', control } }));
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'getDeviceStatus',
+          req: {},
+          retry: false,
+          relayerFallback: false,
+        },
+        record,
+        { controllerStore: { dir: storeDir }, nowFn: () => NOW, fetchFn: lanFetch(device) }
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(record.relayV2, expected);
+      assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, expected);
+    }
   });
 
   test('the v2 deadline bounds a command the FF1 never answers', async () => {

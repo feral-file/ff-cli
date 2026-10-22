@@ -15,8 +15,9 @@
  *   2xx bodies), plus the two encrypted codes the spec says to retry with a
  *   new ctr (internal_error) or after a pause (rate_limited).
  * - The relayer is used only after LAN reachability is exhausted, never after
- *   an HTTP or protocol answer, exactly like the legacy fallback. With a v2
- *   endpoint the v2 device channel is tried first; the legacy topic follows
+ *   an HTTP or protocol answer, exactly like the legacy fallback. With a
+ *   configured v2 endpoint, or for an FF1 whose verified status advertised
+ *   relay v2, the v2 device channel is tried first; the legacy topic follows
  *   only when v2 proves the command undelivered (§10).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
@@ -30,7 +31,7 @@
 import { RelayClient, RelayUndeliveredError } from '../relay-client';
 import { defaultDeadlineFetch } from '../http';
 import * as logger from '../../logger';
-import { getFF1RelayerConfig } from '../../config';
+import { type FF1RelayerSettings, getFF1RelayerConfig } from '../../config';
 import type { FF1Device } from '../../types';
 import { getTopicId } from '../topic-store';
 import { sendCastViaRelayer } from '../ff1-relayer';
@@ -55,6 +56,7 @@ import {
   isEnrolled,
   loadController,
   nextCounter,
+  recordRelayV2,
   skipCounterAhead,
 } from './controller-store';
 import {
@@ -87,7 +89,7 @@ export type Transport = 'lan' | 'relayer';
 export interface SecureTransportDeps {
   fetchFn?: typeof fetch;
   getTopicIdFn?: (deviceId: string) => string | null;
-  getRelayerConfigFn?: () => { baseUrl: string; apiKey?: string; v2Endpoint?: string };
+  getRelayerConfigFn?: () => FF1RelayerSettings;
   waitFn?: (delayMs: number) => Promise<void>;
   noticeFn?: (message: string) => void;
   controllerStore?: ControllerStoreOptions;
@@ -379,6 +381,7 @@ export async function sendSecureRequest(
 ): Promise<SecureOutcome> {
   const deps = resolveDeps(overrides);
   const outcome = await sendOnce(request, record, deps);
+  noteTransports(request, record, outcome, deps);
   if (outcome.kind !== 'reply' || outcome.reply.ok || outcome.reply.code !== 'replay') {
     return outcome;
   }
@@ -396,6 +399,47 @@ export async function sendSecureRequest(
     return { ...retried, replayRetried: true };
   }
   return retried;
+}
+
+/**
+ * advertisedRelayV2 reads `control.transports` from a getDeviceStatus body
+ * (bare, or in the `{message:{…}}` wrapper the LAN reply uses). An absent
+ * transports member means lan and relayer only; an absent control block
+ * says nothing, so it returns undefined.
+ */
+export function advertisedRelayV2(res: unknown): boolean | undefined {
+  const body = res as { control?: unknown; message?: { control?: unknown } } | undefined;
+  const control = (body?.control ?? body?.message?.control) as { transports?: unknown } | undefined;
+  if (!control || typeof control !== 'object') {
+    return undefined;
+  }
+  return Array.isArray(control.transports) && control.transports.includes('relayV2');
+}
+
+/**
+ * noteTransports caches, from a VERIFIED getDeviceStatus reply only, whether
+ * the FF1 advertises relay v2; fallbackOrUnreachable reads it when the LAN is
+ * down. A plaintext status is never used: on the LAN anyone can forge it.
+ */
+function noteTransports(
+  request: SecureRequest,
+  record: ControllerRecord,
+  outcome: SecureOutcome,
+  deps: ResolvedDeps
+): void {
+  if (request.cmd !== 'getDeviceStatus' || outcome.kind !== 'reply' || !outcome.reply.ok) {
+    return;
+  }
+  const relayV2 = advertisedRelayV2(outcome.reply.res);
+  if (relayV2 === undefined || relayV2 === record.relayV2) {
+    return;
+  }
+  record.relayV2 = relayV2;
+  try {
+    recordRelayV2(request.device.id, relayV2, deps.controllerStore);
+  } catch (error) {
+    logger.debug(`Could not record the FF1's relay transports: ${(error as Error).message}`);
+  }
 }
 
 /**
@@ -495,7 +539,10 @@ async function fallbackOrUnreachable(
   }
   try {
     const relay = deps.getRelayerConfigFn();
-    if (relay.v2Endpoint && request.op === 'cmd') {
+    // A derived endpoint is used only for an FF1 whose verified status
+    // advertised relay v2; otherwise a stranger's ACK on the device channel
+    // could strand a command the topic would have delivered (config.ts).
+    if (relay.v2Endpoint && request.op === 'cmd' && (relay.v2Explicit || record.relayV2)) {
       const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
@@ -621,7 +668,7 @@ async function sendViaRelayer(
   deps.noticeFn(
     `Notice: LAN device is unreachable; falling back to the FF1 relayer for ${request.device.name ?? request.device.id}.`
   );
-  let relayer: { baseUrl: string; apiKey?: string; v2Endpoint?: string };
+  let relayer: FF1RelayerSettings;
   try {
     relayer = deps.getRelayerConfigFn();
   } catch (error) {

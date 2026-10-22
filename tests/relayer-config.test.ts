@@ -82,8 +82,10 @@ describe('FF1 relayer configuration', () => {
   });
 
   test('an explicit v2 endpoint wins and an empty one turns v2 off', () => {
+    assert.equal(getFF1RelayerConfig().v2Explicit, undefined, 'a derived endpoint is not explicit');
     process.env.FF1_RELAY_V2_ENDPOINT = 'wss://v2.example';
     assert.equal(getFF1RelayerConfig().v2Endpoint, 'wss://v2.example');
+    assert.equal(getFF1RelayerConfig().v2Explicit, true);
     writeFileSync(
       join(fixtureDir, 'config.json'),
       JSON.stringify({ ff1Relayer: { v2Endpoint: '' } })
