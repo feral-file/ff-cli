@@ -470,13 +470,20 @@ function shuffleArray(array) {
  * @param {Object} options - Build options
  * @param {boolean} [options.verbose] - Verbose output
  * @param {string} [options.outputPath] - Output file path
- * @returns {Promise<Object>} Result with playlist
+ * @returns {Promise<Object>} Result with playlist, publish outcome, and
+ *   `failures`: one line per requirement, send, or publish that did not happen
+ *   (empty when everything asked for succeeded)
  */
 async function buildPlaylistDirect(params, options = {}) {
   const { requirements, playlistSettings } = params;
   const { verbose = false, outputPath = 'playlist.json' } = options;
 
   const allItems = [];
+  // Everything the caller asked for that did not happen. The playlist is still
+  // saved when some of it is missing, but the command must not report a clean
+  // success: an agent trusting the exit code would otherwise hand over a
+  // partial playlist, or claim a playlist is on the wall when the send failed.
+  const failures = [];
   // Undefined means auto timing: video/audio items omit duration and play
   // their natural length (DP-1 §4.1); static items get the configured default.
   const duration = playlistSettings.durationPerItem;
@@ -499,8 +506,14 @@ async function buildPlaylistDirect(params, options = {}) {
     try {
       const items = await queryRequirement(requirement, duration, source);
       allItems.push(...items);
+      // Some requirement types report "nothing found" by returning no items
+      // rather than throwing (fetch_feed does). It is the same miss.
+      if (items.length === 0) {
+        failures.push(`Requirement ${reqNum}: no items found`);
+      }
     } catch (error) {
       console.error(chalk.red(`  Failed: ${error.message}`));
+      failures.push(`Requirement ${reqNum}: ${error.message}`);
       if (verbose) {
         console.error(chalk.dim(error.stack));
       }
@@ -539,7 +552,10 @@ async function buildPlaylistDirect(params, options = {}) {
   // Send to device if requested
   if (playlistSettings.deviceName !== undefined) {
     console.log(chalk.cyan('\nSending to device...'));
-    await sendToDevice(playlist, playlistSettings.deviceName);
+    const sendResult = await sendToDevice(playlist, playlistSettings.deviceName);
+    if (!sendResult || !sendResult.success) {
+      failures.push(`Send to device: ${sendResult?.error || 'failed'}`);
+    }
   }
 
   // Publish to feed server if requested
@@ -560,12 +576,14 @@ async function buildPlaylistDirect(params, options = {}) {
         }
       } else {
         console.error(chalk.red(`Publish failed: ${publishResult.error}`));
+        failures.push(`Publish: ${publishResult.error}`);
         if (publishResult.message) {
           console.error(chalk.dim(`   ${publishResult.message}`));
         }
       }
     } catch (error) {
       console.error(chalk.red(`Publish failed: ${error.message}`));
+      failures.push(`Publish: ${error.message}`);
       if (verbose) {
         console.error(chalk.dim(error.stack));
       }
@@ -576,6 +594,7 @@ async function buildPlaylistDirect(params, options = {}) {
     playlist,
     published: publishResult?.success || false,
     publishResult,
+    failures,
   };
 }
 

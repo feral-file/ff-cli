@@ -3,6 +3,7 @@ import chalk from 'chalk';
 import { parseFindInput } from '@feralfile/source-resolver';
 import { getPlaylistConfig } from '../config';
 import {
+  buildMediaPlaySource,
   isPlaylistSourceUrl,
   loadPlaylistSource,
   resolvePlaySource,
@@ -105,105 +106,171 @@ export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlayS
   }
 }
 
+/**
+ * resolveWebPageSource wraps `source` as a web page for `play --web`, without
+ * the discovery redirect or the playlist probe.
+ *
+ * `--web` exists because the discovery parser claims whole hosts: any page on
+ * feralfile.com, opensea.io, objkt.com and the like is redirected to `find`,
+ * and `find` rejects every page that is not an artwork it can resolve (a
+ * homepage, an exhibition overview, a profile). Before `--web` there was no
+ * way to put such a page on a wall; the two commands pointed at each other.
+ *
+ * @param {string} source - The URL the caller passed
+ * @returns {Promise<PlaySource>} A `media` source with a `text/html` item
+ * @throws {Error} When `source` is not an http(s) URL
+ */
+async function resolveWebPageSource(source: string): Promise<PlaySource> {
+  const url = source.trim();
+  if (!isPlaylistSourceUrl(url)) {
+    throw new Error(`--web takes an http(s) URL; got "${source}".`);
+  }
+  return buildMediaPlaySource(url, { mimeType: 'text/html' });
+}
+
 export const playCommand = new Command('play')
-  .description('Play a playlist or media URL on an FF1 device')
-  .argument('<source>', 'Playlist file, playlist URL, or media URL')
+  .description('Play a playlist file, playlist URL, media URL, or web page on an FF1 device')
+  .argument('<source>', 'Playlist file, playlist URL, or any media or web page URL')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
+  .option(
+    '--web',
+    'Play the URL as a web page, even on a marketplace site where play would otherwise send you to find'
+  )
   .option(
     '--skip-verify',
     'Skip signature verification and auto-sign gating before playing; use only when you accept malformed envelopes'
   )
-  .action(async (source: string, options: { device?: string; skipVerify?: boolean }) => {
-    try {
-      // `play` casts an exact playable source. A marketplace URL / on-chain
-      // coords / wallet must be resolved through the indexer first — redirect
-      // to `find` rather than silently wrapping the *page* as a web item.
-      // Exception: a discovery-classified URL that actually serves a DP-1
-      // playlist document (the discovery parser claims whole hosts, catching
-      // feed playlist URLs) plays directly — see probeDiscoveryUrlAsPlaylist.
-      const discovery = describeDiscoveryInput(source);
-      let probed: PlaySource | null = null;
-      if (discovery) {
-        probed = await probeDiscoveryUrlAsPlaylist(source);
-      }
-      if (discovery && !probed) {
-        console.error(
-          chalk.red(
-            '\n`play` casts an exact playlist or media URL — it does not search marketplaces.'
-          )
-        );
-        console.error(
-          chalk.dim(`  "${source}" looks like ${discovery}, which needs to be resolved first.`)
-        );
-        const deviceFlag = options.device ? ` -d "${options.device}"` : '';
-        console.log(chalk.yellow(`\nTry:  ff-cli find "${source}" --play${deviceFlag}`));
-        process.exit(1);
-      }
-
-      // No explicit duration: a direct video/audio URL plays its natural
-      // length (DP-1 §4.1); static media uses config.defaultDuration.
-      const resolved = probed ?? (await resolvePlaySource(source));
-      const isPlaylistSource = resolved.kind === 'playlist';
-      const sourceLabel = isPlaylistSource
-        ? `${resolved.sourceType}: ${resolved.source}`
-        : resolved.source;
-
-      console.log(chalk.blue('\nPlay on FF1\n'));
-
-      if (!options.skipVerify && isPlaylistSource) {
-        console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
-      }
-
-      // A direct media/web URL is wrapped in an unsigned single-item playlist,
-      // so it must be signed before the verify gate; a loaded playlist is sent
-      // as-is. castPlaylist owns the sign → verify → send sequence.
-      // Resolve through getPlaylistConfig rather than reading config.playlist directly: it is the one
-      // place that knows a config value may still be the config.json.example placeholder, in which case a
-      // valid PLAYLIST_PRIVATE_KEY must win. Duplicating the `config || env` precedence here is what made
-      // this path sign with the template literal while every other signing path used the real key.
-      const privateKey = getPlaylistConfig().privateKey || undefined;
-      const result = await castPlaylist(resolved.playlist, {
-        deviceName: options.device,
-        skipVerify: options.skipVerify,
-        requireSignature: resolved.kind === 'media',
-        signingKey: privateKey,
-      });
-
-      if (!result.success) {
-        if (result.stage === 'verify') {
-          printPlaylistVerificationFailure(
-            { valid: false, error: result.error, details: result.details },
-            isPlaylistSource ? `source: ${sourceLabel}` : undefined
-          );
-        } else if (result.stage === 'sign') {
-          console.error(chalk.red(`\n${result.error}`));
+  .action(
+    async (source: string, options: { device?: string; skipVerify?: boolean; web?: boolean }) => {
+      try {
+        const resolved = options.web
+          ? await resolveWebPageSource(source)
+          : await resolveDefaultSource(source, options.device);
+        await castResolved(resolved, options);
+      } catch (error) {
+        if (!options.web && isPlaylistSourceUrl(source)) {
+          printPlaylistSourceLoadFailure(source, error as Error);
         } else {
-          console.error(chalk.red('\nPlay failed:'), result.error);
-          if (result.deviceDetails) {
-            console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
-          }
+          console.error(chalk.red('\nError:'), (error as Error).message);
         }
         process.exit(1);
       }
-
-      if (result.verified) {
-        console.log(chalk.green(result.signed ? '✓ Signed and verified\n' : '✓ Verified\n'));
-      }
-
-      console.log(chalk.green('✓ Playing'));
-      if (result.deviceName) {
-        console.log(chalk.dim(`  Device: ${result.deviceName}`));
-      }
-      if (result.device) {
-        console.log(chalk.dim(`  Host: ${result.device}`));
-      }
-      console.log();
-    } catch (error) {
-      if (isPlaylistSourceUrl(source)) {
-        printPlaylistSourceLoadFailure(source, error as Error);
-      } else {
-        console.error(chalk.red('\nError:'), (error as Error).message);
-      }
-      process.exit(1);
     }
+  );
+
+/**
+ * resolveDefaultSource resolves a `play` argument without `--web`: discovery
+ * inputs go to `find`, everything else loads as a playlist or wraps as media.
+ *
+ * `play` casts an exact playable source. A marketplace URL / on-chain coords /
+ * wallet must be resolved through the indexer first, so it redirects to `find`
+ * rather than silently wrapping the *page* as a web item. Exception: a
+ * discovery-classified URL that actually serves a DP-1 playlist document (the
+ * discovery parser claims whole hosts, catching feed playlist URLs) plays
+ * directly; see probeDiscoveryUrlAsPlaylist. The redirect names `--web` too,
+ * for the caller who did mean the page.
+ *
+ * @param {string} source - The URL, path, or reference the caller passed
+ * @param {string} [device] - Device name, carried into the suggested command
+ * @returns {Promise<PlaySource>} What to cast; exits 1 on a discovery input
+ */
+async function resolveDefaultSource(source: string, device?: string): Promise<PlaySource> {
+  const discovery = describeDiscoveryInput(source);
+  let probed: PlaySource | null = null;
+  if (discovery) {
+    probed = await probeDiscoveryUrlAsPlaylist(source);
+  }
+  if (discovery && !probed) {
+    console.error(
+      chalk.red('\n`play` casts an exact playlist or media URL — it does not search marketplaces.')
+    );
+    console.error(
+      chalk.dim(`  "${source}" looks like ${discovery}, which needs to be resolved first.`)
+    );
+    const deviceFlag = device ? ` -d "${device}"` : '';
+    console.log(chalk.yellow(`\nTry:  ff-cli find "${source}" --play -y${deviceFlag}`));
+    if (isPlaylistSourceUrl(source)) {
+      console.log(
+        chalk.dim(`To show the page itself:  ff-cli play --web "${source}"${deviceFlag}`)
+      );
+    }
+    process.exit(1);
+  }
+
+  // No explicit duration: a direct video/audio URL plays its natural
+  // length (DP-1 §4.1); static media uses config.defaultDuration.
+  return probed ?? (await resolvePlaySource(source));
+}
+
+/**
+ * castResolved signs (for a synthesized media playlist), verifies, and sends
+ * a resolved source, then reports the outcome. Exits 1 on any failure.
+ *
+ * @param {PlaySource} resolved - What to cast
+ * @param {Object} options - The `play` options
+ * @returns {Promise<void>}
+ */
+async function castResolved(
+  resolved: PlaySource,
+  options: { device?: string; skipVerify?: boolean }
+): Promise<void> {
+  const isPlaylistSource = resolved.kind === 'playlist';
+  const sourceLabel = isPlaylistSource
+    ? `${resolved.sourceType}: ${resolved.source}`
+    : resolved.source;
+
+  console.log(chalk.blue('\nPlay on FF1\n'));
+
+  if (resolved.kind === 'media' && resolved.note) {
+    console.log(chalk.yellow(resolved.note));
+  }
+
+  if (!options.skipVerify && isPlaylistSource) {
+    console.log(chalk.cyan(`Verify playlist (${sourceLabel})`));
+  }
+
+  // A direct media/web URL is wrapped in an unsigned single-item playlist,
+  // so it must be signed before the verify gate; a loaded playlist is sent
+  // as-is. castPlaylist owns the sign → verify → send sequence.
+  // Resolve through getPlaylistConfig rather than reading config.playlist directly: it is the one
+  // place that knows a config value may still be the config.json.example placeholder, in which case a
+  // valid PLAYLIST_PRIVATE_KEY must win. Duplicating the `config || env` precedence here is what made
+  // this path sign with the template literal while every other signing path used the real key.
+  const privateKey = getPlaylistConfig().privateKey || undefined;
+  const result = await castPlaylist(resolved.playlist, {
+    deviceName: options.device,
+    skipVerify: options.skipVerify,
+    requireSignature: resolved.kind === 'media',
+    signingKey: privateKey,
   });
+
+  if (!result.success) {
+    if (result.stage === 'verify') {
+      printPlaylistVerificationFailure(
+        { valid: false, error: result.error, details: result.details },
+        isPlaylistSource ? `source: ${sourceLabel}` : undefined
+      );
+    } else if (result.stage === 'sign') {
+      console.error(chalk.red(`\n${result.error}`));
+    } else {
+      console.error(chalk.red('\nPlay failed:'), result.error);
+      if (result.deviceDetails) {
+        console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
+      }
+    }
+    process.exit(1);
+  }
+
+  if (result.verified) {
+    console.log(chalk.green(result.signed ? '✓ Signed and verified\n' : '✓ Verified\n'));
+  }
+
+  console.log(chalk.green('✓ Playing'));
+  if (result.deviceName) {
+    console.log(chalk.dim(`  Device: ${result.deviceName}`));
+  }
+  if (result.device) {
+    console.log(chalk.dim(`  Host: ${result.device}`));
+  }
+  console.log();
+}

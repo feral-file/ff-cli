@@ -3,7 +3,7 @@ import { describe, test, before, after } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolvePlaySource } from '../src/utilities/playlist-source';
+import { buildMediaPlaySource, resolvePlaySource } from '../src/utilities/playlist-source';
 import { validatePlaylist } from '../src/utilities/playlist-verifier';
 
 const samplePlaylist = {
@@ -103,16 +103,104 @@ describe('resolvePlaySource', () => {
     }
   });
 
-  test('falls back to kind=media when a URL returns a non-OK status', async () => {
+  test('falls back to kind=media with a note when the server refuses the CLI', async () => {
+    // Bot protection often answers 403 to a command-line client while the
+    // device, fetching as a browser, gets the page. Send it, but say so.
     const original = global.fetch;
-    global.fetch = async () => new Response('not found', { status: 404 });
+    global.fetch = async () => new Response('forbidden', { status: 403 });
 
     try {
       const result = await resolvePlaySource('https://example.com/clip.mp4', 10);
       assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.match(result.note ?? '', /403/);
+        assert.match(result.note ?? '', /sending it to the device anyway/);
+      }
     } finally {
       global.fetch = original;
     }
+  });
+
+  test('an ordinary web page wraps as media with no note', async () => {
+    const original = global.fetch;
+    global.fetch = async () =>
+      new Response('<html><body>art</body></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+
+    try {
+      const result = await resolvePlaySource('https://example.com/', undefined);
+      assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.equal(result.note, undefined);
+        assert.equal(result.playlist.items[0].source, 'https://example.com/');
+      }
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  for (const status of [404, 410]) {
+    test(`refuses a URL that answers ${status} instead of casting the error page`, async () => {
+      const original = global.fetch;
+      global.fetch = async () => new Response('gone', { status });
+
+      try {
+        await assert.rejects(
+          () => resolvePlaySource('https://example.com/missing', 10),
+          new RegExp(`Nothing at https://example\\.com/missing \\(HTTP ${status}\\)`)
+        );
+      } finally {
+        global.fetch = original;
+      }
+    });
+  }
+
+  test('refuses a host that does not resolve', async () => {
+    const original = global.fetch;
+    global.fetch = async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND nope.invalid'), {
+          code: 'ENOTFOUND',
+        }),
+      });
+    };
+
+    try {
+      await assert.rejects(
+        () => resolvePlaySource('https://nope.invalid/page', 10),
+        /No such host for https:\/\/nope\.invalid\/page/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('refuses a .json URL that cannot be loaded as a playlist', async () => {
+    const original = global.fetch;
+    global.fetch = async () => new Response('upstream down', { status: 502 });
+
+    try {
+      await assert.rejects(
+        () => resolvePlaySource('https://cdn.example.com/playlist.json', 10),
+        /looks like a playlist \(\.json\) but could not be loaded/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('buildMediaPlaySource with text/html times the item as a page, like an ordinary page URL', async () => {
+    // --web forces the page path for any URL. Its timing must match what an
+    // extensionless page URL gets, not the static-image default.
+    const forced = await buildMediaPlaySource('https://feralfile.com/artworks/a.png', {
+      mimeType: 'text/html',
+    });
+    const page = await buildMediaPlaySource('https://example.com/');
+    assert.equal(forced.kind, 'media');
+    assert.equal(forced.playlist.items[0].source, 'https://feralfile.com/artworks/a.png');
+    assert.equal(forced.playlist.items[0].duration, page.playlist.items[0].duration);
   });
 
   test('validatePlaylist rejects a structurally invalid playlist', async () => {

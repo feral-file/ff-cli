@@ -13,12 +13,14 @@ Context:
 
 Keep it simple. Prefer deletion over added process.
 Do not invent new requirements.
+Trust exit codes: every command exits non-zero when what was asked did not happen. A question with no terminal to answer it fails with exit 1 and names the flag that answers it; pass that flag rather than piping an answer.
 
 Bootstrap (only if not yet installed/configured — skip when `ff-cli status` already works):
-- Install (most reliable): `npm i -g @feralfile/cli` (needs Node.js 22+).
+- Install (most reliable): `npm i -g @feralfile/cli` (needs Node.js 22+). If the global install is refused for permissions, `curl -fsSL https://feralfile.com/ff-cli-install | bash` installs the same package under `~/.local` without sudo.
 - Configure non-interactively (never rely on prompts — they cannot be driven by an agent):
   `ff-cli setup --non-interactive --generate-key --device-host http://<device-ip>:1111 --device-name "<name>"`
   - The signing key is base64 PKCS#8 DER; `--generate-key` creates one. To reuse a key, pass `--key "<value>"` (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM).
+  - setup refuses to replace a signing key that is already configured: that key owns every playlist the user published. Never add `--force` unless the user explicitly asks to replace their key.
   - Skip mDNS discovery entirely — it is unreliable across subnets. Always pass `--device-host`. Add more devices with `ff-cli device add --host http://<ip>:1111 --name "<name>"`.
 - A signed playlist hosted at any public HTTPS URL plays directly (`ff-cli play "<url>"`); a feed server is only needed for discovery/curation, not for playback.
 
@@ -26,10 +28,11 @@ Flow:
 1) ff-cli status
 2) ff-cli config validate
 3) Build playlist (ff-cli has no chat — you are the natural-language layer; translate the request into one of these yourself):
+   - a web page, media file, or hosted playlist URL needs no build: run `ff-cli play "<url>"` and skip to reporting. Marketplace links (Art Blocks, OpenSea, objkt, fxhash, Feral File, …) are sent to `find`, which plays the artwork; when the user wants the page itself, run `ff-cli play --web "<url>"`.
    - for a single artwork or a collection from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json -y` (add `--play` to build and play in one step). `-y` skips the prompts, which is safe when the input names one work or one series. `-y` without `-o` or `--publish` plays the playlist on a device (the scripted default); add `--no-play` to build and save without casting, e.g. `ff-cli find "<input>" -y --no-play`.
    - `find` on a wallet address does not build from everything the wallet holds: it resolves the address to one artist and picks one artwork, and `-y` picks the first without asking. Ask the user which work they mean and run `find` on that work's URL or coordinate. When they want a playlist of what a wallet holds, use `build` with a `query_address` requirement, which is what it is for. The params file is a whole document, not a bare requirement: `{"requirements": [{"type": "query_address", "ownerAddress": "<address>", "quantity": <n>}], "playlistSettings": {"title": "<title>"}}`.
    - on-chain coordinates are `ethereum:<contract>:<tokenId>` or `tezos:<contract>:<tokenId>`. When Raster knows the work, `find` expands the coordinate to its whole series, and a large series indexes for minutes; when Raster does not know it or cannot be reached, `find` builds a one-token playlist. Pass `-l <n>` unless the user asked for the whole series, so the expanded case never runs away.
-   - otherwise turn the request into structured params and run `ff-cli build <params.json> -o playlist.json -v`
+   - otherwise turn the request into structured params and run `ff-cli build <params.json> -o playlist.json -v`. `ff-cli build --help` lists every requirement type. `build` exits 1 when any requirement finds nothing or the send fails; it still saves what it collected, so report what is missing.
    - `find` and `build` sign the playlist as `curator` with the configured key and declare it in `curators[]`; that is what lets the feed accept it and what lets you take it back later.
 4) `ff-cli validate playlist.json`
 5) If requested, run:

@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import chalk from 'chalk';
 import { readConfigFile, resolveExistingConfigPath } from './helpers/config-files';
-import { getPlaylistConfig } from '../config';
+import { getConfigPaths, getPlaylistConfig } from '../config';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { isDp1PlaylistSigningRole } from '../utilities/playlist-signing-role';
 import { playlistSigningDidKey } from '../utilities/signing-identity';
@@ -76,7 +76,10 @@ export const statusCommand = new Command('status')
 
       const configPath = await resolveExistingConfigPath();
       if (!configPath) {
-        console.log(chalk.red('config.json not found'));
+        // Name both places looked: when a caller's environment points the user config somewhere
+        // unexpected (a sandboxed HOME with XDG_CONFIG_HOME still set), the path is the clue.
+        const { localPath, userPath } = getConfigPaths();
+        console.log(chalk.red(`config.json not found (looked in ${localPath} and ${userPath})`));
         console.log(chalk.dim('Run: ff-cli setup'));
         // PLAYLIST_PRIVATE_KEY is a supported signing source on its own, and the did:key it implies is
         // the one value a user must know before they can write a publishable playlist — it has to be

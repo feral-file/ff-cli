@@ -26,7 +26,8 @@ npx @feralfile/cli find https://www.artblocks.io/collection/ringers-by-dmitri-ch
 ```bash
 ff-cli setup
 ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
-ff-cli play "https://example.com/video.mp4" --skip-verify
+ff-cli play "https://example.com/video.mp4"
+ff-cli play "https://example.com/"          # any web page
 ```
 
 If you need manual config actions instead of guided setup:
@@ -50,6 +51,10 @@ ff-cli setup --non-interactive \
 # Or supply your own key (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM)
 ff-cli setup -y --key "<private-key>" --role agent
 ```
+
+`--generate-key`, `--key`, and `--key-file` refuse to replace a signing key that is already configured, because that key owns the playlists you published. Add `--force` only when you mean to replace it.
+
+Without a terminal, `find` needs `-y` (it plays by default; add `--no-play` to only save). A question with no terminal to answer it exits 1 and names the flag.
 
 Device pairing is also scriptable on its own: `ff-cli device add --host http://<ip>:1111 --name <name>` skips mDNS discovery entirely.
 
@@ -110,7 +115,7 @@ Codex will surface it when you ask to build a playlist, play an artwork or URL o
 npm ci
 npm run dev -- setup
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
-npm run dev -- play "https://example.com/video.mp4" --skip-verify
+npm run dev -- play "https://example.com/video.mp4"
 ```
 
 ## Documentation

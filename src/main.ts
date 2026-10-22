@@ -31,6 +31,18 @@ import type {
 const getUtilities = () => require('./utilities');
 
 /**
+ * REQUIREMENT_TYPES lists every requirement `build` accepts, in the order
+ * `build --help` documents them. Kept beside validateRequirements so a new
+ * branch there and this list change together.
+ */
+export const REQUIREMENT_TYPES = [
+  'build_playlist',
+  'query_address',
+  'fetch_feed',
+  'feral_file_artwork',
+] as const;
+
+/**
  * Validate and apply constraints to requirements
  *
  * @param {Array<Object>} requirements - Array of requirements
@@ -116,7 +128,10 @@ export function validateRequirements(requirements: Requirement[]): Requirement[]
       }
     }
 
-    throw new Error(`Requirement ${index + 1}: invalid type "${(req as { type?: string }).type}"`);
+    throw new Error(
+      `Requirement ${index + 1}: invalid type "${(req as { type?: string }).type}". ` +
+        `Valid types: ${REQUIREMENT_TYPES.join(', ')} (see ff-cli build --help).`
+    );
   });
 }
 
