@@ -56,17 +56,24 @@ function didKeyOrNull(keyMaterial: string): string | null {
  * owner key without a word. The interactive "Keep existing signing key?"
  * question is its own confirmation and does not come through here.
  *
- * @param {string} currentKey - Key material in config (may be a placeholder)
+ * "Configured" means the identity signing uses today: the config key, or
+ * PLAYLIST_PRIVATE_KEY when config holds none. A config key always wins over
+ * the environment (getPlaylistConfig), so writing one would mask an
+ * environment identity just as surely as overwriting a config key.
+ *
+ * @param {string} currentKey - Effective key material (may be a placeholder or empty)
  * @param {string} nextKey - Key material setup is about to write
  * @param {string} flag - The flag that asked for the change, named in the error
  * @param {boolean} force - Whether --force was passed
+ * @param {string} [source] - Where currentKey came from, when not config.json
  * @throws {Error} When an existing, different identity would be replaced without --force
  */
 function assertKeyReplacementAllowed(
   currentKey: string,
   nextKey: string,
   flag: string,
-  force: boolean
+  force: boolean,
+  source?: string
 ): void {
   if (force || isMissingConfigValue(currentKey)) {
     return;
@@ -76,7 +83,8 @@ function assertKeyReplacementAllowed(
     return;
   }
   throw new Error(
-    `A signing key is already configured (${currentDid}). It owns the playlists you published; ` +
+    `A signing key is already configured (${currentDid}${source ? `, from ${source}` : ''}). ` +
+      'It owns the playlists you published; ' +
       'replacing it means you can no longer replace or unpublish them. ' +
       `Re-run without ${flag} to keep it, or add --force to replace it.`
   );
@@ -172,32 +180,40 @@ export const setupCommand = new Command('setup')
       let signingKey = currentKey;
       let signingRole = currentRole;
 
+      // The identity signing uses today. With no usable key in config, signing falls back to
+      // PLAYLIST_PRIVATE_KEY, and a config key written now would silently take its place.
+      const envKey = process.env.PLAYLIST_PRIVATE_KEY?.trim() || '';
+      const keyFromEnv = isMissingConfigValue(currentKey) && !isMissingConfigValue(envKey);
+      const effectiveKey = keyFromEnv ? envKey : currentKey;
+      const keySource = keyFromEnv ? 'PLAYLIST_PRIVATE_KEY' : undefined;
+      const force = Boolean(options.force);
+
       // Already resolved and validated above, before any file was created.
       if (explicitKey !== undefined) {
         assertKeyReplacementAllowed(
-          currentKey,
+          effectiveKey,
           explicitKey.material,
           explicitKey.flag,
-          Boolean(options.force)
+          force,
+          keySource
         );
         signingKey = explicitKey.material;
       } else if (nonInteractive) {
         // Key precedence with no explicit key: --generate-key, then keep an
         // existing usable key, otherwise generate one so signing works.
-        if (options.generateKey || isMissingConfigValue(currentKey)) {
+        if (options.generateKey || isMissingConfigValue(effectiveKey)) {
           const generated = generateSigningKeyBase64();
-          assertKeyReplacementAllowed(
-            currentKey,
-            generated,
-            '--generate-key',
-            Boolean(options.force)
-          );
+          assertKeyReplacementAllowed(effectiveKey, generated, '--generate-key', force, keySource);
           signingKey = generated;
           console.log(chalk.dim('Generated a new Ed25519 signing key.'));
+        } else if (keyFromEnv) {
+          console.log(chalk.dim('Signing with PLAYLIST_PRIVATE_KEY; config.json keeps no key.'));
         }
       } else {
-        if (isMissingConfigValue(currentKey)) {
+        if (isMissingConfigValue(effectiveKey)) {
           signingKey = generateSigningKeyBase64();
+        } else if (keyFromEnv) {
+          console.log(chalk.dim('Signing with PLAYLIST_PRIVATE_KEY; config.json keeps no key.'));
         } else {
           const ask = getAsk();
           const keepKey = await promptYesNo(ask, 'Keep existing signing key?', true);

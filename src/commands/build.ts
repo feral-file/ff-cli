@@ -31,7 +31,7 @@ Exit status: 1 when any requirement, or the send to deviceName, fails. The
 playlist file is still saved with whatever was collected.
 
 Example:
-  echo '{"requirements":[{"type":"query_address","ownerAddress":"0x…","quantity":5}]}' | ff-cli build -o wallet.json
+  echo '{"requirements":[{"type":"query_address","ownerAddress":"0x…","quantity":5}],"playlistSettings":{"title":"My collection"}}' | ff-cli build -o wallet.json
 `;
 
 export const buildCommand = new Command('build')

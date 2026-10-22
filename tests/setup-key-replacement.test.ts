@@ -33,14 +33,18 @@ function newKey(): string {
  * already holds `key`, and hands back the run and the key setup left behind.
  */
 function runSetup(
-  key: string,
-  args: string[]
-): { status: number | null; output: string; keyAfter: string } {
+  key: string | null,
+  args: string[],
+  envKey = ''
+): { status: number | null; output: string; keyAfter: string | undefined } {
   const cwd = mkdtempSync(join(tmpdir(), 'ff-cli-setup-key-'));
   const configPath = join(cwd, 'config.json');
   writeFileSync(
     configPath,
-    JSON.stringify({ playlist: { privateKey: key, role: 'curator' }, ff1Devices: { devices: [] } }),
+    JSON.stringify({
+      playlist: key === null ? { role: 'curator' } : { privateKey: key, role: 'curator' },
+      ff1Devices: { devices: [] },
+    }),
     'utf8'
   );
   try {
@@ -49,12 +53,12 @@ function runSetup(
       [tsxCli, cliEntry, 'setup', '--non-interactive', ...args],
       {
         cwd,
-        env: { ...process.env, XDG_CONFIG_HOME: join(cwd, '.xdg'), PLAYLIST_PRIVATE_KEY: '' },
+        env: { ...process.env, XDG_CONFIG_HOME: join(cwd, '.xdg'), PLAYLIST_PRIVATE_KEY: envKey },
         encoding: 'utf-8',
       }
     );
     const written = JSON.parse(readFileSync(configPath, 'utf8')) as {
-      playlist: { privateKey: string };
+      playlist: { privateKey?: string };
     };
     return {
       status: run.status,
@@ -104,5 +108,22 @@ describe('setup and an already configured signing key', () => {
     const run = runSetup(configured, []);
     assert.equal(run.status, 0, run.output);
     assert.equal(run.keyAfter, configured);
+  });
+
+  test('a key from PLAYLIST_PRIVATE_KEY is protected the same way', () => {
+    // A config key always wins over the environment, so writing one would mask the
+    // identity signing uses today exactly as overwriting a config key would.
+    const envKey = newKey();
+    const run = runSetup(null, ['--generate-key'], envKey);
+    assert.equal(run.status, 1, run.output);
+    assert.match(run.output, /from PLAYLIST_PRIVATE_KEY/);
+    assert.equal(run.keyAfter, undefined, 'config must not gain a key');
+  });
+
+  test('with PLAYLIST_PRIVATE_KEY set and no flags, setup writes no config key', () => {
+    const run = runSetup(null, [], newKey());
+    assert.equal(run.status, 0, run.output);
+    assert.match(run.output, /Signing with PLAYLIST_PRIVATE_KEY/);
+    assert.equal(run.keyAfter, undefined);
   });
 });

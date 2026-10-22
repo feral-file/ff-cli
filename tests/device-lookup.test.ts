@@ -53,6 +53,19 @@ describe('findExistingDeviceEntry', () => {
     assert.equal(result?.name, 'kitchen');
   });
 
+  test('IP host: the same address on another port is a different device', () => {
+    // Several FF1s can sit behind one address on different ports (port forwarding, a tunnel).
+    const devices = [{ host: 'http://127.0.0.1:18131', name: 'Art Computer' }];
+    const result = findExistingDeviceEntry(devices, 'http://127.0.0.1:18132', '');
+    assert.equal(result, undefined);
+  });
+
+  test('IP host: the same address and port still matches across protocols', () => {
+    const devices = [{ host: 'http://192.168.1.20:1111', name: 'office' }];
+    const result = findExistingDeviceEntry(devices, 'https://192.168.1.20:1111', '');
+    assert.equal(result?.name, 'office');
+  });
+
   test('TXT-name match: stored entry found by discoveredName when host completely changed', () => {
     // No stored id — TXT-name fallback applies
     const devices = [{ name: 'kitchen', host: 'http://192.168.1.10:1111' }];

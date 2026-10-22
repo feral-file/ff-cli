@@ -141,6 +141,32 @@ describe('resolvePlaySource', () => {
     }
   });
 
+  test('a download cut off mid-body wraps as media with a note', async () => {
+    // An interrupted read says nothing about whether the URL is a playlist,
+    // so it must not pass silently like an ordinary page.
+    const original = global.fetch;
+    global.fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"dpVersion":'));
+            controller.error(new Error('socket hang up'));
+          },
+        }),
+        { status: 200 }
+      );
+
+    try {
+      const result = await resolvePlaySource('https://example.com/feed/latest', 10);
+      assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.match(result.note ?? '', /socket hang up/);
+      }
+    } finally {
+      global.fetch = original;
+    }
+  });
+
   for (const status of [404, 410]) {
     test(`refuses a URL that answers ${status} instead of casting the error page`, async () => {
       const original = global.fetch;

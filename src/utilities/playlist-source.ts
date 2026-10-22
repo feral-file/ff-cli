@@ -35,6 +35,9 @@ export function isPlaylistSourceUrl(source: string): boolean {
   }
 }
 
+/** How loading a URL as a playlist failed; see PlaylistUrlLoadError. */
+export type PlaylistUrlLoadErrorKind = 'status' | 'network' | 'read' | 'json';
+
 /**
  * PlaylistUrlLoadError is a failure to load an http(s) URL as a playlist,
  * tagged with how it failed so `resolvePlaySource` can tell a missing playlist
@@ -43,17 +46,20 @@ export function isPlaylistSourceUrl(source: string): boolean {
  * - `status`: the server answered with a non-OK HTTP status (`status` is set).
  * - `network`: no answer at all (DNS, refused connection, timeout); `code` is
  *   the underlying system error code when fetch exposes one.
- * - `body`: an OK answer whose body could not be read or parsed as JSON. This
- *   is what every ordinary web page and media file produces.
+ * - `read`: an OK answer whose body was cut off (timeout or dropped connection
+ *   mid-download). Nothing was learned about the URL, so it is not "not a
+ *   playlist" either.
+ * - `json`: an OK answer, read in full, that is not JSON. This is what every
+ *   ordinary web page and media file produces.
  */
 export class PlaylistUrlLoadError extends Error {
-  readonly kind: 'status' | 'network' | 'body';
+  readonly kind: PlaylistUrlLoadErrorKind;
   readonly status?: number;
   readonly code?: string;
 
   constructor(
     message: string,
-    detail: { kind: 'status' | 'network' | 'body'; status?: number; code?: string }
+    detail: { kind: PlaylistUrlLoadErrorKind; status?: number; code?: string }
   ) {
     super(message);
     this.name = 'PlaylistUrlLoadError';
@@ -106,7 +112,7 @@ async function loadPlaylistUrl(url: string): Promise<LoadedPlaylist> {
   } catch (error) {
     throw new PlaylistUrlLoadError(
       `Failed to read playlist response from ${url}: ${(error as Error).message}`,
-      { kind: 'body' }
+      { kind: 'read' }
     );
   }
 
@@ -115,7 +121,7 @@ async function loadPlaylistUrl(url: string): Promise<LoadedPlaylist> {
   } catch (error) {
     throw new PlaylistUrlLoadError(
       `Invalid JSON from playlist URL ${url}: ${(error as Error).message}`,
-      { kind: 'body' }
+      { kind: 'json' }
     );
   }
 }
@@ -298,7 +304,7 @@ export async function resolvePlaySource(
       );
     }
     const note =
-      failure.kind === 'body'
+      failure.kind === 'json'
         ? undefined
         : `ff-cli could not read this URL itself (${failure.message}); sending it to the device anyway.`;
     return buildMediaPlaySource(trimmed, { duration: defaultDuration, note });
