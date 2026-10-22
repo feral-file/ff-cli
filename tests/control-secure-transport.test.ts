@@ -734,7 +734,8 @@ describe('replay recovery (§14.4)', () => {
       { fetchFn: lanFetch(fake), controllerStore: { dir: storeDir }, nowFn: () => NOW }
     );
     assert.equal(result.success, false);
-    assert.match(result.details!, /moved its request counter ahead/);
+    assert.match(result.details!, /moved its request counter ahead and tried once more/);
+    assert.match(result.details!, /Run the command again/);
     assert.match(result.details!, /Do not unpair/);
   });
 });
@@ -909,5 +910,14 @@ describe('secure sshAccess', () => {
     );
     assert.equal(result.success, false);
     assert.ok(urls.every((u) => u.startsWith(HOST)));
+  });
+});
+
+describe('replay copy', () => {
+  test('a replay that was not retried does not claim a counter jump', async () => {
+    const { describeControlCode } = await import('../src/utilities/control/control-errors.js');
+    const failure = describeControlCode('replay', 'Office');
+    assert.doesNotMatch(failure.details!, /moved its request counter/);
+    assert.match(failure.details!, /Run the command again/);
   });
 });

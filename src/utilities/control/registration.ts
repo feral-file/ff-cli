@@ -81,6 +81,18 @@ const MAX_LABEL_CHARS = 64;
 const PROTOCOL_UNSAFE_LABEL =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\u2028\u2029\ufeff]/u;
 
+/**
+ * RegistrationForOtherDeviceError is a result that passed the channel,
+ * pairing-secret and ctl checks (so it came from someone holding this QR,
+ * normally the owner) but names another FF1 than the configured one.
+ */
+export class RegistrationForOtherDeviceError extends ControlFormatError {
+  constructor(readonly dev: string) {
+    super('registration result is for another device');
+    this.name = 'RegistrationForOtherDeviceError';
+  }
+}
+
 /** ControllerQr is a parsed `ff1-ctl:1|…` payload (§5.6.1). */
 export interface ControllerQr {
   channelId: string;
@@ -171,14 +183,19 @@ function parseSec1Point(value: string, what: string): PublicJwk {
  *
  * @param keys - Controller keys to register
  * @param label - Label the owner sees (already validated)
+ * @param channelId - Pairing channel ID (default: a fresh random UUID)
  * @returns The QR fields and the minter private key
  */
-export function generatePairingMaterial(keys: ControllerKeys, label: string): PairingMaterial {
+export function generatePairingMaterial(
+  keys: ControllerKeys,
+  label: string,
+  channelId: string = randomUUID()
+): PairingMaterial {
   const minter = generatePrivateJwk();
   return {
     minter,
     qr: {
-      channelId: randomUUID(),
+      channelId,
       minterKey: sec1Of(minter),
       sig: publicOf(keys.sig),
       enc: publicOf(keys.enc),
@@ -444,7 +461,7 @@ function parseRegistrationResult(
   }
   const profile = parseProfile(obj.profile);
   if (profile.dev !== wantDev) {
-    throw new ControlFormatError('registration result is for another device');
+    throw new RegistrationForOtherDeviceError(profile.dev);
   }
   const deviceName = stringMember(obj, 'deviceName');
   if (!isProtocolLabel(deviceName)) {

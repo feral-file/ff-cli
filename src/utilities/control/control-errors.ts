@@ -116,14 +116,27 @@ function followUp(code: string, pair: string): string | undefined {
     case 'expired':
       return "Check that this computer's clock is correct, then try again.";
     case 'replay':
-      // Only reached when the automatic counter jump and its one retry also
-      // got replay (§14.4), or for an unauthenticated public answer.
-      return `ff-cli already moved its request counter ahead and tried again. Check that no other computer uses a copy of this controller file, then run the command again. If it still fails, run \`${pair}\`; the current keys are kept until the new pairing is finished. Do not unpair.`;
+      return `Run the command again. If this keeps happening, check that no other computer uses a copy of this controller file; if it still fails, run \`${pair}\`; the current keys are kept until the new pairing is finished. Do not unpair.`;
     case 'invalid_request':
       return 'Check that the clocks of this computer and the FF1 are correct (the FF1 refuses a request dated more than 5 minutes ahead of its clock). If they are, this is an ff-cli bug; please report it with `ff-cli --version`.';
     default:
       return undefined;
   }
+}
+
+/**
+ * replayAfterJumpFailure is the message for a verified `replay` that came
+ * back again after ff-cli moved its counter ahead and retried once (§14.4).
+ *
+ * @param deviceLabel - Device name used in commands
+ * @returns The failure
+ */
+export function replayAfterJumpFailure(deviceLabel: string): ControlFailure {
+  return {
+    code: 'replay',
+    error: HEADLINES.replay,
+    details: `ff-cli moved its request counter ahead and tried once more, and the FF1 still refused it. Run the command again. If it keeps failing, check that no other computer uses a copy of this controller file, then run \`${pairCommand(deviceLabel)}\`; the current keys are kept until the new pairing is finished. Do not unpair.`,
+  };
 }
 
 /**

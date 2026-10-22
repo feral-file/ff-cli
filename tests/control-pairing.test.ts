@@ -21,6 +21,7 @@ import {
   dropStagedController,
   loadController,
   markEnrolled,
+  loadPairingKeys,
   nextCounter,
   pairingKeys,
   parseControllerRecord,
@@ -97,6 +98,21 @@ function json(status: number, body: unknown): Response {
   });
 }
 
+/** captureLog runs fn and returns everything it printed with console.log. */
+async function captureLog(fn: () => Promise<unknown>): Promise<string> {
+  const original = console.log;
+  const lines: string[] = [];
+  console.log = (...args: unknown[]) => {
+    lines.push(args.map(String).join(' '));
+  };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return lines.join('\n');
+}
+
 /** FakeChannel is an in-memory pairing channel the test writes into. */
 class FakeChannel implements PairingChannel {
   closed = false;
@@ -168,6 +184,8 @@ function ownerWorld(
 ) {
   const registered = new Set<string>();
   const topics: Array<[string, string]> = [];
+  /** keyring stands in for the OS keyring: storeTopicFn writes, getTopicIdFn reads. */
+  const keyring = new Map<string, string>();
   const channels: FakeChannel[] = [];
   const fake = new FakeFF1(
     { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
@@ -194,7 +212,10 @@ function ownerWorld(
   const deps: PairDeps = {
     openChannel,
     showQr: (payload) => onScan(parseControllerQr(payload), channels.at(-1)!, registered),
-    storeTopicFn: (id, topic) => topics.push([id, topic]),
+    storeTopicFn: (id, topic) => {
+      topics.push([id, topic]);
+      keyring.set(id, topic);
+    },
     confirmFn: async () => {
       throw new Error('must not ask');
     },
@@ -202,13 +223,14 @@ function ownerWorld(
       const answer = fake.handle(JSON.parse(String(init?.body)));
       return json(answer.status, answer.json);
     },
-    getTopicIdFn: () => null,
+    getTopicIdFn: (id) => keyring.get(id) ?? null,
+    getRelayerConfigFn: () => ({ baseUrl: 'https://relayer.example' }),
     controllerStore: { dir: storeDir },
     nowFn: () => NOW,
     waitFn: async () => undefined,
     enrollRetryMs: 0,
   };
-  return { deps, fake, registered, topics, channels };
+  return { deps, fake, registered, topics, channels, keyring };
 }
 
 /** approve is the owner's app: register the QR's keys, then send the sealed result. */
@@ -243,6 +265,7 @@ describe('device pair (owner-initiated registration)', () => {
       role: 'controller',
       expiresAt: NOW + 3600,
       receivedAt: NOW,
+      topicId: 'topic-secret',
     });
     // One enroll, signed by the keys the owner registered.
     assert.deepEqual(
@@ -378,10 +401,13 @@ describe('device pair (owner-initiated registration)', () => {
   test('a result for another FF1 is not accepted, and the wait times out', async () => {
     const other = { ...keys.device.profile, dev: 'FF1-OTHER0001' };
     const world = ownerWorld(approve({ profile: other }));
-    await assert.rejects(
-      pairDevice(device, { ...options, timeoutMs: 100 }, world.deps),
-      /not completed/
+    const output = await captureLog(() =>
+      assert.rejects(
+        pairDevice(device, { ...options, timeoutMs: 100 }, world.deps),
+        /not completed/
+      )
     );
+    assert.match(output, /An owner added ff-cli to a different FF1 \("FF1-OTHER0001"\)/);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
     assert.equal(loadController('FF1-OTHER0001', { dir: storeDir }), null);
     assert.equal(world.fake.seen.length, 0);
@@ -400,6 +426,8 @@ describe('device pair (owner-initiated registration)', () => {
       pairDevice(device, options, { ...world.deps, openChannel: undefined }),
       /not available in this build.*relay v2 pairing channel/
     );
+    // No private key file is left behind by a run that could not open the channel.
+    assert.equal(fs.existsSync(path.join(storeDir, 'pairing', `${DEVICE_ID}.keys.json`)), false);
   });
 
   test('an installed opener is used when none is injected', async () => {
@@ -418,8 +446,74 @@ describe('device pair (owner-initiated registration)', () => {
     assert.ok(loadController(DEVICE_ID, { dir: storeDir })!.role);
   });
 
+  test('a forged result’s topic neither routes the enroll nor replaces the keyring topic', async () => {
+    // A forger who saw the QR (so holds ps) sends approved with a profile of
+    // its own and a relayer topic it controls. The LAN is unreachable.
+    const forgedProfile = {
+      v: 1,
+      dev: DEVICE_ID,
+      gen: keys.device.gen,
+      sig: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: keys.controllers.stranger.sig.x,
+        y: keys.controllers.stranger.sig.y,
+      },
+      enc: {
+        kty: 'EC',
+        crv: 'P-256',
+        x: keys.controllers.stranger.enc.x,
+        y: keys.controllers.stranger.enc.y,
+      },
+    };
+    const world = ownerWorld((qr, channel) =>
+      channel.push(
+        sealRegistration(qr, resultJson(qr, { profile: forgedProfile, topicId: 'evil-topic' }))
+      )
+    );
+    world.keyring.set(DEVICE_ID, 'good-topic');
+    const relayerTopics: string[] = [];
+    await assert.rejects(
+      pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: async (input) => {
+          const url = new URL(input.toString());
+          if (url.origin === new URL(HOST).origin) {
+            throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+          }
+          relayerTopics.push(url.searchParams.get('topicID') ?? '');
+          return json(502, {});
+        },
+      }),
+      CommandFailure
+    );
+    assert.ok(relayerTopics.length > 0, 'the relayer fallback was tried');
+    assert.deepEqual([...new Set(relayerTopics)], ['good-topic']);
+    assert.equal(world.keyring.get(DEVICE_ID), 'good-topic');
+    assert.deepEqual(world.topics, []);
+    // The topic waits in the record for a verified enroll.
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.registration!.topicId, 'evil-topic');
+  });
+
+  test('without a stored topic the enroll is LAN only, and the result’s topic is stored after it verifies', async () => {
+    const world = ownerWorld(approve({ topicId: 'topic-secret' }));
+    let relayerCalls = 0;
+    const fetchFn = world.deps.fetchFn!;
+    await pairDevice(device, options, {
+      ...world.deps,
+      fetchFn: async (input, init) => {
+        if (new URL(input.toString()).origin !== new URL(HOST).origin) {
+          relayerCalls += 1;
+        }
+        return fetchFn(input, init);
+      },
+    });
+    assert.equal(relayerCalls, 0);
+    assert.equal(world.keyring.get(DEVICE_ID), 'topic-secret');
+  });
+
   test('--resume finishes enrollment from the stored result without a channel', async () => {
-    const world = ownerWorld(approve());
+    const world = ownerWorld(approve({ topicId: 'topic-secret' }));
     const offline: PairDeps = {
       ...world.deps,
       fetchFn: async () => {
@@ -433,6 +527,7 @@ describe('device pair (owner-initiated registration)', () => {
     const pending = loadController(DEVICE_ID, { dir: storeDir })!;
     assert.equal(pending.role, undefined);
     assert.ok(pending.registration);
+    assert.equal(world.keyring.get(DEVICE_ID), undefined, 'no topic before a verified enroll');
 
     let opened = 0;
     await pairDevice(
@@ -450,6 +545,7 @@ describe('device pair (owner-initiated registration)', () => {
     const record = loadController(DEVICE_ID, { dir: storeDir })!;
     assert.equal(record.role, 'controller');
     assert.equal(controllerIdOf(record.keys), controllerIdOf(pending.keys));
+    assert.equal(world.keyring.get(DEVICE_ID), 'topic-secret');
   });
 
   test('re-pairing the same FF1 shows and keeps this computer’s existing keys and counter', async () => {
@@ -625,6 +721,58 @@ describe('pairing path selection', () => {
     assert.equal(fs.existsSync(path.join(storeDir, 'pairing')), false);
   });
 
+  for (const held of ['main record', 'staged record', 'pairing keys'] as const) {
+    test(`with a ${held} the unauthenticated status cannot downgrade to the topic handoff`, async () => {
+      const store = { dir: storeDir };
+      if (held === 'main record') {
+        createController({ profile, label: 'x' }, store);
+        markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+      } else if (held === 'staged record') {
+        createController({ profile, label: 'x' }, stagingStore(store));
+      } else {
+        pairingKeys(DEVICE_ID, store);
+      }
+      const world = ownerWorld(approve());
+      const fetchFn = world.deps.fetchFn!;
+      let statusReads = 0;
+      await pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: async (input, init) => {
+          if (JSON.parse(String(init?.body)).command === 'getDeviceStatus') {
+            statusReads += 1;
+            return json(200, { message: { installedVersion: '1.0.9' } });
+          }
+          return fetchFn(input, init);
+        },
+        receiveTopicHandoff: async () => {
+          throw new Error('must not downgrade');
+        },
+      });
+      assert.equal(statusReads, 0);
+      assert.equal(world.channels.length, 1);
+    });
+  }
+
+  test('the chosen path names the unauthenticated status', async () => {
+    const world = ownerWorld(approve());
+    const output = await captureLog(() =>
+      pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: statusFetch(() => json(200, { message: { installedVersion: '1.0.9' } })),
+        receiveTopicHandoff: async (d) => ({
+          v: 1,
+          type: 'ff1_topic_handoff',
+          channelId: 'ch_test',
+          deviceId: d.id,
+          topicId: 'topic-secret',
+          sentAt: new Date().toISOString(),
+        }),
+      })
+    );
+    assert.match(output, /LAN status, which is not authenticated/);
+    assert.match(output, /--topic-handoff/);
+  });
+
   test('--topic-handoff forces the legacy path without reading the status', async () => {
     const world = ownerWorld(approve());
     let handoffs = 0;
@@ -701,6 +849,19 @@ describe('controller store for owner-initiated pairing', () => {
     // A later enroll without expiresAt clears the expiry.
     markEnrolled(DEVICE_ID, { role: 'controller', nk: NK }, store);
     assert.equal(loadController(DEVICE_ID, store)!.expiresAt, undefined);
+  });
+
+  test('creating a main record never writes over one another process created', () => {
+    const store = { dir: storeDir };
+    const first = createController({ profile, label: 'first' }, store);
+    nextCounter(DEVICE_ID, store);
+    assert.throws(
+      () => createController({ profile, label: 'second', exclusive: true }, store),
+      /appeared while pairing/
+    );
+    const kept = loadController(DEVICE_ID, store)!;
+    assert.equal(controllerIdOf(kept.keys), controllerIdOf(first.keys));
+    assert.equal(kept.ctr, 1);
   });
 
   test('a lower-case configured device ID finds the upper-case controller file', () => {
@@ -1019,8 +1180,13 @@ describe('unpair', () => {
       `${DEVICE_ID}.keys.json`
     );
     assert.ok(fs.existsSync(file));
-    await runUnpair('Office', { yes: true }, async () => true, deps);
+    const shown = controllerIdOf(loadPairingKeys(DEVICE_ID)!);
+    const output = await captureLog(() =>
+      runUnpair('Office', { yes: true }, async () => true, deps)
+    );
     assert.equal(fs.existsSync(file), false);
+    assert.match(output, /If an owner already added them/);
+    assert.ok(output.includes(`ff-cli device revoke ${shown}`));
   });
 
   test('sends a sealed self-revoke, then deletes the keys', async () => {

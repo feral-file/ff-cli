@@ -53,6 +53,12 @@ import {
  */
 export interface RegistrationRecord {
   channelId: string;
+  /**
+   * Relayer topic the result carried. It came with an unverified result, so
+   * it reaches the OS keyring (and the relayer route) only after the enroll
+   * reply verified under the profile pinned from the same result.
+   */
+  topicId?: string;
   /** The FF1's name as the owner's app sent it. */
   deviceName: string;
   /** The role the owner registered; the enroll reply is authoritative. */
@@ -240,7 +246,7 @@ function parseRegistrationRecord(value: unknown): RegistrationRecord {
   const obj = strictObject(
     value,
     ['channelId', 'deviceName', 'role', 'receivedAt'],
-    ['expiresAt'],
+    ['expiresAt', 'topicId'],
     'controller file registration'
   );
   const role = stringMember(obj, 'role');
@@ -255,6 +261,13 @@ function parseRegistrationRecord(value: unknown): RegistrationRecord {
   };
   if ('expiresAt' in obj) {
     registration.expiresAt = uintMember(obj, 'expiresAt');
+  }
+  if ('topicId' in obj) {
+    const topicId = stringMember(obj, 'topicId');
+    if (!topicId) {
+      throw new ControlFormatError('controller file registration topicId is empty');
+    }
+    registration.topicId = topicId;
   }
   return registration;
 }
@@ -465,6 +478,8 @@ export function createController(
     keys?: ControllerKeys;
     registration?: RegistrationRecord;
     now?: number;
+    /** Refuse (under the lock) when a controller file already exists. */
+    exclusive?: boolean;
   },
   options: ControllerStoreOptions = {}
 ): ControllerRecord {
@@ -481,7 +496,16 @@ export function createController(
     record.registration = input.registration;
   }
   const file = controllerFilePath(record.deviceId, options);
-  withControllerLock(file, () => saveController(record, options));
+  withControllerLock(file, () => {
+    // Checked under the lock: a record another process created meanwhile
+    // may already have spent counters, and must never be written over.
+    if (input.exclusive && fs.existsSync(file)) {
+      throw new Error(
+        `A controller file for ${record.deviceId} appeared while pairing (${file}); it was kept. Run \`ff-cli device pair\` again.`
+      );
+    }
+    saveController(record, options);
+  });
   return record;
 }
 
@@ -642,6 +666,56 @@ function parsePairingKeys(text: string, deviceId: string): ControllerKeys {
   };
 }
 
+/** readPairingKeysText reads the pairing keys file, null when absent. */
+function readPairingKeysText(file: string): string | null {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return null;
+    }
+    throw new Error(
+      `Cannot read pairing keys file ${file}: ${(error as Error).message}. Fix its permissions and try again.`
+    );
+  }
+}
+
+/**
+ * hasPairingKeys reports whether a pairing keys file exists for the device
+ * (readable, corrupt or not), without creating one.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns True when the file exists
+ */
+export function hasPairingKeys(deviceId: string, options: ControllerStoreOptions = {}): boolean {
+  return fs.existsSync(pairingKeysPath(normalizeDeviceId(deviceId), options));
+}
+
+/**
+ * loadPairingKeys returns the saved pairing keys without creating any.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns The keys, or null when there is no readable, valid file
+ * @throws {Error} When the file exists but cannot be read
+ */
+export function loadPairingKeys(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): ControllerKeys | null {
+  const id = normalizeDeviceId(deviceId);
+  const text = readPairingKeysText(pairingKeysPath(id, options));
+  if (text === null) {
+    return null;
+  }
+  try {
+    return parsePairingKeys(text, id);
+  } catch {
+    return null;
+  }
+}
+
 /**
  * pairingKeys returns the keys an earlier interrupted pairing showed for the
  * device, or creates and saves new ones (0600, atomic) before they are shown.
@@ -659,16 +733,7 @@ export function pairingKeys(
   const id = normalizeDeviceId(deviceId);
   const file = pairingKeysPath(id, options);
   return withControllerLock(file, () => {
-    let text: string | null = null;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw new Error(
-          `Cannot read pairing keys file ${file}: ${(error as Error).message}. Fix its permissions and try again.`
-        );
-      }
-    }
+    const text = readPairingKeysText(file);
     if (text !== null) {
       try {
         return { keys: parsePairingKeys(text, id), reused: true };

@@ -99,11 +99,7 @@ export interface EnrollObject {
   inv?: string;
 }
 
-/**
- * RequestOp is what ff-cli sends. `requestAccess` (§5.2) is a LAN-only
- * fallback ff-cli no longer offers: it adds itself through owner-initiated
- * registration (§5.6) and then enrolls.
- */
+/** RequestOp is the §3.3 op of a request ff-cli sends. */
 export type RequestOp = 'cmd' | 'enroll';
 
 /** RequestClaims are the §3.3 claims. */

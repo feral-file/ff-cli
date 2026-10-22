@@ -58,6 +58,7 @@ import {
   type ControlFailure,
   describeControlCode,
   pairCommand,
+  replayAfterJumpFailure,
   unpairCommand,
   unverifiedReplyFailure,
 } from './control-errors';
@@ -111,7 +112,13 @@ export interface SecureRequest {
  * (which may itself be ok:false), a public error (§4.4), or a local failure.
  */
 export type SecureOutcome =
-  | { kind: 'reply'; reply: ReplyClaims; transport: Transport }
+  | {
+      kind: 'reply';
+      reply: ReplyClaims;
+      transport: Transport;
+      /** The FF1 answered replay again after the counter jump and its one retry. */
+      replayRetried?: boolean;
+    }
   | { kind: 'public'; code: string; transport: Transport }
   | {
       kind: 'failed';
@@ -372,7 +379,11 @@ export async function sendSecureRequest(
   logger.debug(
     `The FF1 answered replay; counter moved ahead by ${REPLAY_COUNTER_JUMP}, retrying once`
   );
-  return sendOnce(request, record, deps);
+  const retried = await sendOnce(request, record, deps);
+  if (retried.kind === 'reply' && !retried.reply.ok && retried.reply.code === 'replay') {
+    return { ...retried, replayRetried: true };
+  }
+  return retried;
 }
 
 /**
@@ -586,7 +597,10 @@ export function outcomeToResult(outcome: SecureOutcome, device: FF1Device): Secu
       code,
     };
   }
-  const failure = describeControlCode(code ?? 'unknown', label);
+  const failure =
+    outcome.kind === 'reply' && outcome.replayRetried
+      ? replayAfterJumpFailure(label)
+      : describeControlCode(code ?? 'unknown', label);
   return {
     success: false,
     error: failure.error,

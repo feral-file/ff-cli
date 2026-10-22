@@ -8,6 +8,7 @@
  * are shown for the owner to scan and are useless once this run ends.
  */
 
+import { randomUUID } from 'node:crypto';
 import chalk from 'chalk';
 import qrcodeTerminal from 'qrcode-terminal';
 import * as logger from '../../logger';
@@ -26,6 +27,8 @@ import {
   controllerFilePath,
   deleteController,
   deletePairingKeys,
+  hasPairingKeys,
+  loadPairingKeys,
   dropStagedController,
   isEnrolled,
   loadController,
@@ -56,6 +59,7 @@ import {
   type RegistrationResult,
   controllerQrCtl,
   controllerQrString,
+  RegistrationForOtherDeviceError,
   generatePairingMaterial,
   openRegistration,
 } from '../../utilities/control/registration';
@@ -240,7 +244,22 @@ export async function pairDevice(
     await pairByTopicHandoff(device, options.timeoutMs, deps);
     return;
   }
+  // The status is unauthenticated, so it may never downgrade a device this
+  // computer holds (or may hold) a grant for: any controller record or saved
+  // pairing keys means the QR flow, whatever the LAN answers.
+  if (holdsControlState(device.id, deps.controllerStore ?? {})) {
+    await pairByRegistration(device, options, deps);
+    return;
+  }
   const support = await probeControlSupport(device, deps.fetchFn);
+  if (support !== 'unknown') {
+    console.log(
+      chalk.dim(
+        `\nChose ${support === 'plaintext' ? 'the one-time code (no secure control)' : 'secure pairing'} from the FF1’s LAN status, which is not authenticated. ` +
+          `\`${pairCommand(deviceLabel(device))} --topic-handoff\` forces the one-time code.`
+      )
+    );
+  }
   if (support === 'plaintext') {
     await pairByTopicHandoff(device, options.timeoutMs, deps);
     return;
@@ -254,6 +273,19 @@ export async function pairDevice(
     );
   }
   await pairByRegistration(device, options, deps);
+}
+
+/**
+ * holdsControlState reports whether this computer has a controller record
+ * (main or staged, even corrupt) or saved pairing keys for the device. An
+ * unreadable file throws: its keys may be fine.
+ */
+function holdsControlState(deviceId: string, store: ControllerStoreOptions): boolean {
+  return (
+    loadUnlessCorrupt(deviceId, store) !== null ||
+    loadUnlessCorrupt(deviceId, stagingStore(store)) !== null ||
+    hasPairingKeys(deviceId, store)
+  );
 }
 
 /**
@@ -281,22 +313,23 @@ async function pairByRegistration(
   if (existing === 'corrupt') {
     await confirmCorruptReplacement(device, options, confirmFn);
   }
-  const { keys, reused, fromRecord } = chooseControllerKeys(device.id, store);
-  const material = generatePairingMaterial(keys, options.label);
+  // The keys are chosen (and new pairing keys saved) only once the channel
+  // is open, so a run that cannot reach the relay leaves no key file behind.
+  let chosen: ReturnType<typeof chooseControllerKeys> | undefined;
+  const prepare = (channelId: string) => {
+    chosen = chooseControllerKeys(device.id, store);
+    return {
+      material: generatePairingMaterial(chosen.keys, options.label, channelId),
+      keysNote: chosen.fromRecord
+        ? 'this computer’s existing keys'
+        : chosen.reused
+          ? 'the same keys as the last attempt'
+          : '',
+    };
+  };
   const nowFn = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
   const outcome = await withInterrupt((signal) =>
-    waitForOwner(
-      device,
-      material,
-      options.timeoutMs,
-      signal,
-      deps,
-      fromRecord
-        ? 'this computer’s existing keys'
-        : reused
-          ? 'the same keys as the last attempt'
-          : ''
-    )
+    waitForOwner(device, prepare, options.timeoutMs, signal, deps)
   );
   if (outcome.status === 'interrupted') {
     console.log(
@@ -321,16 +354,18 @@ async function pairByRegistration(
     );
   }
   const profile = result.profile!;
+  const { keys, fromRecord } = chosen!;
   await confirmReplacement(device, profile, options, confirmFn, store);
+  // A topicId stays in the record until the enroll reply verifies under this
+  // result's profile (finishEnrollment): it arrived with the same unverified
+  // result, so until then it neither replaces the keyring topic nor routes
+  // the enroll (whose relayer fallback only sees a topic stored earlier).
   const { record, staged } = prepareRegisteredController(
     { profile, keys, label: options.label, registration: registrationRecordOf(result, nowFn()) },
     store
   );
   if (!fromRecord) {
     deletePairingKeys(device.id, store); // the keys now live in the record
-  }
-  if (result.topicId) {
-    storeRelayerTopic(device.id, result.topicId, deps.storeTopicFn);
   }
   console.log(
     chalk.green(
@@ -423,11 +458,10 @@ async function resumePairing(device: PairDevice, deps: PairDeps): Promise<void> 
  */
 async function waitForOwner(
   device: PairDevice,
-  material: PairingMaterial,
+  prepare: (channelId: string) => { material: PairingMaterial; keysNote: string },
   timeoutMs: number,
   interrupt: AbortSignal,
-  deps: PairDeps,
-  keysNote: string
+  deps: PairDeps
 ): Promise<
   { status: 'result'; result: RegistrationResult } | { status: 'timeout' | 'interrupted' }
 > {
@@ -437,9 +471,10 @@ async function waitForOwner(
   const stopped = () =>
     interrupt.aborted ? ({ status: 'interrupted' } as const) : ({ status: 'timeout' } as const);
   let channel: PairingChannel | undefined;
+  const channelId = randomUUID();
   try {
     try {
-      channel = await (deps.openChannel ?? pairingChannelOpener())(material.qr.channelId, signal);
+      channel = await (deps.openChannel ?? pairingChannelOpener())(channelId, signal);
     } catch (error) {
       if (signal.aborted) {
         return stopped();
@@ -451,6 +486,7 @@ async function waitForOwner(
         'Pairing needs an internet connection to the Feral File relay. Check the connection and try again.'
       );
     }
+    const { material, keysNote } = prepare(channelId);
     showPairingCode(device, material, timeoutMs, keysNote, deps.showQr);
     const wantDev = normalizeDeviceId(device.id);
     const now = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
@@ -480,6 +516,15 @@ async function waitForOwner(
       try {
         return { status: 'result', result: openRegistration(material, next.value, wantDev, now()) };
       } catch (error) {
+        if (error instanceof RegistrationForOtherDeviceError) {
+          // Only a holder of this QR's secret gets this far, normally the
+          // owner, so say so instead of waiting silently.
+          console.log(
+            chalk.yellow(
+              `An owner added ff-cli to a different FF1 (${JSON.stringify(error.dev)}), not ${deviceLabel(device)} (${wantDev}). Still waiting for an answer for ${deviceLabel(device)}...`
+            )
+          );
+        }
         logger.debug(`Ignored a pairing channel message: ${(error as Error).message}`);
       }
     }
@@ -579,6 +624,14 @@ async function finishEnrollment(
     }
     return enrolled;
   });
+  if (result.status === 'enrolled') {
+    // Only now, with an enroll reply verified under the pinned profile, may
+    // the topic from the owner's result replace the keyring topic.
+    const topicId = result.record.registration?.topicId ?? record.registration?.topicId;
+    if (topicId) {
+      storeRelayerTopic(device.id, topicId, deps.storeTopicFn);
+    }
+  }
   reportEnrollment(device, result);
 }
 
@@ -1116,9 +1169,22 @@ export async function runUnpair(
     await selfRevoke(device, staged, { ...deps, controllerStore: stagingStore(store) });
   }
   const revoked = record !== null && isEnrolled(record) && (await selfRevoke(device, record, deps));
+  const shownKeys = loadPairingKeys(device.id, store);
   deleteController(device.id, stagingStore(store)); // an unfinished replacement pairing
-  deletePairingKeys(device.id, store); // keys an interrupted pairing showed
+  const deletedShown = deletePairingKeys(device.id, store); // keys an interrupted pairing showed
   if (!deleteController(device.id, store)) {
+    if (deletedShown) {
+      const shownCtl = shownKeys ? controllerIdOf(shownKeys) : undefined;
+      console.log(
+        chalk.yellow(
+          `\nDeleted the keys an unfinished pairing with ${deviceLabel(device)} showed. If an owner already added them, the FF1 still lists that controller` +
+            (shownCtl
+              ? ` (${shownCtl}): ask an owner to remove it in the Feral File app (Controllers) or with \`ff-cli device revoke ${shownCtl}\`.\n`
+              : ': ask an owner to remove it in the Feral File app (Controllers).\n')
+        )
+      );
+      return;
+    }
     console.log(chalk.dim(`\nff-cli has no controller keys for ${deviceLabel(device)}.\n`));
     return;
   }

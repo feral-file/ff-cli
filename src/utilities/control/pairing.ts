@@ -195,6 +195,9 @@ export function registrationRecordOf(result: RegistrationResult, now: number): R
   if (result.expiresAt !== undefined) {
     registration.expiresAt = result.expiresAt;
   }
+  if (result.topicId !== undefined) {
+    registration.topicId = result.topicId;
+  }
   return registration;
 }
 
@@ -252,6 +255,7 @@ export function prepareRegisteredController(
       label: input.label,
       keys: input.keys,
       registration: input.registration,
+      exclusive: !staged,
     },
     staged ? stagingStore(options) : options
   );

@@ -270,6 +270,11 @@ You can also manage devices independently with:
     in the operating system credential vault.
   - Status unreadable (FF1 off the LAN): the QR path, with a hint. Pass
     `--topic-handoff` to force the one-time-code path.
+
+  The status is not authenticated, so ff-cli says which path it chose from
+  it, and never chooses the one-time code when it already holds controller
+  keys for the FF1 (a controller file, a pending replacement or the keys of
+  an unfinished pairing); only `--topic-handoff` does then.
 - `ff-cli device controllers [name]` – List the controllers paired with an FF1
   and any pending requests (owner only).
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
@@ -328,7 +333,9 @@ On FF OS without secure control, the CLI and mobile confirmation both show the
 same 12-hex-digit security check. Comparing it authenticates the CLI public key
 out of band, so an active broker cannot silently substitute its own encryption
 key. On FF OS with secure control, the topic arrives inside the owner's sealed
-answer when the FF1 still uses the topic relayer. The topic is never printed.
+answer when the FF1 still uses the topic relayer; ff-cli stores it only after
+the FF1's enroll reply verified, and the enroll itself uses the relayer only
+with a topic stored earlier. The topic is never printed.
 
 The default relayer is
 `https://tv-cast-coordination.autonomy-system.workers.dev`. Override it with
@@ -383,8 +390,8 @@ the FF1 and no code is compared.
    and a relay channel ID. The QR uses this computer's existing keys for the
    FF1 when it has them, so a re-pair (after a revoke, a role change or a
    factory reset) keeps one controller ID on the FF1. Otherwise the keys are
-   saved to `controllers/pairing/<device ID>.keys.json` before the QR is
-   shown, so a retry after a timeout or Ctrl-C shows the same keys (with a
+   saved to `controllers/pairing/<device ID>.keys.json` once the relay
+   channel is open, before the QR is shown, so a retry after a timeout or Ctrl-C shows the same keys (with a
    new secret and channel) and completes a registration an owner already
    made.
 2. On an owner's phone, open the FF1 in the Feral File app, choose **Add
@@ -417,7 +424,9 @@ kept in `controllers/pairing/` until then.
 (a sealed self-revoke, best effort with a short timeout), then deletes the keys
 whatever the answer. Older FF OS refuses a controller's self-revoke, and an FF1
 never lets its last owner revoke itself; in those cases the FF1 keeps listing
-the controller until an owner revokes it.
+the controller until an owner revokes it. Unpair also deletes the keys of an
+unfinished pairing; if an owner already added them, it prints their
+controller ID for an owner to revoke.
 
 Roles:
 
