@@ -12,6 +12,8 @@ describe('isConnectPhaseNetworkError', () => {
       { code: 'EAI_AGAIN' },
       { code: 'UND_ERR_CONNECT_TIMEOUT' },
       { code: 'ETIMEDOUT', syscall: 'connect' },
+      { code: 'EHOSTDOWN', syscall: 'connect' },
+      { code: 'ENETDOWN', syscall: 'connect' },
       { errors: [{ code: 'ECONNREFUSED' }, { code: 'ENETUNREACH' }] },
     ]) {
       assert.equal(isConnectPhaseNetworkError(new Error('fetch failed', { cause })), true);
@@ -24,6 +26,7 @@ describe('isConnectPhaseNetworkError', () => {
       { code: 'ECONNRESET' },
       { code: 'UND_ERR_SOCKET' },
       { code: 'ETIMEDOUT', syscall: 'read' },
+      { code: 'EHOSTDOWN', syscall: 'write' },
     ]) {
       assert.equal(isConnectPhaseNetworkError(new Error('fetch failed', { cause })), false);
     }
