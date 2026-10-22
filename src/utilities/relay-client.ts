@@ -32,6 +32,8 @@ const BACKOFF_MAX_MS = 4000;
  */
 export const PING_INTERVAL_MS = 25_000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+/** MESSAGE_ID_PATTERN is the shape of the messageID this client issues. */
+const MESSAGE_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -602,9 +604,15 @@ export class RelayClient {
    * channel a forgery costs availability only.
    */
   private verifyReply(from: string, message: Record<string, unknown>): void {
-    const messageID = message.messageID as string;
+    // messageID comes from an untrusted frame and selects a validator, so it
+    // must have the shape this client issues (crypto.randomUUID) and must map
+    // to a function this client registered in its own Map.
+    const messageID = message.messageID;
+    if (typeof messageID !== 'string' || !MESSAGE_ID_PATTERN.test(messageID)) {
+      return;
+    }
     const verify = this.validators.get(messageID);
-    if (!verify) {
+    if (typeof verify !== 'function') {
       return;
     }
     void verify(message)

@@ -233,6 +233,20 @@ test('a late ACK marks the peer reached, so it never gets a second copy', async 
   relay.close();
 });
 
+test('a frame-supplied messageID never selects anything but a registered validator', async () => {
+  const socket = new Socket();
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  const result = request(relay, {}, 300);
+  await tick();
+  for (const messageID of ['__proto__', 'constructor', 'toString', 'hasOwnProperty', 42, {}]) {
+    socket.reply('ff1', messageID);
+  }
+  assert.equal(socket.closed, false);
+  await assert.rejects(result, RelayAmbiguousError);
+  relay.close();
+});
+
 test('the socket pings for liveness and ignores pong', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval'] });
   const socket = new Socket();
