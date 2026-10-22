@@ -20,7 +20,11 @@ export interface PairingChannel {
   readonly channelId: string;
   /** Payloads other connections sent on the channel, in arrival order. */
   messages(): AsyncIterable<Uint8Array>;
-  send(bytes: Uint8Array): Promise<void>;
+  /**
+   * Sends on the channel. Optional: the CLI controller only receives the
+   * owner's result, so an adapter for it may leave this out.
+   */
+  send?(bytes: Uint8Array): Promise<void>;
   close(): Promise<void>;
 }
 

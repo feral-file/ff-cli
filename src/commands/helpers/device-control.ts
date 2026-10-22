@@ -61,6 +61,7 @@ import {
   controllerQrString,
   RegistrationForOtherDeviceError,
   generatePairingMaterial,
+  isValidChannelId,
   openRegistration,
 } from '../../utilities/control/registration';
 import {
@@ -94,6 +95,8 @@ export interface PairDeps extends SecureTransportDeps {
   confirmFn?: (question: string) => Promise<boolean>;
   /** Pause between enroll attempts. */
   enrollRetryMs?: number;
+  /** Draws the pairing channel ID (default: crypto.randomUUID). */
+  newChannelId?: () => string;
   /** Receives the legacy short-code topic handoff (default: the handoff broker). */
   receiveTopicHandoff?: (device: PairDevice, timeoutMs: number) => Promise<TopicHandoffPayload>;
 }
@@ -471,7 +474,15 @@ async function waitForOwner(
   const stopped = () =>
     interrupt.aborted ? ({ status: 'interrupted' } as const) : ({ status: 'timeout' } as const);
   let channel: PairingChannel | undefined;
-  const channelId = randomUUID();
+  const channelId = (deps.newChannelId ?? randomUUID)();
+  // §5.6.1: the relay accepts 1-128 characters, the QR only 16-64 of
+  // [A-Za-z0-9_-]; a UUID fits, a future generator must too.
+  if (!isValidChannelId(channelId)) {
+    throw new CommandFailure(
+      'ff-cli generated an invalid pairing channel ID; this is an ff-cli bug.',
+      'Please report it with `ff-cli --version`.'
+    );
+  }
   try {
     try {
       channel = await (deps.openChannel ?? pairingChannelOpener())(channelId, signal);

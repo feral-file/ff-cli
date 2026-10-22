@@ -149,8 +149,6 @@ class FakeChannel implements PairingChannel {
     }
   }
 
-  async send(): Promise<void> {}
-
   async close(): Promise<void> {
     this.closed = true;
     this.end();
@@ -428,6 +426,20 @@ describe('device pair (owner-initiated registration)', () => {
     );
     // No private key file is left behind by a run that could not open the channel.
     assert.equal(fs.existsSync(path.join(storeDir, 'pairing', `${DEVICE_ID}.keys.json`)), false);
+  });
+
+  test('an invalid generated channel ID stops before the channel is opened', async () => {
+    const world = ownerWorld(approve());
+    for (const bad of ['short', 'x'.repeat(65), 'has space in it 1234', 'a/b-c_d-e_f-g_h-i']) {
+      await assert.rejects(
+        pairDevice(device, options, { ...world.deps, newChannelId: () => bad }),
+        /invalid pairing channel ID/
+      );
+    }
+    assert.equal(world.channels.length, 0);
+    assert.equal(fs.existsSync(path.join(storeDir, 'pairing', `${DEVICE_ID}.keys.json`)), false);
+    await pairDevice(device, options, { ...world.deps, newChannelId: () => 'A'.repeat(64) });
+    assert.equal(world.channels[0].channelId, 'A'.repeat(64));
   });
 
   test('an installed opener is used when none is injected', async () => {

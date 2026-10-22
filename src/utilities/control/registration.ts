@@ -93,6 +93,18 @@ export class RegistrationForOtherDeviceError extends ControlFormatError {
   }
 }
 
+/**
+ * isValidChannelId reports whether a pairing channel ID is valid for the
+ * controller QR (§5.6.1: 16-64 characters of [A-Za-z0-9_-]). The relay
+ * accepts 1-128, so clients check this themselves.
+ *
+ * @param channelId - Candidate channel ID
+ * @returns True when the QR may carry it
+ */
+export function isValidChannelId(channelId: string): boolean {
+  return CHANNEL_ID_PATTERN.test(channelId);
+}
+
 /** ControllerQr is a parsed `ff1-ctl:1|…` payload (§5.6.1). */
 export interface ControllerQr {
   channelId: string;
