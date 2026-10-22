@@ -291,7 +291,7 @@ describe('device pair (owner-initiated registration)', () => {
     // never arrived; the retry must show the same sig/enc keys.
     const shown: string[] = [];
     const silent = ownerWorld((qr, _channel, registered) => {
-      shown.push(controllerQrCtl(qr));
+      shown.push(`${qr.sig.x}|${qr.sig.y}|${qr.enc.x}|${qr.enc.y}`);
       registered.add(controllerQrCtl(qr)); // registered, but the result is lost
     });
     await assert.rejects(
@@ -303,14 +303,18 @@ describe('device pair (owner-initiated registration)', () => {
     assert.equal(fs.statSync(keysFile).mode & 0o777, process.platform === 'win32' ? 0o666 : 0o600);
 
     const world = ownerWorld((qr, channel, registered) => {
-      shown.push(controllerQrCtl(qr));
+      shown.push(`${qr.sig.x}|${qr.sig.y}|${qr.enc.x}|${qr.enc.y}`);
       approve()(qr, channel, registered);
     });
     await pairDevice(device, options, world.deps);
     assert.equal(shown.length, 2);
     assert.equal(shown[0], shown[1]);
     assert.notEqual(silent.channels[0].channelId, world.channels[0].channelId);
-    assert.equal(controllerIdOf(loadController(DEVICE_ID, { dir: storeDir })!.keys), shown[0]);
+    const record = loadController(DEVICE_ID, { dir: storeDir })!;
+    assert.equal(
+      `${record.keys.sig.x}|${record.keys.sig.y}|${record.keys.enc.x}|${record.keys.enc.y}`,
+      shown[0]
+    );
     assert.equal(fs.existsSync(keysFile), false, 'the record now holds the keys');
   });
 
