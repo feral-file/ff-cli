@@ -115,6 +115,10 @@ Based on the code today, the CLI is responsible for:
   Feral File app, and the CLI pins the FF1 profile only from the owner's sealed
   answer over the relay pairing channel, then enrolls (any relayer topic the
   answer carries goes to the operating system credential vault)
+- pairing an FF1 without secure control by its signed relayer topic through
+  a short-lived end-to-end encrypted mobile handoff, authenticating the CLI key
+  with a user-compared security check, and storing it in the operating system
+  credential vault
 - falling back from unreachable LAN delivery to the shared FF1 relayer with an
   explicit terminal notice, so sandboxed and cross-subnet control remains
   observable to the mobile app

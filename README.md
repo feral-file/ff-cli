@@ -53,7 +53,7 @@ ff-cli setup -y --key "<private-key>" --role agent
 
 Device pairing is also scriptable on its own: `ff-cli device add --host http://<ip>:1111 --name <name>` skips mDNS discovery entirely.
 
-On FF OS with secure control, an FF1 only accepts commands from controllers an owner added. `ff-cli device pair <name>` shows a QR code; an owner scans it with **Add controller** in the Feral File app, and ff-cli enrolls with the role they picked. Pairing needs an internet connection and an FF1 that already has an owner (ff-cli cannot be the first owner); `--resume` finishes a pairing an owner already approved, and `ff-cli device unpair <name>` revokes ff-cli on the FF1 before deleting its keys. Details: [docs/CONFIGURATION.md](./docs/CONFIGURATION.md#secure-control-pairing).
+On FF OS with secure control, an FF1 only accepts commands from controllers an owner added. `ff-cli device pair <name>` shows a QR code; an owner scans it with **Add controller** in the Feral File app, and ff-cli enrolls with the role they picked. Pairing needs an internet connection and an FF1 that already has an owner (ff-cli cannot be the first owner); `--resume` finishes a pairing an owner already approved, and `ff-cli device unpair <name>` revokes ff-cli on the FF1 before deleting its keys. FF1s without secure control pair through a one-time code ("Pair with ff-cli" in the app) that hands over relayer access; ff-cli picks the path from the FF1's status, and `--topic-handoff` forces the one-time code. Details: [docs/CONFIGURATION.md](./docs/CONFIGURATION.md#secure-control-pairing).
 
 ## Find an artwork
 

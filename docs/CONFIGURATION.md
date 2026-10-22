@@ -256,12 +256,20 @@ You can also manage devices independently with:
 - `ff-cli device rename <name> <new-name>` – Rename a device without touching its host, API key, or default status. Works offline; also accepts the host URL as the identifier, so unnamed legacy entries can be given a name.
 - `ff-cli device remove <name>` – Remove a device by name.
 - `ff-cli device default <name>` – Promote a device to the top of the list so it is used when `-d` is omitted.
-- `ff-cli device pair [name]` – Show a QR code (and the same text to paste)
-  that an owner scans with **Add controller** in the Feral File app; once the
-  owner adds ff-cli, it pins the FF1's control profile from the owner's sealed
-  answer and enrolls as a **controller**. Needs an internet connection, and the
-  FF1 must already have an owner; see
-  [Secure control pairing](#secure-control-pairing).
+- `ff-cli device pair [name]` – Pair ff-cli with an FF1. ff-cli reads the
+  FF1's status on the LAN to pick the path:
+  - FF OS with secure control and an owner: show a QR code (and the same text
+    to paste) that an owner scans with **Add controller** in the Feral File
+    app; ff-cli pins the FF1's control profile from the owner's sealed answer
+    and enrolls as a **controller**. Needs an internet connection; see
+    [Secure control pairing](#secure-control-pairing).
+  - FF OS without secure control (or with it switched on but no owner yet):
+    display a one-time code and key-bound security check; in Feral File
+    mobile choose **Pair with ff-cli**, enter the code, and confirm both values
+    match before sharing. The app sends the relayer topic, which ff-cli stores
+    in the operating system credential vault.
+  - Status unreadable (FF1 off the LAN): the QR path, with a hint. Pass
+    `--topic-handoff` to force the one-time-code path.
 - `ff-cli device controllers [name]` – List the controllers paired with an FF1
   and any pending requests (owner only).
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
@@ -308,15 +316,19 @@ The `intent` field is **required** — without it the device returns `{"message"
 
 When LAN delivery is unreachable, `play` prints an explicit notice and retries
 the same command through `ff1Relayer.baseUrl`. The per-device topic is read from
-the operating system credential vault, never `config.json`. It arrives with
-the owner's answer when ff-cli is paired:
+the operating system credential vault, never `config.json`. Pair it from the
+mobile app first:
 
 ```bash
-ff-cli device pair office
+ff-cli device pair office                  # FF OS without secure control: one-time code
+ff-cli device pair office --topic-handoff  # force the one-time code (FF1 not on this LAN)
 ```
 
-The topic is only stored when the owner's app sends one (FF1s that still use
-the topic relayer); it is never printed.
+On FF OS without secure control, the CLI and mobile confirmation both show the
+same 12-hex-digit security check. Comparing it authenticates the CLI public key
+out of band, so an active broker cannot silently substitute its own encryption
+key. On FF OS with secure control, the topic arrives inside the owner's sealed
+answer when the FF1 still uses the topic relayer. The topic is never printed.
 
 The default relayer is
 `https://tv-cast-coordination.autonomy-system.workers.dev`. Override it with
@@ -370,7 +382,11 @@ the FF1 and no code is compared.
    carries this computer's public controller keys, a one-time pairing secret
    and a relay channel ID. The QR uses this computer's existing keys for the
    FF1 when it has them, so a re-pair (after a revoke, a role change or a
-   factory reset) keeps one controller ID on the FF1.
+   factory reset) keeps one controller ID on the FF1. Otherwise the keys are
+   saved to `controllers/pairing/<device ID>.keys.json` before the QR is
+   shown, so a retry after a timeout or Ctrl-C shows the same keys (with a
+   new secret and channel) and completes a registration an owner already
+   made.
 2. On an owner's phone, open the FF1 in the Feral File app, choose **Add
    controller**, scan the code (or paste the text), and pick the role.
 3. The app registers ff-cli on the FF1, then sends ff-cli a sealed answer over
@@ -386,8 +402,8 @@ Pairing needs an internet connection: the relay carries the owner's answer and
 keeps nothing. It also needs an FF1 that already has an owner (choose **Secure
 this FF1** in the app first); ff-cli cannot become an FF1's first owner. If no
 owner answers within the timeout, the pairing is "not completed", not
-rejected: nothing is saved, and running `device pair` again shows a new code.
-If an owner declines, the command fails and saves nothing. If the owner's
+rejected: running `device pair` again shows a new code for the same keys.
+If an owner declines, the command fails. If the owner's
 answer arrived but enrolling did not finish (the FF1 was unreachable, Ctrl-C),
 `ff-cli device pair <name> --resume` finishes it without a new code.
 
