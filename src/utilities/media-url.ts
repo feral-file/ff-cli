@@ -8,6 +8,10 @@
  *   - works whose metadata predates Feral File's CDN move still point at
  *     `cdn.feralfileassets.com`, a host that no longer resolves. The same
  *     paths are served by `cdn.artworks.feralfile.io`.
+ *   - some Feral File works carry an https URL on `ipfs.bitmark.com`, Feral
+ *     File's legacy gateway, instead of a bare CID. The owner asked for those
+ *     to go through the Feral File gateway like every other Feral File CID
+ *     (2026-10-22), so one gateway setting governs all Feral File media.
  *
  * The rewrite is applied here rather than asked of Raster because it is the
  * one fix ff-cli can make alone. Remove a DEAD_HOST_REWRITES entry only once
@@ -32,6 +36,30 @@ export const DEAD_HOST_REWRITES: Readonly<Record<string, string>> = {
 };
 
 /**
+ * LEGACY_FERAL_FILE_GATEWAYS are retired Feral File-operated IPFS gateway
+ * hosts. A `/ipfs/<cid>` URL on one is re-pointed at the configured Feral
+ * File gateway whatever the platform id says, because the host itself proves
+ * the CID is Feral File media. A URL without an `/ipfs/` path is left alone.
+ */
+export const LEGACY_FERAL_FILE_GATEWAYS: ReadonlySet<string> = new Set(['ipfs.bitmark.com']);
+
+/**
+ * legacyGatewayToFeralFile returns the URL re-pointed at the Feral File
+ * gateway, or null when the URL is not a `/ipfs/` path on a legacy host.
+ * An empty query (`?` with nothing after it, as Raster emits) is dropped.
+ */
+function legacyGatewayToFeralFile(parsed: URL, gateways: IpfsGateways): string | null {
+  if (!LEGACY_FERAL_FILE_GATEWAYS.has(parsed.hostname.toLowerCase())) {
+    return null;
+  }
+  const match = /^\/ipfs\/(.+)$/i.exec(parsed.pathname);
+  if (!match) {
+    return null;
+  }
+  return `${gateways.feralFile}${match[1]}${parsed.search}${parsed.hash}`;
+}
+
+/**
  * ipfsToGateway turns `ipfs://<cid>[/path]` into a gateway URL, or '' when the
  * URI names no CID. An `ipfs://ipfs/<cid>` form appears in the wild and is
  * treated the same way the source-resolver package treats it.
@@ -51,7 +79,8 @@ function ipfsToGateway(uri: string, platformId: string | null, gateways: IpfsGat
 /**
  * fixUpMediaUrl returns a URL the FF1 display path can load, or ''.
  *
- * Order: map `ipfs://` through the platform's gateway, then swap a retired
+ * Order: map `ipfs://` through the platform's gateway, then move a legacy
+ * Feral File gateway URL onto the Feral File gateway, then swap a retired
  * host for its replacement. Data URIs pass through unchanged so
  * convertToDP1Item can report them as data URIs instead of as missing media.
  * Any other non-HTTP(S) scheme becomes '' because nothing downstream can load
@@ -85,6 +114,10 @@ export function fixUpMediaUrl(
   }
   if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
     return '';
+  }
+  const regatewayed = legacyGatewayToFeralFile(parsed, gateways);
+  if (regatewayed) {
+    return regatewayed;
   }
   const replacement = DEAD_HOST_REWRITES[parsed.hostname.toLowerCase()];
   if (replacement) {

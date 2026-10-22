@@ -40,6 +40,32 @@ describe('fixUpMediaUrl', () => {
     );
   });
 
+  test('moves the legacy Bitmark gateway onto the Feral File gateway', () => {
+    assert.equal(
+      fixUpMediaUrl('https://ipfs.bitmark.com/ipfs/QmfY7yhN64?', 'feralfile', gateways),
+      'https://ipfs.feralfile.com/ipfs/QmfY7yhN64'
+    );
+    assert.equal(
+      fixUpMediaUrl('https://ipfs.bitmark.com/ipfs/QmX/index.html?seed=1', null, gateways),
+      'https://ipfs.feralfile.com/ipfs/QmX/index.html?seed=1'
+    );
+  });
+
+  test('follows a configured Feral File gateway for the legacy Bitmark host', () => {
+    assert.equal(
+      fixUpMediaUrl('https://ipfs.bitmark.com/ipfs/QmX', 'feralfile', {
+        ...gateways,
+        feralFile: 'https://gw.example/ipfs/',
+      }),
+      'https://gw.example/ipfs/QmX'
+    );
+  });
+
+  test('leaves a legacy Bitmark URL without an /ipfs/ path untouched', () => {
+    const url = 'https://ipfs.bitmark.com/health';
+    assert.equal(fixUpMediaUrl(url, 'feralfile', gateways), url);
+  });
+
   test('leaves other https URLs untouched', () => {
     const url = 'https://generator.artblocks.io/1/0xa7d8/78000629';
     assert.equal(fixUpMediaUrl(url, 'artblocks', gateways), url);
