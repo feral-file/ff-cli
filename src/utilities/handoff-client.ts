@@ -8,7 +8,6 @@ import {
   handoffVerificationCode,
   type BrokerHandoffMessage,
 } from './handoff-crypto';
-import { type DeviceProfile, parseProfile } from './control/codec';
 
 const DEFAULT_HANDOFF_URL = 'https://handoff.feralfile.com';
 
@@ -24,7 +23,13 @@ interface PollResponse {
   messages: BrokerHandoffMessage[];
 }
 
-/** TopicHandoffPayload is the v1 handoff: relayer topic only (old firmware). */
+/**
+ * TopicHandoffPayload is the v1 short-code handoff: the relayer topic only,
+ * for an FF1 without the control protocol (or with it but no owner yet),
+ * which accepts plaintext commands. The v2 controller-profile handoff is
+ * retired: a secured FF1 pairs through owner-initiated registration
+ * (control/registration.ts), the one source a profile is pinned from.
+ */
 export interface TopicHandoffPayload {
   v: 1;
   type: 'ff1_topic_handoff';
@@ -34,27 +39,6 @@ export interface TopicHandoffPayload {
   topicId: string;
   sentAt: string;
 }
-
-/**
- * ControllerHandoffPayload is the v2 handoff (feral-file#3551 M6): the owner
- * app sends the FF1's control profile, which ff-cli pins as the trust root
- * for every reply, plus the relayer topic when the device still uses it for
- * routing. The handoff channel is end-to-end encrypted and the user compares
- * a verification code, so this is the one place the profile may come from;
- * `/api/v2/status` on the LAN is unauthenticated and is never pinned.
- */
-export interface ControllerHandoffPayload {
-  v: 2;
-  type: 'ff1_controller_handoff';
-  channelId: string;
-  deviceId: string;
-  deviceName?: string;
-  profile: DeviceProfile;
-  topicId?: string;
-  sentAt: string;
-}
-
-export type HandoffPayload = TopicHandoffPayload | ControllerHandoffPayload;
 
 function brokerBaseUrl(value?: string): string {
   return (value || process.env.FF1_HANDOFF_URL || DEFAULT_HANDOFF_URL).replace(/\/$/, '');
@@ -92,8 +76,8 @@ function parsePoll(value: unknown, channelId: string): PollResponse {
 }
 
 /**
- * parseHandoffPayload accepts a v2 controller handoff or a v1 topic handoff
- * for the selected device and rejects everything else.
+ * parseHandoffPayload accepts a v1 topic handoff for the selected device and
+ * rejects everything else, including a retired v2 controller handoff.
  *
  * @param value - Decrypted handoff plaintext
  * @param channelId - This receiver's channel
@@ -105,50 +89,8 @@ export function parseHandoffPayload(
   value: unknown,
   channelId: string,
   expectedDeviceId: string
-): HandoffPayload {
-  const version = (value as { v?: unknown } | null)?.v;
-  return version === 2
-    ? parseControllerPayload(value, channelId, expectedDeviceId)
-    : parseTopicPayload(value, channelId, expectedDeviceId);
-}
-
-/**
- * parseControllerPayload validates a v2 payload. profile.dev must equal the
- * payload deviceId and the configured device ID exactly (ff1-control-v1 §2:
- * deviceId is compared exactly); the profile itself is checked with the
- * protocol's closed-set JWK rules.
- */
-function parseControllerPayload(
-  value: unknown,
-  channelId: string,
-  expectedDeviceId: string
-): ControllerHandoffPayload {
-  const payload = value as Partial<ControllerHandoffPayload> & { profile?: unknown };
-  const mismatch = new Error('received controller handoff does not match the selected FF1 device');
-  if (
-    payload.type !== 'ff1_controller_handoff' ||
-    payload.channelId !== channelId ||
-    typeof payload.deviceId !== 'string' ||
-    payload.deviceId !== expectedDeviceId.trim().toUpperCase() ||
-    typeof payload.sentAt !== 'string' ||
-    Number.isNaN(Date.parse(payload.sentAt)) ||
-    (payload.topicId !== undefined &&
-      (typeof payload.topicId !== 'string' || payload.topicId.trim().length === 0))
-  ) {
-    throw mismatch;
-  }
-  let profile: DeviceProfile;
-  try {
-    profile = parseProfile(payload.profile);
-  } catch (error) {
-    throw new Error(
-      `received controller handoff has an invalid FF1 profile: ${(error as Error).message}`
-    );
-  }
-  if (profile.dev !== payload.deviceId) {
-    throw mismatch;
-  }
-  return { ...(payload as ControllerHandoffPayload), profile };
+): TopicHandoffPayload {
+  return parseTopicPayload(value, channelId, expectedDeviceId);
 }
 
 function parseTopicPayload(
@@ -173,7 +115,7 @@ function parseTopicPayload(
   return payload as TopicHandoffPayload;
 }
 
-/** One short-lived CLI-side channel waiting for a mobile handoff (v2 controller profile or v1 topic). */
+/** One short-lived CLI-side channel waiting for a mobile topic handoff. */
 export class HandoffReceiver {
   private constructor(
     readonly baseUrl: string,
@@ -225,15 +167,12 @@ export class HandoffReceiver {
     );
   }
 
-  /**
-   * Poll until mobile sends a valid encrypted handoff (v2 controller profile
-   * or v1 topic) for the selected device.
-   */
+  /** Poll until mobile sends a valid encrypted topic handoff for the selected device. */
   async receiveHandoff(options: {
     expectedDeviceId: string;
     pollIntervalMs?: number;
     maxWaitMs?: number;
-  }): Promise<HandoffPayload> {
+  }): Promise<TopicHandoffPayload> {
     const deadline = Date.now() + (options.maxWaitMs ?? 300_000);
     let afterSeq = 0;
     while (Date.now() <= deadline) {

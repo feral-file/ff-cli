@@ -22,9 +22,14 @@ import {
   loadController,
   markEnrolled,
   nextCounter,
+  recordRegistration,
   saveController,
-  updateLabel,
 } from '../src/utilities/control/controller-store';
+import {
+  REPLAY_COUNTER_JUMP,
+  findEnvelopeAnswer,
+  sendSecureRequest,
+} from '../src/utilities/control/secure-transport';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
 import { sendSshAccessCommand } from '../src/utilities/ssh-access';
 import { FakeFF1, sealReply, type Jwk } from './helpers/control-device';
@@ -195,7 +200,7 @@ describe('controller key store', () => {
     assert.equal(deleteController(DEVICE_ID, { dir: storeDir }), true);
   });
 
-  test('a label update re-reads under the lock and keeps a newer counter', () => {
+  test('storing a registration result re-reads under the lock and keeps a newer counter', () => {
     const stale = createController(
       { profile: parseProfile(keys.device.profile), label: 'a' },
       { dir: storeDir }
@@ -203,10 +208,18 @@ describe('controller key store', () => {
     nextCounter(DEVICE_ID, { dir: storeDir });
     nextCounter(DEVICE_ID, { dir: storeDir });
     assert.equal(stale.ctr, 0); // the caller's copy is out of date
-    const updated = updateLabel(DEVICE_ID, 'b', { dir: storeDir });
+    const registration = {
+      channelId: '7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9',
+      deviceName: 'Office',
+      role: 'controller' as const,
+      receivedAt: NOW,
+    };
+    const updated = recordRegistration(DEVICE_ID, { label: 'b', registration }, { dir: storeDir });
     assert.equal(updated.ctr, 2);
-    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 2);
-    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.label, 'b');
+    const reloaded = loadController(DEVICE_ID, { dir: storeDir })!;
+    assert.equal(reloaded.ctr, 2);
+    assert.equal(reloaded.label, 'b');
+    assert.deepEqual(reloaded.registration, registration);
   });
 
   test('a failed atomic write leaves no temp file with key material', () => {
@@ -556,7 +569,7 @@ describe('secure displayPlaylist', () => {
     assert.equal(result.success, false);
     assert.match(result.error!, /revoked/);
     assert.match(result.details!, /ff-cli device pair Office/);
-    assert.match(result.details!, /approve/);
+    assert.match(result.details!, /Add controller/);
     // The preflight refusal stops the command before the playlist is sent.
     assert.deepEqual(
       device.seen.map((c) => c.cmd),
@@ -657,6 +670,89 @@ describe('secure displayPlaylist', () => {
   });
 });
 
+describe('replay recovery (§14.4)', () => {
+  const device = { name: 'Office', id: DEVICE_ID, host: HOST };
+  const request = {
+    device,
+    op: 'cmd' as const,
+    cmd: 'getDeviceStatus',
+    req: {},
+    relayerFallback: false,
+    retry: false,
+  };
+
+  test('a verified replay moves the counter ahead and sends the command once more', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice((claims) =>
+      Number(claims.ctr) < REPLAY_COUNTER_JUMP
+        ? { ok: false, code: 'replay' }
+        : { ok: true, res: {} }
+    );
+    const outcome = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(outcome.kind === 'reply' && outcome.reply.ok, true);
+    assert.deepEqual(
+      fake.seen.map((c) => c.ctr),
+      [1, REPLAY_COUNTER_JUMP + 2]
+    );
+    assert.notEqual(fake.seen[0].rid, fake.seen[1].rid);
+    assert.notEqual(fake.seen[0].rk, fake.seen[1].rk);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, REPLAY_COUNTER_JUMP + 2);
+  });
+
+  test('a second verified replay is not retried again', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ ok: false, code: 'replay' }));
+    const result = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(result.kind === 'reply' && result.reply.code, 'replay');
+    assert.equal(fake.seen.length, 2);
+  });
+
+  test('a public replay is never evidence: no counter jump, no retry', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ publicCode: 'replay' }));
+    const outcome = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(outcome.kind, 'public');
+    assert.equal(fake.seen.length, 1);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 1);
+  });
+
+  test('a replay that persists is reported without advising unpair', async () => {
+    enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ ok: false, code: 'replay' }));
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      { fetchFn: lanFetch(fake), controllerStore: { dir: storeDir }, nowFn: () => NOW }
+    );
+    assert.equal(result.success, false);
+    assert.match(result.details!, /moved its request counter ahead and tried once more/);
+    assert.match(result.details!, /Run the command again/);
+    assert.match(result.details!, /Do not unpair/);
+  });
+});
+
+describe('public refusal bodies', () => {
+  test('a public error with a message member is still read by its code', () => {
+    for (const code of ['enrollment_required', 'envelope_required']) {
+      assert.deepEqual(
+        findEnvelopeAnswer({ error: { code, message: 'this FF1 needs signed requests' } }),
+        { code }
+      );
+    }
+  });
+});
+
 describe('legacy path against a secured FF1', () => {
   test('a plaintext preflight refused with enrollment_required stops with pairing guidance', async () => {
     const casts: string[] = [];
@@ -665,7 +761,13 @@ describe('legacy path against a secured FF1', () => {
       {
         fetchFn: async (_input, init) => {
           casts.push(JSON.parse(String(init?.body)).command);
-          return json(403, { error: { code: 'enrollment_required' } });
+          // §4.4: the plaintext refusal carries a fixed `message` beside `code`.
+          return json(403, {
+            error: {
+              code: 'enrollment_required',
+              message: 'this FF1 needs signed requests: update the Feral File app or ff-cli',
+            },
+          });
         },
         controllerStore: { dir: storeDir },
       }
@@ -935,4 +1037,13 @@ describe('secure generic carrier integration', () => {
       }
     });
   }
+});
+
+describe('replay copy', () => {
+  test('a replay that was not retried does not claim a counter jump', async () => {
+    const { describeControlCode } = await import('../src/utilities/control/control-errors.js');
+    const failure = describeControlCode('replay', 'Office');
+    assert.doesNotMatch(failure.details!, /moved its request counter/);
+    assert.match(failure.details!, /Run the command again/);
+  });
 });

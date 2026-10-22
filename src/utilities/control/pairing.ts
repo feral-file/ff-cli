@@ -1,44 +1,54 @@
 /**
- * Controller pairing for ff-cli (ff1-control-v1 §5.2-5.4, feral-file#3551 M6).
+ * Controller pairing for ff-cli: owner-initiated registration
+ * (ffos-user docs/ff1-control-v1.md §5.6, §14.8; feral-file#3551).
  *
- * Sequence, after the owner app handed over the device profile (v2 handoff):
- * 1. prepareController: reuse this machine's keys for the same control
- *    identity (same gen and pins), else generate new ones. Reuse matters: a
- *    re-pair after revocation or an interrupted pair keeps one controllerId
- *    on the device instead of orphaning grants.
- * 2. requestAccess over LAN (relayer fallback), signed with the new keys.
- * 3. Show approvalCode(ctl, thumb(pinned devSig)); the owner approves in the
- *    app only when the app shows the same code (§5.4 MITM binding).
- * 4. Poll op:enroll (no inv) every 2 s until ok; store role and nk.
+ * Sequence:
+ * 1. chooseControllerKeys: this computer's existing keys for the FF1 when it
+ *    has a readable controller file (so a re-pair after revocation, a role
+ *    change or a factory reset keeps one controllerId on the device instead
+ *    of orphaning a grant), else the pairing keys saved before the QR was
+ *    first shown (so a retry after a timeout or Ctrl-C completes a grant an
+ *    owner already registered), else new pairing keys, saved before use.
+ * 2. The caller shows the controller QR (registration.ts) and waits on the
+ *    pairing channel for a sealed result that passes every §5.6.3 check.
+ * 3. prepareRegisteredController pins the result's profile: on the existing
+ *    record when it is the same keys and identity, else on a new record that
+ *    replaces an existing one only once enrolled (the staging store).
+ * 4. enrollRegistered sends a protected op:enroll without inv (§5.3) and
+ *    stores role, nk and expiry from the verified reply.
  *
- * State is always consistent on interruption: the controller file is written
- * atomically before the first request, every counter is persisted before it
- * is sent, and the grant is written only from a verified enroll reply. A
- * pending file is picked up again by `ff-cli device pair --resume`.
+ * State is always consistent on interruption: before a verified result only
+ * the pairing keys are written, the record is written atomically before the first
+ * request, every counter is persisted before it is sent, and the grant is
+ * written only from a verified enroll reply. A record with a verified result
+ * that has not enrolled yet is finished by `ff-cli device pair --resume`.
  */
 
 import os from 'node:os';
 import type { FF1Device } from '../../types';
+import { fetchWithTimeout } from '../http';
 import {
   type ControlRole,
+  type ControllerKeys,
   type DeviceProfile,
   type EnrollObject,
-  approvalCode,
-  controllerIdOf,
   stripUnsafeLabelCharacters,
 } from './codec';
-import { publicOf, sameKey, thumbprint } from './jwk';
+import { publicOf, sameKey } from './jwk';
 import {
   type ControllerRecord,
   type ControllerStoreOptions,
+  type RegistrationRecord,
   ControllerFileCorruptError,
   createController,
   dropStagedController,
   loadController,
   markEnrolled,
+  pairingKeys,
+  recordRegistration,
+  sameIdentity,
   setAsideCorruptController,
   stagingStore,
-  updateLabel,
 } from './controller-store';
 import {
   type SecureOutcome,
@@ -46,28 +56,22 @@ import {
   sendSecureRequest,
 } from './secure-transport';
 import { type ControlFailure, describeControlCode, pairCommand } from './control-errors';
+import type { RegistrationResult } from './registration';
 import { isB64uOfLength, isPlainObject } from './strict-json';
 
-/** ENROLL_POLL_INTERVAL_MS is the op:enroll polling period. */
-export const ENROLL_POLL_INTERVAL_MS = 2_000;
-/** DEFAULT_PAIR_TIMEOUT_MS matches the device's 5-minute pending lifetime. */
+/** DEFAULT_PAIR_TIMEOUT_MS is how long `device pair` waits for an owner by default. */
 export const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60_000;
-/**
- * MAX_PAIR_TIMEOUT_MS is the device's cap on a pending request's whole life,
- * refreshes included (§5.2); waiting longer can never end in approval.
- */
+/** MAX_PAIR_TIMEOUT_MS bounds `--timeout`: the relay keeps nothing, so a QR is a short-lived offer. */
 export const MAX_PAIR_TIMEOUT_MS = 10 * 60_000;
-/**
- * PENDING_REFRESH_MS is how often the poll re-sends requestAccess so the
- * device's 5-minute pending TTL (counted from the last request) never lapses
- * while ff-cli is still waiting.
- */
-export const PENDING_REFRESH_MS = 4 * 60_000;
+/** ENROLL_ATTEMPTS bounds the enroll retries after a verified result (network blips). */
+export const ENROLL_ATTEMPTS = 5;
+/** ENROLL_RETRY_MS is the pause between enroll attempts. */
+export const ENROLL_RETRY_MS = 2_000;
 
 type PairDevice = FF1Device & { id: string };
 
 /**
- * defaultControllerLabel is the label the owner sees in the approval sheet:
+ * defaultControllerLabel is the label the owner sees when adding ff-cli:
  * this machine's hostname, trimmed to the protocol's 64 characters.
  *
  * @returns A 1-64 character label
@@ -79,55 +83,183 @@ export function defaultControllerLabel(): string {
 }
 
 /**
- * sameIdentity reports whether two profiles are the same control identity.
+ * chooseControllerKeys picks the keys the controller QR shows, always keys
+ * already on disk: those of the device's controller file when it is readable
+ * (enrolled or not), else the saved pairing keys (created and saved now when
+ * there are none). A corrupt controller file is moved aside, never written
+ * over, once a result arrives. An unreadable file throws: its keys may be
+ * fine, so nothing may pair past it.
  *
- * @param a - First profile
- * @param b - Second profile
- * @returns True when dev, gen and both keys match
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns The keys, whether they were already saved, and whether they are
+ *   the controller file's (else the pairing keys file's)
  */
-export function sameIdentity(a: DeviceProfile, b: DeviceProfile): boolean {
-  return a.dev === b.dev && a.gen === b.gen && sameKey(a.sig, b.sig) && sameKey(a.enc, b.enc);
+export function chooseControllerKeys(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): { keys: ControllerKeys; reused: boolean; fromRecord: boolean } {
+  let existing: ControllerRecord | null = null;
+  try {
+    existing = loadController(deviceId, options);
+  } catch (error) {
+    if (!(error instanceof ControllerFileCorruptError)) {
+      throw error;
+    }
+  }
+  if (existing) {
+    return { keys: existing.keys, reused: true, fromRecord: true };
+  }
+  return { ...pairingKeys(deviceId, options), fromRecord: false };
+}
+
+/** CONTROL_PROBE_TIMEOUT_MS bounds the LAN status read that picks the pairing path. */
+export const CONTROL_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * ControlSupport is what the FF1's LAN status says about pairing: `secure`
+ * (the control protocol with an owner: owner-initiated registration),
+ * `plaintext` (no `control` block, or `control.state` legacy: no owner, so
+ * plaintext is accepted and the legacy topic handoff applies), or `unknown`.
+ */
+export type ControlSupport = 'secure' | 'plaintext' | 'unknown';
+
+/**
+ * probeControlSupport reads `getDeviceStatus` in plaintext over the LAN
+ * (§11: the `control` block is the capability signal). An owned FF1 refuses
+ * plaintext with a public `enrollment_required` (§7.2), which also means
+ * secure. The answer is unauthenticated and only picks the pairing UI; no
+ * profile is ever taken from it.
+ *
+ * @param device - Device with host and optional API key
+ * @param fetchFn - Fetch (tests); defaults to a short deadline
+ * @returns The pairing path the status points to
+ */
+export async function probeControlSupport(
+  device: FF1Device,
+  fetchFn: typeof fetch = (input, init) =>
+    fetchWithTimeout(input, init ?? {}, CONTROL_PROBE_TIMEOUT_MS)
+): Promise<ControlSupport> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (device.apiKey) {
+    headers['API-KEY'] = device.apiKey;
+  }
+  let body: unknown;
+  let ok: boolean;
+  try {
+    const response = await fetchFn(`${device.host}/api/cast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ command: 'getDeviceStatus', request: {} }),
+    });
+    ok = response.ok;
+    body = JSON.parse(await response.text());
+  } catch {
+    return 'unknown';
+  }
+  if (!isPlainObject(body)) {
+    return 'unknown';
+  }
+  const error = body.error;
+  if (isPlainObject(error) && typeof error.code === 'string') {
+    return ['enrollment_required', 'envelope_required', 'locked'].includes(error.code)
+      ? 'secure'
+      : 'unknown';
+  }
+  const status = body.message;
+  if (!ok || !isPlainObject(status) || status.ok === false) {
+    return 'unknown';
+  }
+  if (status.control === undefined) {
+    return 'plaintext';
+  }
+  return isPlainObject(status.control) && status.control.state === 'legacy'
+    ? 'plaintext'
+    : 'secure';
 }
 
 /**
- * prepareController returns the record to pair with: the existing one when it
- * belongs to the same control identity (its keys, counter and any grant are
- * kept; the label is updated), else a new record with fresh keys. A record
- * for another identity (factory reset: new gen; or a stale handoff) is not
- * touched here: the new keys go to the staging store and replace it only
- * once the new pairing is enrolled, so a failed pairing never costs a grant.
+ * registrationRecordOf keeps the facts of a verified approved result.
  *
- * @param profile - Profile pinned from the handoff
- * @param label - Controller label
- * @param options - Store options
- * @returns The record, whether its keys are reused, and whether it is staged
+ * @param result - Verified approved result
+ * @param now - Unix seconds
+ * @returns The facts stored in the controller file
  */
-export function prepareController(
-  profile: DeviceProfile,
-  label: string,
+export function registrationRecordOf(result: RegistrationResult, now: number): RegistrationRecord {
+  const registration: RegistrationRecord = {
+    channelId: result.channelId,
+    deviceName: result.deviceName!,
+    role: result.role!,
+    receivedAt: now,
+  };
+  if (result.expiresAt !== undefined) {
+    registration.expiresAt = result.expiresAt;
+  }
+  if (result.topicId !== undefined) {
+    registration.topicId = result.topicId;
+  }
+  return registration;
+}
+
+/**
+ * prepareRegisteredController pins a verified approved result. The existing
+ * record keeps its file (and counter) when it is the same keys under the same
+ * identity. Otherwise the result goes to a new record: the main file when
+ * there is none (a corrupt one is moved aside first, it may hold the only
+ * copy of an owner key), else the staging store, which replaces the existing
+ * record only once enrolled, so a failed pairing never costs a grant.
+ *
+ * @param input - Pinned profile, the keys the owner registered, label and result facts
+ * @param options - Main store options
+ * @returns The record and whether it is staged
+ */
+export function prepareRegisteredController(
+  input: {
+    profile: DeviceProfile;
+    keys: ControllerKeys;
+    label: string;
+    registration: RegistrationRecord;
+  },
   options: ControllerStoreOptions = {}
-): { record: ControllerRecord; reused: boolean; staged: boolean } {
+): { record: ControllerRecord; staged: boolean } {
+  const deviceId = input.profile.dev;
   let existing: ControllerRecord | null = null;
   try {
-    existing = loadController(profile.dev, options);
+    existing = loadController(deviceId, options);
   } catch (error) {
     if (!(error instanceof ControllerFileCorruptError)) {
       throw error; // unreadable: its keys may be fine, never write over them
     }
-    // Corrupt: moved aside (it may hold the only copy of an owner key), then
-    // replaced below with fresh keys.
-    setAsideCorruptController(profile.dev, options);
+    setAsideCorruptController(deviceId, options);
   }
-  if (existing && sameIdentity(existing.profile, profile)) {
-    // A staged record left by an abandoned replacement pairing is for
-    // another identity; this pairing supersedes it, and --resume must not
-    // pick it up later.
-    dropStagedController(profile.dev, false, options);
-    return { record: updateLabel(profile.dev, label, options), reused: true, staged: false };
+  if (
+    existing &&
+    sameKey(existing.keys.sig, input.keys.sig) &&
+    sameKey(existing.keys.enc, input.keys.enc) &&
+    sameIdentity(existing.profile, input.profile)
+  ) {
+    // A staged record left by an abandoned replacement pairing is superseded
+    // by this result, and --resume must not pick it up later.
+    dropStagedController(deviceId, false, options);
+    const record = recordRegistration(
+      deviceId,
+      { label: input.label, registration: input.registration },
+      options
+    );
+    return { record, staged: false };
   }
   const staged = existing !== null;
-  const record = createController({ profile, label }, staged ? stagingStore(options) : options);
-  return { record, reused: false, staged };
+  const record = createController(
+    {
+      profile: input.profile,
+      label: input.label,
+      keys: input.keys,
+      registration: input.registration,
+      exclusive: !staged,
+    },
+    staged ? stagingStore(options) : options
+  );
+  return { record, staged };
 }
 
 /** enrollObject builds the §5 enroll claim for this controller. */
@@ -140,158 +272,45 @@ function enrollObject(record: ControllerRecord): EnrollObject {
   };
 }
 
-/**
- * localApprovalCode is the code ff-cli shows: computed over the pin it holds,
- * never over anything the device sent.
- *
- * @param record - Controller record
- * @returns Six digits
- */
-export function localApprovalCode(record: ControllerRecord): string {
-  return approvalCode(controllerIdOf(record.keys), thumbprint(record.profile.sig));
-}
-
-/** AccessRequestResult is the outcome of op:requestAccess. */
-export type AccessRequestResult =
-  | { status: 'pending'; code: string; expiresAt?: number }
-  | { status: 'approved'; role?: ControlRole }
-  | { status: 'failed'; failure: ControlFailure };
-
-/** failureFrom maps a non-success outcome to a failure. */
-function failureFrom(outcome: SecureOutcome, label: string): ControlFailure {
-  if (outcome.kind === 'failed') {
-    return { code: outcome.code ?? 'failed', error: outcome.error, details: outcome.details };
-  }
-  const code = outcome.kind === 'public' ? outcome.code : (outcome.reply.code ?? 'unknown');
-  return describeControlCode(code, label);
-}
-
-/**
- * requestAccess sends op:requestAccess (§5.2) over LAN with relayer fallback.
- * A `not_approved` answer here means the FF1 has no owner under secure
- * control yet (state `legacy`), which pairing cannot fix from the CLI.
- *
- * @param device - Device with ID
- * @param record - Pending or enrolled controller record
- * @param deps - Transport seams
- * @returns Pending (with the device's code), approved, or failed
- */
-export async function requestAccess(
-  device: PairDevice,
-  record: ControllerRecord,
-  deps: SecureTransportDeps = {}
-): Promise<AccessRequestResult> {
-  const label = device.name || device.id;
-  const outcome = await sendSecureRequest(
-    {
-      device,
-      op: 'requestAccess',
-      enroll: enrollObject(record),
-      relayerFallback: true,
-      retry: false,
-    },
-    record,
-    deps
-  );
-  if (outcome.kind === 'reply' && outcome.reply.ok && isPlainObject(outcome.reply.res)) {
-    const res = outcome.reply.res;
-    if (res.status === 'approved') {
-      return { status: 'approved', role: asRole(res.role) };
-    }
-    if (res.status === 'pending' && typeof res.code === 'string') {
-      return {
-        status: 'pending',
-        code: res.code,
-        expiresAt: typeof res.expiresAt === 'number' ? res.expiresAt : undefined,
-      };
-    }
-  }
-  if (outcome.kind === 'reply' && outcome.reply.code === 'invalid_request') {
-    return {
-      status: 'failed',
-      failure: {
-        code: 'invalid_request',
-        error: `The FF1 rejected the access request for "${record.label}" as invalid.`,
-        details:
-          'Its label may contain characters the FF1 does not accept. Run the pairing again with a plain label, e.g. `--label "studio-mac"`.',
-      },
-    };
-  }
-  if (outcome.kind === 'reply' && outcome.reply.code === 'not_approved') {
-    // §5.2: the FF1 answers not_approved both when it has no owner yet
-    // (legacy) and for a key whose request an owner denied a few minutes ago.
-    return {
-      status: 'failed',
-      failure: {
-        code: 'not_approved',
-        error:
-          'The FF1 did not accept the access request: an owner denied it in the last few minutes, or this FF1 has no owner under secure control yet.',
-        details:
-          'If it was denied, ask an owner and run the pairing again in a few minutes. If it has no owner yet, choose "Secure this FF1" in the Feral File app first; until then ff-cli keeps using unpaired access.',
-      },
-    };
-  }
-  // The LAN request hit its deadline and may not have arrived; asking again
-  // is a refresh on the FF1 (§5.2), so the caller retries it like busy.
-  if (outcome.kind === 'failed' && outcome.timedOut) {
-    return {
-      status: 'failed',
-      failure: { code: 'timeout', error: `The FF1 did not answer in time (${outcome.error}).` },
-    };
-  }
-  return { status: 'failed', failure: failureFrom(outcome, label) };
-}
-
 function asRole(value: unknown): ControlRole | undefined {
   return value === 'owner' || value === 'controller' ? value : undefined;
 }
 
-/** EnrollResult is the outcome of the enrollment poll. */
+/** EnrollResult is the outcome of enrolling after a verified result. */
 export type EnrollResult =
   | { status: 'enrolled'; record: ControllerRecord }
   | { status: 'failed'; failure: ControlFailure }
-  | { status: 'timeout' }
   | { status: 'cancelled' };
 
-/** EnrollPollOptions tune the poll; tests shorten the clock. */
-export interface EnrollPollOptions {
-  intervalMs?: number;
-  timeoutMs?: number;
-  sleepFn?: (ms: number) => Promise<void>;
-  nowMsFn?: () => number;
+/** EnrollOptions tune the attempts; tests shorten the clock. */
+export interface EnrollOptions {
+  attempts?: number;
+  retryMs?: number;
   /** Returns true when the user interrupted (Ctrl-C). */
   cancelled?: () => boolean;
   storeOptions?: ControllerStoreOptions;
-  /**
-   * Re-sends requestAccess every refreshMs (default PENDING_REFRESH_MS) so
-   * the pending request outlives the device's TTL; its outcome is ignored
-   * (a denial shows up on the next enroll poll as not_approved).
-   */
-  refresh?: () => Promise<unknown>;
-  refreshMs?: number;
-  /**
-   * When the wait started (default: now). The device's pending request
-   * lives at most 10 minutes from the first requestAccess, so the caller
-   * starts the clock there rather than at the first poll.
-   */
-  startedAtMs?: number;
 }
 
 /**
- * parseGrant validates an enroll success `res` (§5.3): role, nk, and a
- * profile that must be the pinned one (a device whose profile changed under
- * the same keys is a bug or an attack; either way nothing is stored).
+ * parseGrant validates an enroll success `res` (§5.3): role, nk, optional
+ * expiresAt, and a profile that must be the pinned one (a device whose
+ * profile changed under the same keys is a bug or an attack; either way
+ * nothing is stored).
  */
 function parseGrant(
   res: unknown,
   pinned: DeviceProfile
-): { role: ControlRole; nk: string } | string {
+): { role: ControlRole; nk: string; expiresAt?: number } | string {
   if (!isPlainObject(res)) {
     return 'enroll reply has no grant';
   }
   const role = asRole(res.role);
   if (!role || !isB64uOfLength(res.nk, 32)) {
     return 'enroll reply has an invalid role or nk';
+  }
+  const expiresAt = res.expiresAt;
+  if (expiresAt !== undefined && (!Number.isSafeInteger(expiresAt) || (expiresAt as number) < 0)) {
+    return 'enroll reply has an invalid expiresAt';
   }
   const profile = res.profile as Partial<DeviceProfile> | undefined;
   if (
@@ -303,45 +322,52 @@ function parseGrant(
     !profile.enc ||
     !sameKey(profile.enc, pinned.enc)
   ) {
-    return 'enroll reply carries a different FF1 profile than the one paired';
+    return 'enroll reply carries a different FF1 profile than the one the owner sent';
   }
-  return { role, nk: res.nk as string };
+  const grant: { role: ControlRole; nk: string; expiresAt?: number } = {
+    role,
+    nk: res.nk as string,
+  };
+  if (expiresAt !== undefined) {
+    grant.expiresAt = expiresAt as number;
+  }
+  return grant;
+}
+
+/** failureFrom maps a non-success outcome to a failure. */
+function failureFrom(outcome: SecureOutcome, label: string): ControlFailure {
+  if (outcome.kind === 'failed') {
+    return { code: outcome.code ?? 'failed', error: outcome.error, details: outcome.details };
+  }
+  const code = outcome.kind === 'public' ? outcome.code : (outcome.reply.code ?? 'unknown');
+  return describeControlCode(code, label);
 }
 
 /**
- * pollEnrollment sends op:enroll (no inv) every interval until the owner
- * approves (ok), the request is denied or expires (`not_approved`), a fatal
- * error occurs, the timeout passes, or the user cancels. Each poll is a new
- * request with a new counter. Network failures and `pending`/`rate_limited`
- * keep polling.
+ * enrollRegistered sends op:enroll (no inv) until the FF1 returns the grant
+ * an owner registered, a definite refusal arrives, the attempts run out, or
+ * the user cancels. Each attempt is a new request with a new counter; enroll
+ * is idempotent (§5.3), so a lost reply is simply asked again.
  *
  * @param device - Device with ID
- * @param record - Pending controller record
- * @param deps - Transport seams
- * @param options - Poll tuning
- * @returns The enrolled record or why polling stopped
+ * @param record - Controller record with a pinned profile
+ * @param deps - Transport seams; controllerStore is the store the record is in
+ * @param options - Attempt tuning
+ * @returns The enrolled record or why enrollment stopped
  */
-export async function pollEnrollment(
+export async function enrollRegistered(
   device: PairDevice,
   record: ControllerRecord,
   deps: SecureTransportDeps = {},
-  options: EnrollPollOptions = {}
+  options: EnrollOptions = {}
 ): Promise<EnrollResult> {
-  const interval = options.intervalMs ?? ENROLL_POLL_INTERVAL_MS;
-  const nowMs = options.nowMsFn ?? Date.now;
-  const sleep = options.sleepFn ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
-  const deadline =
-    (options.startedAtMs ?? nowMs()) + (options.timeoutMs ?? DEFAULT_PAIR_TIMEOUT_MS);
-  const refreshMs = options.refreshMs ?? PENDING_REFRESH_MS;
-  let refreshedAt = nowMs();
+  const attempts = options.attempts ?? ENROLL_ATTEMPTS;
+  const wait = deps.waitFn ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
   const label = device.name || device.id;
-  while (nowMs() <= deadline) {
+  let last: EnrollResult | null = null;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
     if (options.cancelled?.()) {
       return { status: 'cancelled' };
-    }
-    if (options.refresh && nowMs() - refreshedAt >= refreshMs) {
-      refreshedAt = nowMs();
-      await options.refresh();
     }
     const outcome = await sendSecureRequest(
       { device, op: 'enroll', enroll: enrollObject(record), relayerFallback: true, retry: false },
@@ -349,24 +375,24 @@ export async function pollEnrollment(
       { ...deps, noticeFn: () => undefined }
     );
     const step = interpretEnrollOutcome(outcome, record, label, options.storeOptions);
-    if (step) {
+    if (step.status !== 'transient') {
       return step;
     }
-    if (options.cancelled?.()) {
-      return { status: 'cancelled' };
+    last = { status: 'failed', failure: step.failure };
+    if (attempt < attempts) {
+      await wait(options.retryMs ?? ENROLL_RETRY_MS);
     }
-    await sleep(interval);
   }
-  return { status: 'timeout' };
+  return last!;
 }
 
-/** interpretEnrollOutcome returns a final result, or null to keep polling. */
+/** interpretEnrollOutcome returns a final result, or a transient failure worth asking again. */
 function interpretEnrollOutcome(
   outcome: SecureOutcome,
   record: ControllerRecord,
   label: string,
   storeOptions?: ControllerStoreOptions
-): EnrollResult | null {
+): EnrollResult | { status: 'transient'; failure: ControlFailure } {
   if (outcome.kind === 'reply' && outcome.reply.ok) {
     const grant = parseGrant(outcome.reply.res, record.profile);
     if (typeof grant === 'string') {
@@ -375,36 +401,36 @@ function interpretEnrollOutcome(
     return { status: 'enrolled', record: markEnrolled(record.deviceId, grant, storeOptions) };
   }
   // busy (§4.4): the FF1 was authenticating too many envelopes and did not
-  // run this one; the next poll is a new request anyway.
+  // run this one; the next attempt is a new request anyway.
   if (outcome.kind === 'public' && outcome.code === 'busy') {
-    return null;
+    return { status: 'transient', failure: failureFrom(outcome, label) };
   }
   if (outcome.kind === 'reply') {
     const code = outcome.reply.code;
-    if (code === 'pending' || code === 'rate_limited' || code === 'internal_error') {
-      return null;
+    if (code === 'rate_limited' || code === 'internal_error') {
+      return { status: 'transient', failure: failureFrom(outcome, label) };
     }
-    if (code === 'not_approved') {
+    if (code === 'not_approved' || code === 'pending') {
       return {
         status: 'failed',
         failure: {
           code,
-          error: 'The access request was denied or expired before it was approved.',
-          // The controller file is kept, so the same keys can ask again.
-          details: `To ask again, run \`${pairCommand(label)} --resume\` and approve it in the Feral File app.`,
+          error:
+            'The FF1 has no grant for ff-cli, although an owner’s Feral File app reported adding it.',
+          details: `An owner may have removed it again. Run \`${pairCommand(label)}\` to show a new code.`,
         },
       };
     }
   }
-  // The FF1 or the relayer may come back (Wi-Fi blip, relayer restart); keep
-  // trying until the deadline. Protocol answers (codes) are never transient.
+  // The FF1 or the relayer may come back (Wi-Fi blip, relayer restart).
+  // Protocol answers (codes) are never transient.
   if (
     outcome.kind === 'failed' &&
     (outcome.unreachable ||
       outcome.timedOut || // enroll is idempotent (§5.3): asking again is safe
       (outcome.transport === 'relayer' && !outcome.code))
   ) {
-    return null;
+    return { status: 'transient', failure: failureFrom(outcome, label) };
   }
   return { status: 'failed', failure: failureFrom(outcome, label) };
 }

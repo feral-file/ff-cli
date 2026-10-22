@@ -99,7 +99,8 @@ export interface EnrollObject {
   inv?: string;
 }
 
-export type RequestOp = 'cmd' | 'enroll' | 'requestAccess';
+/** RequestOp is the §3.3 op of a request ff-cli sends. */
+export type RequestOp = 'cmd' | 'enroll';
 
 /** RequestClaims are the §3.3 claims. */
 export interface RequestClaims {
@@ -371,7 +372,7 @@ function assertCommand(cmd: unknown, req: unknown, enroll: unknown): void {
 }
 
 function assertEnroll(op: RequestOp, enroll: EnrollObject | undefined, cmd: unknown, ctl: string) {
-  if (op !== 'enroll' && op !== 'requestAccess') {
+  if (op !== 'enroll') {
     throw new Error(`unknown op ${String(op)}`);
   }
   if (!enroll || cmd !== undefined) {
@@ -386,9 +387,6 @@ function assertEnroll(op: RequestOp, enroll: EnrollObject | undefined, cmd: unkn
   }
   if (!CONTROL_PLATFORMS.includes(enroll.platform)) {
     throw new Error('enroll platform is invalid');
-  }
-  if (enroll.inv !== undefined && op !== 'enroll') {
-    throw new Error('inv is only allowed with op=enroll');
   }
 }
 

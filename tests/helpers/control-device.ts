@@ -268,7 +268,15 @@ export class FakeFF1 {
     json: unknown;
   } {
     if (body.command !== 'ff1Envelope' || body.request?.v !== 1 || !body.request.jwe) {
-      return { status: 403, json: { error: { code: 'enrollment_required' } } };
+      return {
+        status: 403,
+        json: {
+          error: {
+            code: 'enrollment_required',
+            message: 'this FF1 needs signed requests: update the Feral File app or ff-cli',
+          },
+        },
+      };
     }
     let opened: OpenedRequest;
     try {

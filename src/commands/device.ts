@@ -24,16 +24,20 @@ const deviceCommand = new Command('device').description('Manage configured FF1 d
 deviceCommand
   .command('pair')
   .description(
-    'Pair ff-cli with a configured FF1 through the Feral File app (secure controller pairing on current firmware, relayer access on older firmware)'
+    'Pair ff-cli with a configured FF1: on secure control, show a code an owner scans with "Add controller" in the Feral File app (needs internet and an owner); otherwise receive relayer access through a one-time code'
   )
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .option(
     '--label <label>',
-    "Name the owner sees when approving (default: this computer's hostname)"
+    "Name the owner sees when adding ff-cli (default: this computer's hostname)"
   )
-  .option('--timeout <seconds>', 'How long to wait for owner approval, 10-600 (default: 300)')
-  .option('--resume', 'Continue an interrupted pairing without a new app handoff')
+  .option('--timeout <seconds>', 'How long to wait for an owner, 10-600 (default: 300)')
+  .option('--resume', 'Finish a pairing an owner already approved, without a new code')
   .option('-y, --yes', 'Replace an existing pairing for another FF1 identity without asking')
+  .option(
+    '--topic-handoff',
+    'Use the one-time code and "Pair with ff-cli" in the app (FF OS without secure control); chosen automatically when the FF1 reports no secure control'
+  )
   .action(async (name: string | undefined, options: PairOptions) => {
     await runControlAction('Pairing failed:', () => runPair(name, options));
   });
@@ -57,7 +61,7 @@ deviceCommand
 
 deviceCommand
   .command('unpair')
-  .description("Delete ff-cli's controller keys for an FF1")
+  .description("Revoke ff-cli's access on an FF1 (best effort) and delete its controller keys")
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .option('-y, --yes', 'Delete the keys without asking')
   .action(async (name: string | undefined, options: { yes?: boolean }) => {
