@@ -383,7 +383,10 @@ the topic relayer as before.
 - Enrollment never uses relay v2: anyone can join the device channel, so a v2
   reply proves nothing until the FF1 profile is confirmed.
 - The owner's sealed pairing result must fit one relay frame (32 KiB; results
-  are about 1 KiB).
+  are about 1 KiB). If the relay connection drops while `device pair` waits,
+  pairing stops; run it again to show a new code.
+- On relay v2 a `replay` answer is reported as an unknown outcome, never
+  retried: the FF1 may have received two copies of the same request.
 
 On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 

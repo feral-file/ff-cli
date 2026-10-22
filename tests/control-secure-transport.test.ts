@@ -919,7 +919,14 @@ describe('secure sshAccess', () => {
 // These exercise the existing endpoint fixture through the new carrier; no
 // registration contract or crypto is implemented by the transport tests.
 describe('secure generic carrier integration', () => {
-  type Mode = 'verified' | 'empty-channel' | 'never-admitted' | 'lost-command-reply';
+  type Mode =
+    | 'verified'
+    | 'empty-channel'
+    | 'never-admitted'
+    | 'lost-command-reply'
+    | 'no-receipt'
+    | 'duplicate-ok-first'
+    | 'duplicate-replay-first';
 
   /**
    * carrierSocket is a relay with a stranger and the FF1 on the device
@@ -962,10 +969,22 @@ describe('secure generic carrier integration', () => {
           this.control({ type: 'error', code: 'peer_unavailable', id: header.id, to: 'peers' });
           return;
         }
+        if (mode === 'no-receipt') {
+          // Written, but no ACK or refusal before the deadline.
+          return;
+        }
         this.control({ type: 'ack', from: 'stranger', id: header.id });
         this.control({ type: 'ack', from: 'ff1', id: header.id });
         this.reply('stranger', body.messageID, { v: 1, jwe: 'forged-candidate' });
         const answer = device.handle(body.message as Record<string, unknown>).json;
+        if (mode.startsWith('duplicate')) {
+          // The FF1 got two copies (fan-out plus a late-joiner copy); the
+          // second is answered with a verified replay.
+          const replay = device.handle(body.message as Record<string, unknown>).json;
+          const order = mode === 'duplicate-ok-first' ? [answer, replay] : [replay, answer];
+          order.forEach((reply) => this.reply('ff1', body.messageID, reply));
+          return;
+        }
         if (mode === 'lost-command-reply') {
           this.dispatchEvent(new Event('close'));
           return;
@@ -1067,6 +1086,40 @@ describe('secure generic carrier integration', () => {
     assert.equal((outcome as { unreachable?: boolean }).unreachable, undefined);
     assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
     assert.equal(device.seen.length, 1);
+  });
+
+  test('a deadline while a written frame awaits its receipt is ambiguous, never a fallback', async () => {
+    const { outcome, legacyCalls } = await sendOverCarrier('no-receipt', { v2TimeoutMs: 300 });
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0, 'a written frame may have reached the FF1');
+  });
+
+  test('a verified replay on v2 is an unknown outcome: no counter jump, no resend', async () => {
+    const before = loadController(DEVICE_ID, { dir: storeDir })?.ctr ?? 0;
+    const { outcome, device, legacyCalls } = await sendOverCarrier('duplicate-replay-first');
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0);
+    assert.equal(device.seen.length, 2, 'only the two relay copies, nothing resent');
+    const after = loadController(DEVICE_ID, { dir: storeDir })!.ctr;
+    assert.ok(after - before < REPLAY_COUNTER_JUMP, 'the counter did not jump');
+  });
+
+  test('the reply that settled the request is the answer, not a later one that also verified', async () => {
+    const { outcome } = await sendOverCarrier('duplicate-ok-first');
+    assert.equal(outcome.kind, 'reply');
+    assert.equal((outcome as { reply: { ok: boolean } }).reply.ok, true);
+  });
+
+  test('an ambiguous failure on the cached route forgets relayV2', async () => {
+    const { outcome } = await sendOverCarrier(
+      'no-receipt',
+      { v2TimeoutMs: 300 },
+      { relayV2: true }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, false);
   });
 
   test('a derived endpoint is not used for an FF1 that has not advertised relay v2', async () => {

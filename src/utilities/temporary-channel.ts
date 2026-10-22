@@ -1,4 +1,4 @@
-import { decodeRelayFrame, encodeRelayFrame, relayURL } from './relay-client';
+import { decodeRelayFrame, encodeRelayFrame, relayURL, startPinging } from './relay-client';
 
 /** TemporaryChannel supplies only the generic carrier seam for the reviewed
  * pairing workflow. QR generation, crypto, result validation and staging stay
@@ -11,6 +11,7 @@ export class TemporaryChannel {
   readonly ready: Promise<void>;
   private socket: WebSocket;
   private timer: ReturnType<typeof setTimeout>;
+  private pinger?: ReturnType<typeof setInterval>;
   private closed = false;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -86,6 +87,7 @@ export class TemporaryChannel {
     }
     this.closed = true;
     clearTimeout(this.timer);
+    clearInterval(this.pinger);
     this.rejectReady(reason);
     for (const pending of this.receipts.values()) {
       clearTimeout(pending.timer);
@@ -108,12 +110,17 @@ export class TemporaryChannel {
       this.onPayload?.(header.from!, payload);
       return;
     }
+    if (data === 'pong') {
+      return;
+    }
     const event = JSON.parse(data);
     if (event.type === 'hello') {
       if (typeof event.connectionId !== 'string' || !Array.isArray(event.peers)) {
         throw new Error('Invalid hello');
       }
       this.connectionId = event.connectionId;
+      // §10 Liveness: a pairing wait can outlast the relay's 90 s idle close.
+      this.pinger ??= startPinging(() => this.socket);
       for (const peer of event.peers.slice(0, 35)) {
         this.peers.add(peer);
       }

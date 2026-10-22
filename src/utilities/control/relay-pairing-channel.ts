@@ -8,6 +8,10 @@
  * The channel carries no authority: every message is untrusted bytes that
  * registration.ts opens and checks. This adapter only queues them.
  *
+ * A relay drop ends the pairing wait (no reconnect: a new connection would
+ * get a new connection ID the owner's app does not know); `device pair` says
+ * the channel closed and the user shows a new code.
+ *
  * Limit: TemporaryChannel does not reassemble `relayChunk` transfers, so a
  * sealed registration result must fit one relay frame (about 32 KiB of
  * payload). Results are about 1 KiB; a chunked one would arrive as fragments
@@ -34,7 +38,8 @@ const PAIRING_CHANNEL_TIMEOUT_MS = MAX_PAIR_TIMEOUT_MS + 60_000;
 /**
  * MAX_QUEUED_MESSAGES bounds unread messages. Anyone who saw the QR can write
  * to the channel; the pairing loop drains each message at once, so only a
- * flood fills the queue, and then the oldest messages are dropped.
+ * flood fills the queue. Then NEW messages are dropped: evicting the oldest
+ * would let a flood push out an owner's result that is already queued.
  */
 const MAX_QUEUED_MESSAGES = 64;
 
@@ -60,10 +65,9 @@ class MessageQueue implements AsyncIterable<Uint8Array> {
       waiter({ value: item, done: false });
       return;
     }
-    if (this.items.length >= MAX_QUEUED_MESSAGES) {
-      this.items.shift();
+    if (this.items.length < MAX_QUEUED_MESSAGES) {
+      this.items.push(item);
     }
-    this.items.push(item);
   }
 
   /** end finishes the iteration once queued payloads are read. */

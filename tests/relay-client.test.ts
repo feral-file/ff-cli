@@ -4,6 +4,7 @@ import {
   RelayAmbiguousError,
   RelayClient,
   RelayUndeliveredError,
+  PING_INTERVAL_MS,
   relayURL,
   encodeRelayFrame,
   decodeRelayFrame,
@@ -190,6 +191,58 @@ test('a socket drop after sending is ambiguous', async () => {
   const relay = client(socket);
   socket.hello(['ff1']);
   await assert.rejects(request(relay, {}, 2000), RelayAmbiguousError);
+});
+
+test('a deadline before the receipt arrives is ambiguous once the frame was written', async () => {
+  const socket = new Socket();
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await assert.rejects(request(relay, {}, 200), RelayAmbiguousError);
+  assert.equal(socket.frames.length, 1);
+  relay.close();
+});
+
+test('a peer leaving before it answers is ambiguous', async () => {
+  const socket = new Socket();
+  socket.onFrame = () => socket.control({ type: 'peer_disconnected', connectionId: 'ff1' });
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await assert.rejects(request(relay, {}, 1000), RelayAmbiguousError);
+  relay.close();
+});
+
+test('a late ACK marks the peer reached, so it never gets a second copy', async () => {
+  const socket = new Socket();
+  socket.onFrame = (header) => {
+    if (header.to !== 'peers') {
+      return;
+    }
+    socket.ack('stranger', header.id);
+    // ff1 joined just before the relay forwarded the fan-out; its ACK comes
+    // after the receipt window closed.
+    socket.control({ type: 'peer_connected', connectionId: 'ff1' });
+    socket.ack('ff1', header.id);
+  };
+  const relay = client(socket);
+  socket.hello(['stranger']);
+  await assert.rejects(request(relay, {}, 500), RelayAmbiguousError);
+  assert.deepEqual(
+    socket.frames.map((frame) => frame.header.to),
+    ['peers']
+  );
+  relay.close();
+});
+
+test('the socket pings for liveness and ignores pong', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval'] });
+  const socket = new Socket();
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  socket.message('pong');
+  t.mock.timers.tick(PING_INTERVAL_MS);
+  assert.equal(socket.sent.at(-1), 'ping');
+  assert.equal(socket.closed, false);
+  relay.close();
 });
 
 test('backpressure is transient: the peer is retried after a backoff', async () => {

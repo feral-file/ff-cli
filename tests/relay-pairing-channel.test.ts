@@ -91,6 +91,18 @@ test('messages arrive in order and the iteration ends when the channel closes', 
   assert.equal((await pending).done, true);
 });
 
+test('a flood cannot evict a message that is already queued', async () => {
+  const { channel, socket } = await open((s) => s.hello());
+  socket.payload('owner', [1]);
+  for (let index = 0; index < 100; index++) {
+    socket.payload('stranger', [2]);
+  }
+  socket.message('pong');
+  const messages = channel.messages()[Symbol.asyncIterator]();
+  assert.deepEqual([...(await next(messages)).value], [1]);
+  await channel.close();
+});
+
 test('aborting the signal closes the channel and ends the iteration', async () => {
   const abort = new AbortController();
   const { channel, socket } = await open((s) => s.hello(), abort.signal);

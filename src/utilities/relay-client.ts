@@ -25,6 +25,12 @@ const FANOUT_GRACE_MS = 1000;
 const CONNECT_ATTEMPTS = 3;
 const BACKOFF_BASE_MS = 250;
 const BACKOFF_MAX_MS = 4000;
+/**
+ * PING_INTERVAL_MS keeps the socket alive (§10 Liveness): the relay closes a
+ * connection that shows no frame and no `ping` for 90 s, and every endpoint
+ * pings at least every 30 s.
+ */
+export const PING_INTERVAL_MS = 25_000;
 const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -44,8 +50,15 @@ type Prepared = {
   request: Record<string, unknown>;
   verify: (value: Record<string, unknown>) => Promise<boolean>;
 };
-/** Delivery records whether any part of one request may have reached a peer. */
-type Delivery = { touched: boolean };
+/**
+ * Delivery tracks what one request's frames proved (§10 "Ambiguity is the
+ * default"): `written` frames left this client, `refused` of them were
+ * explicitly refused by the relay for every destination known at send time
+ * with no ACK, and `reached` holds peers that ACKed any frame, including an
+ * ACK that arrives after its receipt window closed. `frames` are the frame
+ * IDs, kept so a late ACK still finds its request.
+ */
+type Delivery = { written: number; refused: number; reached: Set<string>; frames: Set<string> };
 /**
  * PeerState is what one request's sends proved about one peer: it holds the
  * whole body (`full`), it may hold part of it (`touched`), or the relay
@@ -171,6 +184,9 @@ export class RelayClient {
   private peers = new Set<string>();
   private pending = new Map<string, Pending>();
   private receipts = new Map<string, Receipt>();
+  /** Frame ID to its request, for ACKs that arrive after the receipt finished. */
+  private frameOwners = new Map<string, Delivery>();
+  private pinger?: ReturnType<typeof setInterval>;
   private validators = new Map<string, (value: Record<string, unknown>) => Promise<boolean>>();
   private assemblies = new Map<string, Assembly>();
   private closed = false;
@@ -209,7 +225,7 @@ export class RelayClient {
     timeoutMs = 30000
   ): Promise<Record<string, unknown>> {
     const id = crypto.randomUUID();
-    const delivery: Delivery = { touched: false };
+    const delivery: Delivery = { written: 0, refused: 0, reached: new Set(), frames: new Set() };
     // Bound queue/open waits before allocating a replay counter or sealing.
     const result = this.wait(`rpc:${id}`, timeoutMs);
     void result.catch(() => undefined);
@@ -222,6 +238,7 @@ export class RelayClient {
       throw classify(error as Error, delivery);
     } finally {
       this.validators.delete(id);
+      delivery.frames.forEach((frame) => this.frameOwners.delete(frame));
     }
   }
 
@@ -232,6 +249,7 @@ export class RelayClient {
     }
     this.closed = true;
     clearTimeout(this.retryTimer);
+    clearInterval(this.pinger);
     this.readiness.reject(error);
     for (const receipt of [...this.receipts.values()]) {
       receipt.finish();
@@ -334,9 +352,13 @@ export class RelayClient {
       const now = Date.now();
       const candidates = (this.player ? [this.player] : [...this.peers]).filter((peer) => {
         const state = states.get(peer);
+        if (delivery.reached.has(peer)) {
+          // It ACKed a frame of this request, possibly late: never a second copy.
+          return false;
+        }
         return state === undefined || (state === 'retry' && (retries.get(peer)?.at ?? 0) <= now);
       });
-      if (!candidates.length && !this.retryable(states) && !delivery.touched) {
+      if (!candidates.length && !this.retryable(states) && !touched(delivery)) {
         throw new RelayUndeliveredError('Relay refused the command for every peer');
       }
       for (const peer of candidates) {
@@ -413,7 +435,7 @@ export class RelayClient {
     const sendStates = new Map<string, PeerState>();
     for (let index = 0; index < count && active(); index++) {
       const payload = chunkPayload(body, transfer, index, count);
-      const receipt = await this.writeFrame(payload, to, delivery);
+      const receipt = await this.writeFrame(payload, to, delivery, active);
       if (receipt.empty) {
         return { empty: true };
       }
@@ -429,7 +451,12 @@ export class RelayClient {
   }
 
   /** writeFrame paces one frame below the relay's byte ceiling and awaits its receipts. */
-  private writeFrame(payload: Uint8Array, to: string, delivery: Delivery): Promise<ReceiptResult> {
+  private writeFrame(
+    payload: Uint8Array,
+    to: string,
+    delivery: Delivery,
+    active: () => boolean
+  ): Promise<ReceiptResult> {
     const id = crypto.randomUUID();
     const frame = encodeRelayFrame({ v: 2, id, to }, payload);
     const write = this.frameWrites.then(async () => {
@@ -438,10 +465,17 @@ export class RelayClient {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
       this.nextFrameAt = Date.now() + Math.max(20, Math.ceil((frame.byteLength * 1000) / 750000));
-      if (this.closed) {
+      // Re-checked after the pacing wait: a request whose deadline already
+      // fired was reported on what had been written, so nothing more may go.
+      if (this.closed || !active()) {
         return refusedLocally(to);
       }
       const receipt = this.expectReceipt(id, to, delivery);
+      // Counted before the write: from here on only explicit refusals can
+      // prove the frame undelivered, whatever happens to the socket.
+      delivery.written++;
+      delivery.frames.add(id);
+      this.frameOwners.set(id, delivery);
       try {
         this.socket.send(frame);
       } catch (error) {
@@ -458,8 +492,9 @@ export class RelayClient {
 
   /**
    * expectReceipt registers the receipts one frame waits for: the target's,
-   * or every currently known peer's for a fan-out. A peer that never answers
-   * marks the request touched, since the relay may have forwarded the frame.
+   * or every currently known peer's for a fan-out. The frame counts as
+   * refused only when the relay refused it explicitly for every destination
+   * and no peer ACKed it; silence, a departure or a close leaves it ambiguous.
    */
   private expectReceipt(id: string, to: string, delivery: Delivery): Promise<ReceiptResult> {
     return new Promise((resolve) => {
@@ -483,8 +518,10 @@ export class RelayClient {
           this.receipts.delete(id);
           receipt.awaiting.forEach((peer) => result.unanswered.add(peer));
           receipt.awaiting.clear();
-          if (result.unanswered.size) {
-            delivery.touched = true;
+          const refusedAll =
+            !result.acked.size && !result.unanswered.size && result.refused.size > 0;
+          if (result.empty || refusedAll) {
+            delivery.refused++;
           }
           resolve(result);
         },
@@ -497,6 +534,11 @@ export class RelayClient {
   private onReceipt(event: Record<string, unknown>): void {
     const receipt = typeof event.id === 'string' ? this.receipts.get(event.id) : undefined;
     if (!receipt) {
+      // A late ACK still proves the peer holds (part of) the request.
+      const owner = typeof event.id === 'string' ? this.frameOwners.get(event.id) : undefined;
+      if (owner && event.type === 'ack' && validId(event.from)) {
+        owner.reached.add(event.from);
+      }
       return;
     }
     const peer = event.type === 'ack' ? event.from : event.to;
@@ -507,7 +549,7 @@ export class RelayClient {
     if (event.type === 'ack' && typeof event.from === 'string') {
       receipt.result.acked.add(event.from);
       receipt.awaiting.delete(event.from);
-      receipt.delivery.touched = true;
+      receipt.delivery.reached.add(event.from);
       if (receipt.fanout && receipt.awaiting.size && !receipt.grace) {
         receipt.grace = setTimeout(() => receipt.finish(), FANOUT_GRACE_MS);
       }
@@ -527,6 +569,9 @@ export class RelayClient {
 
   /** receive distinguishes relay controls from the existing application envelope. */
   private receive(data: unknown): void {
+    if (data === 'pong') {
+      return;
+    }
     if (typeof data === 'string') {
       this.control(JSON.parse(data));
       return;
@@ -598,6 +643,7 @@ export class RelayClient {
       }
     }
     this.connected = true;
+    this.pinger ??= startPinging(() => this.socket);
     this.readiness.resolve(undefined);
   }
 
@@ -723,7 +769,7 @@ function mergeChunkResult(
   }
 }
 
-/** refusedLocally is the receipt of a frame the closed client never wrote. */
+/** refusedLocally is the receipt of a frame this client never wrote. */
 function refusedLocally(to: string): ReceiptResult {
   return {
     empty: false,
@@ -733,12 +779,33 @@ function refusedLocally(to: string): ReceiptResult {
   };
 }
 
+/**
+ * startPinging sends the §10 liveness `ping` every PING_INTERVAL_MS on
+ * whichever socket is current. The timer never keeps the process alive.
+ */
+export function startPinging(socket: () => WebSocket): ReturnType<typeof setInterval> {
+  const timer = setInterval(() => {
+    try {
+      socket().send('ping');
+    } catch {
+      /* The close handler reports a dead socket. */
+    }
+  }, PING_INTERVAL_MS);
+  (timer as { unref?: () => void }).unref?.();
+  return timer;
+}
+
+/** touched reports whether any frame of a request may have reached a peer. */
+function touched(delivery: Delivery): boolean {
+  return delivery.reached.size > 0 || delivery.written > delivery.refused;
+}
+
 /** classify types a request failure by whether any part of it may have arrived. */
 function classify(error: Error, delivery: Delivery): Error {
   if (error instanceof RelayUndeliveredError || error instanceof RelayAmbiguousError) {
     return error;
   }
-  return delivery.touched
+  return touched(delivery)
     ? new RelayAmbiguousError(error.message)
     : new RelayUndeliveredError(error.message);
 }

@@ -25,10 +25,12 @@
  * - A `replay` in a reply that VERIFIED under the pinned devSig is the one
  *   answer that moves the counter: it proves the request did not run, so the
  *   counter jumps past the FF1's window and the command is sent once more
- *   (§14.4). A public error is never evidence of this.
+ *   (§14.4). A public error is never evidence of this, and neither is a
+ *   `replay` over relay v2, where the FF1 may have received two copies of
+ *   the same bytes: that is an unknown outcome (v2Answer).
  */
 
-import { RelayClient, RelayUndeliveredError } from '../relay-client';
+import { RelayAmbiguousError, RelayClient, RelayUndeliveredError } from '../relay-client';
 import { defaultDeadlineFetch } from '../http';
 import * as logger from '../../logger';
 import { type FF1RelayerSettings, getFF1RelayerConfig } from '../../config';
@@ -543,7 +545,8 @@ async function fallbackOrUnreachable(
     // advertised relay v2; otherwise a stranger's ACK on the device channel
     // could strand a command the topic would have delivered (config.ts).
     if (relay.v2Endpoint && request.op === 'cmd' && (relay.v2Explicit || record.relayV2)) {
-      const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
+      const cachedRoute = !relay.v2Explicit;
+      const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint, cachedRoute);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
       }
@@ -590,7 +593,8 @@ async function sendViaV2(
   request: SecureRequest,
   record: ControllerRecord,
   deps: ResolvedDeps,
-  endpoint: string
+  endpoint: string,
+  cachedRoute: boolean
 ): Promise<SecureOutcome> {
   let client: RelayClient;
   try {
@@ -598,9 +602,12 @@ async function sendViaV2(
   } catch (error) {
     return { kind: 'failed', unreachable: true, error: (error as Error).message };
   }
-  let accepted: SecureOutcome | undefined;
+  // Outcomes by the reply object that produced them: two replies may verify
+  // (an FF1 answering two copies), and only the one that settled the request
+  // is the answer.
+  const verified = new WeakMap<object, SecureOutcome>();
   try {
-    await client.requestPrepared(
+    const settled = await client.requestPrepared(
       async () => {
         const sealed = await sealNext(request, deps);
         return {
@@ -615,18 +622,52 @@ async function sendViaV2(
             if (outcome.kind !== 'reply') {
               return false;
             }
-            accepted = outcome;
+            verified.set(body, outcome);
             return true;
           },
         };
       },
       deps.v2TimeoutMs ?? v2Deadline(request)
     );
-    return accepted!;
+    return v2Answer(request, verified.get(settled)!);
   } catch (error) {
+    if (cachedRoute && error instanceof RelayAmbiguousError) {
+      forgetRelayV2(request, record, deps);
+    }
     return v2Failure(request, error as Error);
   } finally {
     client.close();
+  }
+}
+
+/**
+ * v2Answer passes a verified v2 reply through, except `replay` (§14.4): on v2
+ * the same sealed bytes may have reached the FF1 twice (a fan-out plus a copy
+ * to a late joiner), so a `replay` may answer the duplicate of a request that
+ * ran. It is an unknown outcome and never moves the counter or resends.
+ */
+function v2Answer(request: SecureRequest, outcome: SecureOutcome): SecureOutcome {
+  if (outcome.kind === 'reply' && !outcome.reply.ok && outcome.reply.code === 'replay') {
+    return v2Failure(
+      request,
+      new RelayAmbiguousError('the FF1 answered replay; it may have received this request twice')
+    );
+  }
+  return outcome;
+}
+
+/**
+ * forgetRelayV2 drops the cached relayV2 flag after the cached route gave an
+ * ambiguous failure with no verified reply: the FF1 may have left v2 (a
+ * downgrade), and with strangers on its channel every later LAN-down command
+ * would end the same way. The next verified status sets it again.
+ */
+function forgetRelayV2(request: SecureRequest, record: ControllerRecord, deps: ResolvedDeps): void {
+  record.relayV2 = false;
+  try {
+    recordRelayV2(request.device.id, false, deps.controllerStore);
+  } catch (error) {
+    logger.debug(`Could not clear the FF1's relay transports: ${(error as Error).message}`);
   }
 }
 
