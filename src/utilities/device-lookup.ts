@@ -111,9 +111,20 @@ export function findExistingDeviceEntry(
   //     and a stored entry has that IP in its stored addresses list (populated from
   //     prior mDNS discoveries). This bridges --host <ip/ipv6> → existing .local entry.
   //     Strip IPv6 brackets before comparing (Node URL.hostname returns '[fe80::1]').
+  //     The port must match the stored entry's port, for the same reason as step 3:
+  //     another port at a remembered address is another device, not this one.
   const rawHostname = stripBrackets(newUrl?.hostname ?? '');
   if (rawHostname && (/^[0-9.]+$/.test(rawHostname) || rawHostname.includes(':'))) {
-    const byStoredAddress = existingDevices.find((d) => d.addresses?.includes(rawHostname));
+    const samePort = (stored?: string) => {
+      try {
+        return new URL(stored || '').port === newUrl?.port;
+      } catch {
+        return false;
+      }
+    };
+    const byStoredAddress = existingDevices.find(
+      (d) => d.addresses?.includes(rawHostname) && samePort(d.host)
+    );
     if (byStoredAddress) {
       return byStoredAddress;
     }

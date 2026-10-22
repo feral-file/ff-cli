@@ -124,6 +124,39 @@ describe('setup and an already configured signing key', () => {
     const run = runSetup(null, [], newKey());
     assert.equal(run.status, 0, run.output);
     assert.match(run.output, /Signing with PLAYLIST_PRIVATE_KEY/);
-    assert.equal(run.keyAfter, undefined);
+    assert.ok(!run.keyAfter, 'config must not gain a key');
+  });
+
+  test('with PLAYLIST_PRIVATE_KEY set, --role is still applied', () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'ff-cli-setup-role-'));
+    const configPath = join(cwd, 'config.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({ playlist: { role: 'agent' }, ff1Devices: { devices: [] } }),
+      'utf8'
+    );
+    try {
+      const run = spawnSync(
+        process.execPath,
+        [tsxCli, cliEntry, 'setup', '--non-interactive', '--role', 'curator'],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            XDG_CONFIG_HOME: join(cwd, '.xdg'),
+            PLAYLIST_PRIVATE_KEY: newKey(),
+          },
+          encoding: 'utf-8',
+        }
+      );
+      assert.equal(run.status, 0, run.stdout + run.stderr);
+      const written = JSON.parse(readFileSync(configPath, 'utf8')) as {
+        playlist: { privateKey?: string; role?: string };
+      };
+      assert.equal(written.playlist.role, 'curator');
+      assert.ok(!written.playlist.privateKey, 'config must not gain a key');
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   });
 });

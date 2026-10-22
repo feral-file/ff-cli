@@ -226,7 +226,9 @@ export const setupCommand = new Command('setup')
         }
       }
 
-      if (signingKey) {
+      // The role applies to whichever identity signs, including PLAYLIST_PRIVATE_KEY when
+      // config keeps no key; skipping it there silently dropped --role.
+      if (signingKey || keyFromEnv) {
         if (nonInteractive) {
           // Role precedence: --role, then existing role, then 'agent'.
           try {
@@ -260,7 +262,9 @@ export const setupCommand = new Command('setup')
 
         config.playlist = {
           ...(config.playlist || {}),
-          privateKey: signingKey,
+          // With the identity in PLAYLIST_PRIVATE_KEY, keep whatever config held (empty or a
+          // placeholder) so the environment key keeps signing.
+          privateKey: signingKey || (config.playlist?.privateKey ?? ''),
           role: signingRole,
         };
       }
