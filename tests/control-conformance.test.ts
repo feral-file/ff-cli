@@ -99,9 +99,9 @@ describe('ff1-control-v1 fixture inventory', () => {
         kind
       );
     }
-    // 63 files at ffos-user 502bb86: keys.json + 16 positive + 46 negative.
+    // 74 files at ffos-user a02cca0: keys.json + 16 positive + 57 negative.
     assert.equal(positive.length, 16);
-    assert.equal(negative.length, 46);
+    assert.equal(negative.length, 57);
   });
 
   test('the reordered-ctr vector is accepted (ctr inside the window, unseen)', async () => {

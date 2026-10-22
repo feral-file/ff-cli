@@ -112,8 +112,8 @@ describe('sealed registration result (§5.6.2, §5.6.3)', () => {
   const negative = load<RegistrationVector>('negative', 'registration');
 
   test('vectors are present', () => {
-    assert.ok(positive.length >= 2);
-    assert.ok(negative.length >= 11);
+    assert.equal(positive.length, 2);
+    assert.equal(negative.length, 22);
   });
 
   for (const v of positive) {
@@ -149,6 +149,17 @@ describe('sealed registration result (§5.6.2, §5.6.3)', () => {
   // Each negative must fail at the check it targets, not at an earlier one.
   const reasons: Record<string, RegExp> = {
     'registration-approved-no-profile': /needs profile/,
+    'registration-approved-no-role': /needs role/,
+    'registration-bad-device-name': /deviceName is invalid/,
+    'registration-bad-role': /role is invalid/,
+    'registration-compressed-epk': /epk must be b64u of a 65-byte uncompressed/,
+    'registration-duplicate-member': /duplicate member/,
+    'registration-plaintext-type': /registration result has the wrong v or type/,
+    'registration-plaintext-v2': /registration result has the wrong v or type/,
+    'registration-short-iv': /iv must be 12 bytes/,
+    'registration-wire-type': /sealed registration has the wrong v or type/,
+    'registration-wire-v2': /sealed registration has the wrong v or type/,
+    'registration-wrong-minter': /minter key does not match the QR/,
     'registration-expired': /expiresAt/,
     'registration-extra-member': /registration result has unexpected member/,
     'registration-owner-expiry': /expiresAt/,

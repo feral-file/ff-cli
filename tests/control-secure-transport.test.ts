@@ -23,7 +23,11 @@ import {
   recordRegistration,
   saveController,
 } from '../src/utilities/control/controller-store';
-import { REPLAY_COUNTER_JUMP, sendSecureRequest } from '../src/utilities/control/secure-transport';
+import {
+  REPLAY_COUNTER_JUMP,
+  findEnvelopeAnswer,
+  sendSecureRequest,
+} from '../src/utilities/control/secure-transport';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
 import { sendSshAccessCommand } from '../src/utilities/ssh-access';
 import { FakeFF1, sealReply, type Jwk } from './helpers/control-device';
@@ -735,6 +739,17 @@ describe('replay recovery (§14.4)', () => {
   });
 });
 
+describe('public refusal bodies', () => {
+  test('a public error with a message member is still read by its code', () => {
+    for (const code of ['enrollment_required', 'envelope_required']) {
+      assert.deepEqual(
+        findEnvelopeAnswer({ error: { code, message: 'this FF1 needs signed requests' } }),
+        { code }
+      );
+    }
+  });
+});
+
 describe('legacy path against a secured FF1', () => {
   test('a plaintext preflight refused with enrollment_required stops with pairing guidance', async () => {
     const casts: string[] = [];
@@ -743,7 +758,13 @@ describe('legacy path against a secured FF1', () => {
       {
         fetchFn: async (_input, init) => {
           casts.push(JSON.parse(String(init?.body)).command);
-          return json(403, { error: { code: 'enrollment_required' } });
+          // §4.4: the plaintext refusal carries a fixed `message` beside `code`.
+          return json(403, {
+            error: {
+              code: 'enrollment_required',
+              message: 'this FF1 needs signed requests: update the Feral File app or ff-cli',
+            },
+          });
         },
         controllerStore: { dir: storeDir },
       }

@@ -3,9 +3,9 @@
 These files are a verbatim copy of
 `components/feral-controld/control/testdata/fixtures/` from
 `feral-file/ffos-user`, branch `feat/3551-control-protocol`, commit
-`502bb8612b5d322886304bd731265f9c3436b87c`
-("feat(control): owner-initiated registration, self-revoke, LAN-only
-requestAccess"). 63 JSON files: keys.json, 16 positive and 46 negative.
+`a02cca04092cd5df3dff089dce422a8bae8195d7`
+("fix(control): review follow-ups on registration and route rules"). 74 JSON
+files: keys.json, 16 positive and 57 negative.
 
 The normative spec is `docs/ff1-control-v1.md` in the same commit; §12 defines
 the fixture format. The Go generator is

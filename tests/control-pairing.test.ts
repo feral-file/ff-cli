@@ -249,6 +249,36 @@ describe('device pair (owner-initiated registration)', () => {
     assert.equal(loadController(DEVICE_ID, stagingStore({ dir: storeDir })), null);
   });
 
+  test('nothing is sent to the FF1 while the pairing is open; enroll is the first request', async () => {
+    // §13: a request signed before the keys are registered could be replayed
+    // from the relay once they are, so ff-cli sends no command meanwhile.
+    const store = { dir: storeDir };
+    createController({ profile, label: 'old' }, store);
+    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
+    let requests = 0;
+    const world = ownerWorld((qr, channel, registered) => {
+      assert.equal(requests, 0, 'nothing sent before the QR is shown');
+      channel.push('not a result');
+      setTimeout(() => {
+        assert.equal(requests, 0, 'nothing sent while waiting');
+        approve()(qr, channel, registered);
+      }, 20);
+    });
+    const fetchFn = world.deps.fetchFn!;
+    await pairDevice(device, options, {
+      ...world.deps,
+      fetchFn: async (input, init) => {
+        requests += 1;
+        return fetchFn(input, init);
+      },
+    });
+    assert.equal(requests, 1);
+    assert.deepEqual(
+      world.fake.seen.map((c) => c.op),
+      ['enroll']
+    );
+  });
+
   test('a declined request fails and saves nothing', async () => {
     const world = ownerWorld((qr, channel) =>
       channel.push(
