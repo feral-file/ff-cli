@@ -81,7 +81,7 @@ The current code and internal context imply these practical goals:
 
 ### Current behavior
 
-Token data for `find`, `build`, and `enrich` comes from Raster's public GraphQL API by default. The Feral File indexer (ff-indexer-v2) remains selectable with `tokenSource: "indexer"` and is deprecated: it is kept only so the vendor can be switched back while Raster is evaluated (feral-file#3576), and will be removed afterwards. One token source answers a whole run; there is no fallback between them.
+Token data for `find`, `build`, and `enrich` comes from the Feral File indexer (ff-indexer-v2) by default. Raster's public GraphQL API is selectable with `tokenSource: "raster"` and is under evaluation as the replacement (feral-file#3576); it stays opt-in until the data bugs reported on feral-file#3546 are fixed. One token source answers a whole run; there is no fallback between them.
 
 ### Design direction
 
@@ -169,7 +169,7 @@ lowercases EVM addresses; they are checksummed before use, so an item's `id`
 whichever source built it. The client's own detection sees a chain name and an
 address and nothing else, so it answers `erc721` for every EVM contract; it
 applies only to rows that carry no standard, and to the CID a lookup by
-coordinate must build before the deprecated indexer has been asked anything. A row naming a chain DP-1 has no word for is recorded
+coordinate must build before the indexer has been asked anything. A row naming a chain DP-1 has no word for is recorded
 as `other` — the item is still built, and the client's guess is never
 substituted for a chain the row already named.
 
@@ -306,7 +306,7 @@ and nothing else. `enrich` is the repair path for those.
   discards the integrity hash the remote manifest is checked against. That
   conversion, if ever wanted, belongs behind its own flag.
 - Enrichment looks each distinct coordinate up once, however many items share
-  it. On Raster the lookups are batched; on the deprecated indexer a token it
+  it. On Raster the lookups are batched; on the indexer a token it
   has not seen triggers an indexing job and a poll that can take minutes, and a
   playlist that repeats a work would otherwise submit that job once per
   appearance.

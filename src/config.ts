@@ -308,7 +308,7 @@ function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: st
 }
 
 const TOKEN_SOURCES: readonly TokenSourceName[] = ['raster', 'indexer'];
-const DEFAULT_TOKEN_SOURCE: TokenSourceName = 'raster';
+const DEFAULT_TOKEN_SOURCE: TokenSourceName = 'indexer';
 const DEFAULT_IPFS_GATEWAY_FERAL_FILE = 'https://ipfs.feralfile.com/ipfs/';
 const DEFAULT_IPFS_GATEWAY = 'https://ipfs.filebase.io/ipfs/';
 
@@ -316,10 +316,9 @@ const DEFAULT_IPFS_GATEWAY = 'https://ipfs.filebase.io/ipfs/';
  * Get the token source selection using repository config priority.
  *
  * `config.json` wins over environment variables, which win over the defaults.
- * Raster is the default vendor; `indexer` is the deprecated ff-indexer-v2 path
- * kept so the vendor can be switched back during the feral-file#3576
- * experiment. There is no fallback between the two at runtime: one vendor
- * answers a whole run.
+ * The Feral File indexer is the default vendor; `raster` is opt-in while
+ * Raster's data bugs (feral-file#3546) are open. There is no fallback between
+ * the two at runtime: one vendor answers a whole run.
  */
 export function getTokenSourceConfig(): TokenSourceConfig {
   return resolveTokenSourceConfig(getConfig());

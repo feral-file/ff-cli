@@ -1,13 +1,11 @@
 /**
  * NFT Indexer Client (ff-indexer-v2).
  *
- * @deprecated The Feral File indexer is no longer the default token source.
- * Raster (src/utilities/token-source-raster.ts) answers token lookups unless
- * `tokenSource: "indexer"` is configured, and this module is kept only so the
- * vendor can be switched back during the feral-file#3576 experiment. It is
- * reached exclusively through src/utilities/token-source-indexer.ts and will
- * be deleted, together with that adapter, once Raster has proven itself.
- * Do not add new callers.
+ * The Feral File indexer is the default token source. Raster
+ * (src/utilities/token-source-raster.ts) answers instead when
+ * `tokenSource: "raster"` is configured (feral-file#3576). This module is
+ * reached exclusively through src/utilities/token-source-indexer.ts; do not
+ * add callers that bypass the TokenSource contract.
  *
  * Vendor-neutral item construction (convertToDP1Item and the standard/chain
  * helpers) lives in src/utilities/token-item.ts and is re-exported here only

@@ -217,7 +217,7 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   console.log(
     chalk.dim(`Resolving ${tokens.length} token${tokens.length === 1 ? '' : 's'} via ${label}...`)
   );
-  // The deprecated indexer warms previously-unseen tokens by polling, which
+  // The indexer warms previously-unseen tokens by polling, which
   // takes minutes on a large series; Raster answers from its own index.
   if (source.name === 'indexer' && tokens.length > 10) {
     console.log(

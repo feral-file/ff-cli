@@ -3,8 +3,8 @@
  * Contains the real logic for querying NFTs and building playlists.
  *
  * Token data comes from the configured token source (token-source.ts):
- * Raster by default, the deprecated Feral File indexer when
- * `tokenSource: "indexer"` is set. This module never names a vendor except to
+ * the Feral File indexer by default, Raster when `tokenSource: "raster"` is
+ * set. This module never names a vendor except to
  * phrase guidance that only makes sense for one of them.
  */
 
@@ -484,7 +484,7 @@ async function buildPlaylistDirect(params, options = {}) {
   console.log(chalk.cyan('\nBuilding playlist from your requirements...\n'));
 
   // One provider for the whole build, so every requirement comes from the
-  // same vendor and the indexer deprecation warning prints once.
+  // same vendor.
   const source = getTokenSource();
 
   // Process each requirement

@@ -1,12 +1,11 @@
 /**
  * Indexer token source: adapter over the ff-indexer-v2 client.
  *
- * @deprecated Raster is the default token source. This adapter exists so the
- * vendor can be switched back with `tokenSource: "indexer"` during the
- * feral-file#3576 experiment. Delete it, together with nft-indexer.js and the
- * `indexer` value of TokenSourceName, once Raster has proven itself. Its
- * behaviour is the pre-Raster behaviour on purpose, including the indexing
- * trigger and the polling that makes unseen tokens slow (ff-cli#132).
+ * The indexer is the default token source. Raster is the opt-in alternative
+ * under evaluation (feral-file#3576); keep both behind the TokenSource
+ * contract so the vendor stays a configuration switch. This adapter keeps the
+ * pre-Raster behaviour on purpose, including the indexing trigger and the
+ * polling that makes unseen tokens slow (ff-cli#132).
  */
 
 import type {
@@ -19,7 +18,7 @@ import type {
 } from './token-source-contract';
 
 // nft-indexer.js is CommonJS and is required lazily so a Raster run never
-// loads the deprecated client at all.
+// loads the indexer client at all.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const loadIndexer = () => require('./nft-indexer');
 
@@ -88,7 +87,7 @@ async function walkOwner(address: string, limit: number | 'all'): Promise<Indexe
   }
 }
 
-/** createIndexerTokenSource builds the deprecated indexer provider. */
+/** createIndexerTokenSource builds the indexer provider. */
 export function createIndexerTokenSource(): TokenSource {
   return {
     name: 'indexer',

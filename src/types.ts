@@ -59,8 +59,8 @@ export interface FF1RelayerConfig {
 /**
  * TokenSourceName names the vendor that answers token lookups.
  *
- * `raster` is the default. `indexer` keeps the deprecated ff-indexer-v2 path
- * reachable during the feral-file#3576 experiment and will be removed with it.
+ * `indexer` (ff-indexer-v2) is the default. `raster` is opt-in while Raster is
+ * evaluated as a replacement (feral-file#3576).
  */
 export type TokenSourceName = 'raster' | 'indexer';
 

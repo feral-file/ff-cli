@@ -36,9 +36,9 @@ describe('token source configuration', () => {
     rmSync(fixtureDir, { recursive: true, force: true });
   });
 
-  test('defaults to Raster with the Feral File and Filebase gateways', () => {
+  test('defaults to the indexer with the Feral File and Filebase gateways', () => {
     assert.deepEqual(getTokenSourceConfig(), {
-      source: 'raster',
+      source: 'indexer',
       ipfsGateways: {
         feralFile: 'https://ipfs.feralfile.com/ipfs/',
         default: 'https://ipfs.filebase.io/ipfs/',
@@ -47,23 +47,23 @@ describe('token source configuration', () => {
   });
 
   test('uses config over environment', () => {
-    process.env.FF_TOKEN_SOURCE = 'raster';
+    process.env.FF_TOKEN_SOURCE = 'indexer';
     process.env.IPFS_GATEWAY_DEFAULT = 'https://env.example/ipfs/';
     writeConfig({
-      tokenSource: 'indexer',
+      tokenSource: 'raster',
       ipfsGateways: { default: 'https://config.example/ipfs' },
     });
     const resolved = getTokenSourceConfig();
-    assert.equal(resolved.source, 'indexer');
+    assert.equal(resolved.source, 'raster');
     assert.equal(resolved.ipfsGateways.default, 'https://config.example/ipfs/');
     assert.equal(resolved.ipfsGateways.feralFile, 'https://ipfs.feralfile.com/ipfs/');
   });
 
   test('uses environment before the defaults', () => {
-    process.env.FF_TOKEN_SOURCE = 'indexer';
+    process.env.FF_TOKEN_SOURCE = 'raster';
     process.env.IPFS_GATEWAY_FERAL_FILE = 'https://gateway.example';
     const resolved = getTokenSourceConfig();
-    assert.equal(resolved.source, 'indexer');
+    assert.equal(resolved.source, 'raster');
     // A bare origin is accepted and normalized to the /ipfs/ path form.
     assert.equal(resolved.ipfsGateways.feralFile, 'https://gateway.example/ipfs/');
   });

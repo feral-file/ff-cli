@@ -62,7 +62,7 @@ export interface AtomicWriteFs {
  *
  * The default destination is the input file, and a plain write truncates it
  * first. Enrichment runs after a network lookup that can be slow (minutes on
- * the deprecated indexer, which warms unseen tokens), so the window between truncation and a complete write is a
+ * the indexer, which warms unseen tokens), so the window between truncation and a complete write is a
  * window in which an interruption, a full disk, or an I/O error leaves the
  * curator with an empty or half-written playlist and no copy of what they had.
  * A rename within the same directory is atomic, so the original file survives

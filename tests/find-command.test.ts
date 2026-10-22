@@ -380,17 +380,15 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.ok(!queries.some((query) => query.includes('TokensByRef')));
   });
 
-  test('tokenSource=indexer warns that it is deprecated and keeps the indexer protocol', async () => {
+  test('the default token source is the indexer, with no deprecation warning', async () => {
     handler = (query) => {
       if (query.includes('ResolveToken(')) {
         return SERIES_HIT;
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
     };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
-      env: { FF_TOKEN_SOURCE: 'indexer' },
-    });
-    assert.match(result.stderr, /tokenSource "indexer" is deprecated/);
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
+    assert.doesNotMatch(result.stderr, /deprecated/);
     assert.match(result.stdout, /Resolving 2 tokens via FF indexer/);
     assert.match(result.stdout, /2\/2 tokens resolved/);
     assert.match(result.stderr, /No tokens could be resolved via FF indexer/);

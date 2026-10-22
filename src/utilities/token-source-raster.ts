@@ -1,5 +1,5 @@
 /**
- * Raster token source: the default provider (feral-file#3576).
+ * Raster token source: the opt-in provider under evaluation (feral-file#3576).
  *
  * Reads token rows from Raster's public GraphQL API and maps each one to the
  * vendor-neutral StandardToken, which token-item.ts turns into a DP-1 item

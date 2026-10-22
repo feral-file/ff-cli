@@ -4,10 +4,10 @@
  * This module turns a StandardToken, the vendor-neutral token shape, into a
  * DP-1 playlist item. It used to live inside nft-indexer.js, which meant the
  * item id, provenance, inline manifest and timing rules would have been
- * deleted along with the ff-indexer-v2 client once that client is retired
+ * deleted along with the ff-indexer-v2 client if Raster replaces it
  * (feral-file#3576). Keeping them here, with no knowledge of any vendor, is
  * what lets two providers emit byte-identical items for the same token: the
- * Raster provider and the deprecated indexer provider both map their rows to
+ * indexer provider and the Raster provider both map their rows to
  * a StandardToken and hand it to convertToDP1Item.
  *
  * Invariants that must not change without a migration of existing playlists:

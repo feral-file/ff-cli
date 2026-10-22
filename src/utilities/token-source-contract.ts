@@ -3,8 +3,8 @@
  * services that answer "which token is this, and what does it display".
  *
  * Commands (`find`, `build`, `enrich`) depend on this contract only. Each
- * vendor is one provider module that implements it: token-source-raster.ts
- * (the default) and token-source-indexer.ts (deprecated, feral-file#3576).
+ * vendor is one provider module that implements it: token-source-indexer.ts
+ * (the default) and token-source-raster.ts (opt-in, feral-file#3576).
  * A future art-catalog-service adapter would be a third provider, and nothing
  * outside token-source.ts would change.
  *
