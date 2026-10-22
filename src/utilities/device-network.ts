@@ -67,6 +67,11 @@ const CONNECT_PHASE_CODES = new Set([
   'UND_ERR_CONNECT_TIMEOUT',
 ]);
 
+// Codes that prove the same only when the failing call was the TCP connect.
+// macOS answers a connect to an absent LAN host with EHOSTDOWN (no ARP reply),
+// where Linux says EHOSTUNREACH.
+const CONNECT_SYSCALL_CODES = new Set(['ETIMEDOUT', 'EHOSTDOWN', 'ENETDOWN', 'EADDRNOTAVAIL']);
+
 /**
  * isConnectPhaseNetworkError reports a send failure that proves the request
  * never reached the FF1, so sending it again (even on another route, with a new
@@ -95,7 +100,9 @@ export function isConnectPhaseNetworkError(error: unknown): boolean {
     if (typeof code !== 'string') {
       return false;
     }
-    return CONNECT_PHASE_CODES.has(code) || (code === 'ETIMEDOUT' && syscall === 'connect');
+    return (
+      CONNECT_PHASE_CODES.has(code) || (syscall === 'connect' && CONNECT_SYSCALL_CODES.has(code))
+    );
   });
 }
 
