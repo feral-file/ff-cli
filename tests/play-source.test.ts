@@ -3,7 +3,11 @@ import { describe, test, before, after } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { buildMediaPlaySource, resolvePlaySource } from '../src/utilities/playlist-source';
+import {
+  buildMediaPlaySource,
+  checkWebPageUrl,
+  resolvePlaySource,
+} from '../src/utilities/playlist-source';
 import { validatePlaylist } from '../src/utilities/playlist-verifier';
 
 const samplePlaylist = {
@@ -237,5 +241,57 @@ describe('resolvePlaySource', () => {
 
     assert.equal(result.valid, false);
     assert.match(result.error ?? '', /items/i);
+  });
+});
+
+describe('checkWebPageUrl (play --web)', () => {
+  const original = global.fetch;
+  const respond = (status: number) => {
+    global.fetch = async () => new Response('page', { status });
+  };
+
+  test('a live page passes with no note', async () => {
+    respond(200);
+    try {
+      assert.equal(await checkWebPageUrl('https://feralfile.com'), undefined);
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a page that answers 404 is refused', async () => {
+    respond(404);
+    try {
+      await assert.rejects(
+        () => checkWebPageUrl('https://feralfile.com/nope'),
+        /Nothing at https:\/\/feralfile\.com\/nope \(HTTP 404\)/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a page the CLI is refused passes with a note', async () => {
+    respond(403);
+    try {
+      assert.match((await checkWebPageUrl('https://example.com/')) ?? '', /HTTP 403/);
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a host that does not resolve is refused', async () => {
+    global.fetch = async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND nope.invalid'), {
+          code: 'ENOTFOUND',
+        }),
+      });
+    };
+    try {
+      await assert.rejects(() => checkWebPageUrl('https://nope.invalid/'), /No such host/);
+    } finally {
+      global.fetch = original;
+    }
   });
 });

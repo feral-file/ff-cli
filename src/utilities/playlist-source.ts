@@ -230,6 +230,97 @@ function looksLikePlaylistUrl(url: string): boolean {
 }
 
 /**
+ * refusalForLoadFailure returns the error `play` must stop with when a URL it
+ * tried to load is known not to exist, or null when it may still be sent.
+ *
+ * Wrapping a URL that does not exist sends the device an error page and
+ * reports "Playing", the silent wrong result an agent trusting exit codes
+ * cannot catch. These are refused:
+ * - HTTP 404 or 410: nothing is there.
+ * - DNS failure (ENOTFOUND): the host does not exist. A temporary resolver
+ *   failure (EAI_AGAIN) is not refused.
+ * - A `.json` URL that cannot be loaded or parsed: a broken playlist link.
+ * Real marketplace pages answer 200 to a command-line client (checked against
+ * OpenSea, Art Blocks, objkt, SuperRare, Feral File, Neort, Verse), so this
+ * rule is safe on discovery hosts too.
+ *
+ * @param {string} url - The URL that failed to load
+ * @param {unknown} failure - What loading threw
+ * @returns {Error | null} The refusal, or null
+ */
+export function refusalForLoadFailure(url: string, failure: unknown): Error | null {
+  const loadFailure = failure as Partial<PlaylistUrlLoadError> | null;
+  if (loadFailure?.status === 404 || loadFailure?.status === 410) {
+    return new Error(
+      `Nothing at ${url} (HTTP ${loadFailure.status}). Check the URL; nothing was sent to the device.`
+    );
+  }
+  if (loadFailure?.code === 'ENOTFOUND') {
+    return new Error(`No such host for ${url}. Check the URL; nothing was sent to the device.`);
+  }
+  if (looksLikePlaylistUrl(url)) {
+    return new Error(
+      `${url} looks like a playlist (.json) but could not be loaded: ${(failure as Error)?.message}`
+    );
+  }
+  return null;
+}
+
+/**
+ * noteForLoadFailure returns the line `play` prints when it sends a URL it
+ * could not read itself, or undefined when the URL was read in full and is
+ * simply not a playlist (an ordinary page or media file).
+ *
+ * @param {unknown} failure - What loading threw
+ * @returns {string | undefined} The note, if any
+ */
+function noteForLoadFailure(failure: unknown): string | undefined {
+  const loadFailure = failure as Partial<PlaylistUrlLoadError> | null;
+  if (loadFailure?.kind === 'json') {
+    return undefined;
+  }
+  return `ff-cli could not read this URL itself (${(failure as Error)?.message}); sending it to the device anyway.`;
+}
+
+/**
+ * checkWebPageUrl fetches a URL that `play --web` is about to send, refusing
+ * one that does not exist and returning a note when it could not be read.
+ *
+ * `--web` skips the playlist probe, so without this check a typo or a dead
+ * link handed to `--web` (the hint `play` prints for marketplace pages) would
+ * be cast as an error page with a successful exit. Only the status line is
+ * needed; the body is cancelled unread. The `.json` rule does not apply: the
+ * caller said this is a page.
+ *
+ * @param {string} url - Trimmed http(s) URL
+ * @returns {Promise<string | undefined>} A note when the URL could not be read
+ * @throws {Error} When the URL answers 404/410 or its host does not resolve
+ */
+export async function checkWebPageUrl(url: string): Promise<string | undefined> {
+  let failure: PlaylistUrlLoadError;
+  try {
+    const response = await fetchWithTimeout(url);
+    await response.body?.cancel().catch(() => undefined);
+    if (response.ok) {
+      return undefined;
+    }
+    failure = new PlaylistUrlLoadError(`HTTP ${response.status} ${response.statusText}`.trim(), {
+      kind: 'status',
+      status: response.status,
+    });
+  } catch (error) {
+    failure = new PlaylistUrlLoadError(`Could not reach ${url}: ${(error as Error).message}`, {
+      kind: 'network',
+      code: networkErrorCode(error),
+    });
+  }
+  if (failure.status === 404 || failure.status === 410 || failure.code === 'ENOTFOUND') {
+    throw refusalForLoadFailure(url, failure);
+  }
+  return noteForLoadFailure(failure);
+}
+
+/**
  * Resolve a `play` command argument to a playable source.
  *
  * Files are always treated as playlists. URLs are tried as playlists first;
@@ -241,15 +332,11 @@ function looksLikePlaylistUrl(url: string): boolean {
  * is no cheap way to distinguish a 200-OK media file from a malformed
  * playlist response without trying to parse it.
  *
- * Not every failure falls back. Wrapping a URL that does not exist sends the
- * device a 404 page and reports "Playing", the silent wrong result an agent
- * trusting exit codes cannot catch. So these fail instead:
- * - HTTP 404 or 410: nothing is there.
- * - DNS failure (ENOTFOUND): the host does not exist.
- * - A `.json` URL that cannot be loaded or parsed: a broken playlist link.
- * Other failures (403 from bot protection, 5xx, timeouts) still fall back,
- * with a `note`, because the device fetches media itself and often succeeds
- * where a command-line client is refused.
+ * Not every failure falls back: a URL that does not exist is refused (see
+ * refusalForLoadFailure). Other failures (403 from bot protection, 5xx,
+ * timeouts, a body cut off mid-download) still fall back, with a `note`,
+ * because the device fetches media itself and often succeeds where a
+ * command-line client is refused.
  *
  * @param source - User-supplied path or URL
  * @param defaultDuration - Explicit duration (seconds) for the synthesized
@@ -287,26 +374,13 @@ export async function resolvePlaySource(
       source: loaded.source,
     };
   } catch (error) {
-    const failure = error as PlaylistUrlLoadError;
-    if (failure.status === 404 || failure.status === 410) {
-      throw new Error(
-        `Nothing at ${trimmed} (HTTP ${failure.status}). Check the URL; nothing was sent to the device.`
-      );
+    const refusal = refusalForLoadFailure(trimmed, error);
+    if (refusal) {
+      throw refusal;
     }
-    if (failure.code === 'ENOTFOUND') {
-      throw new Error(
-        `No such host for ${trimmed}. Check the URL; nothing was sent to the device.`
-      );
-    }
-    if (looksLikePlaylistUrl(trimmed)) {
-      throw new Error(
-        `${trimmed} looks like a playlist (.json) but could not be loaded: ${failure.message}`
-      );
-    }
-    const note =
-      failure.kind === 'json'
-        ? undefined
-        : `ff-cli could not read this URL itself (${failure.message}); sending it to the device anyway.`;
-    return buildMediaPlaySource(trimmed, { duration: defaultDuration, note });
+    return buildMediaPlaySource(trimmed, {
+      duration: defaultDuration,
+      note: noteForLoadFailure(error),
+    });
   }
 }

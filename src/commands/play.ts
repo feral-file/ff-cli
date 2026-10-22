@@ -4,8 +4,10 @@ import { parseFindInput } from '@feralfile/source-resolver';
 import { getPlaylistConfig } from '../config';
 import {
   buildMediaPlaySource,
+  checkWebPageUrl,
   isPlaylistSourceUrl,
   loadPlaylistSource,
+  refusalForLoadFailure,
   resolvePlaySource,
   type PlaySource,
 } from '../utilities/playlist-source';
@@ -84,6 +86,12 @@ export function describeDiscoveryInput(source: string): string | null {
  * redirects to `find` instead of being wrapped as a web item. The probe
  * costs one fetch before a redirect, only for discovery inputs that are
  * http(s) URLs; coordinates and wallet addresses never hit the network.
+ *
+ * A URL that does not exist (404/410, no such host, a broken `.json` link)
+ * is refused here rather than redirected: the redirect also suggests
+ * `play --web`, which would cast the error page.
+ *
+ * @throws {Error} When the URL does not exist (refusalForLoadFailure)
  */
 export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlaySource | null> {
   if (!isPlaylistSourceUrl(source)) {
@@ -101,7 +109,11 @@ export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlayS
       sourceType: loaded.sourceType,
       source: loaded.source,
     };
-  } catch {
+  } catch (error) {
+    const refusal = refusalForLoadFailure(source.trim(), error);
+    if (refusal) {
+      throw refusal;
+    }
     return null;
   }
 }
@@ -125,7 +137,8 @@ async function resolveWebPageSource(source: string): Promise<PlaySource> {
   if (!isPlaylistSourceUrl(url)) {
     throw new Error(`--web takes an http(s) URL; got "${source}".`);
   }
-  return buildMediaPlaySource(url, { mimeType: 'text/html' });
+  const note = await checkWebPageUrl(url);
+  return buildMediaPlaySource(url, { mimeType: 'text/html', note });
 }
 
 export const playCommand = new Command('play')
