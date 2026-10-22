@@ -221,16 +221,23 @@ describe('resolvePlaySource', () => {
     }
   });
 
-  test('buildMediaPlaySource with text/html times the item as a page, like an ordinary page URL', async () => {
-    // --web forces the page path for any URL. Its timing must match what an
-    // extensionless page URL gets, not the static-image default.
-    const forced = await buildMediaPlaySource('https://feralfile.com/artworks/a.png', {
-      mimeType: 'text/html',
-    });
-    const page = await buildMediaPlaySource('https://example.com/');
-    assert.equal(forced.kind, 'media');
-    assert.equal(forced.playlist.items[0].source, 'https://feralfile.com/artworks/a.png');
-    assert.equal(forced.playlist.items[0].duration, page.playlist.items[0].duration);
+  test('a forced page is timed as a page even when its URL looks like media', async () => {
+    // --web says the URL is a page. A path ending in .mp4 must not turn it into
+    // open-ended video timing (no duration, display.loop false).
+    const forced = await buildMediaPlaySource('https://example.com/page.mp4', { asWebPage: true });
+    const asVideo = await buildMediaPlaySource('https://example.com/page.mp4');
+    const page = await buildMediaPlaySource('https://example.com/page');
+    const forcedItem = forced.playlist.items[0] as {
+      duration?: number;
+      display?: { loop?: boolean };
+    };
+    const videoItem = asVideo.playlist.items[0] as {
+      duration?: number;
+      display?: { loop?: boolean };
+    };
+    assert.equal(videoItem.display?.loop, false, 'precondition: an .mp4 URL is timed as video');
+    assert.notEqual(forcedItem.display?.loop, false);
+    assert.equal(forcedItem.duration, page.playlist.items[0].duration);
   });
 
   test('validatePlaylist rejects a structurally invalid playlist', async () => {

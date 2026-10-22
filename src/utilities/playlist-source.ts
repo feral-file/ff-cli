@@ -198,15 +198,15 @@ export type PlaySource =
  * @param {string} url - Trimmed http(s) URL
  * @param {Object} [options] - Item options
  * @param {number} [options.duration] - Explicit display seconds; omit for auto timing
- * @param {string} [options.mimeType] - Timing hint; `text/html` plays open-ended as a page
+ * @param {boolean} [options.asWebPage] - Time the item as a page whatever the URL looks like
  * @param {string} [options.note] - Carried to the caller (see PlaySource.note)
  * @returns {Promise<PlaySource>} A `media` play source
  */
 export async function buildMediaPlaySource(
   url: string,
-  options: { duration?: number; mimeType?: string; note?: string } = {}
+  options: { duration?: number; asWebPage?: boolean; note?: string } = {}
 ): Promise<PlaySource> {
-  const item = buildUrlItem(url, options.duration, { mimeType: options.mimeType });
+  const item = buildUrlItem(url, options.duration, { asWebPage: options.asWebPage });
   const playlist = (await buildDP1Playlist({ items: [item], title: item.title })) as Playlist;
   return options.note
     ? { kind: 'media', playlist, source: url, note: options.note }

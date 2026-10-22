@@ -138,7 +138,7 @@ async function resolveWebPageSource(source: string): Promise<PlaySource> {
     throw new Error(`--web takes an http(s) URL; got "${source}".`);
   }
   const note = await checkWebPageUrl(url);
-  return buildMediaPlaySource(url, { mimeType: 'text/html', note });
+  return buildMediaPlaySource(url, { asWebPage: true, note });
 }
 
 export const playCommand = new Command('play')
