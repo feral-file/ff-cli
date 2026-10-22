@@ -27,6 +27,7 @@ import {
 } from '../src/utilities/control/controller-store';
 import {
   REPLAY_COUNTER_JUMP,
+  type SecureTransportDeps,
   findEnvelopeAnswer,
   sendSecureRequest,
 } from '../src/utilities/control/secure-transport';
@@ -919,14 +920,7 @@ describe('secure sshAccess', () => {
 // These exercise the existing endpoint fixture through the new carrier; no
 // registration contract or crypto is implemented by the transport tests.
 describe('secure generic carrier integration', () => {
-  type Mode =
-    | 'verified'
-    | 'empty-channel'
-    | 'never-admitted'
-    | 'lost-command-reply'
-    | 'no-receipt'
-    | 'duplicate-ok-first'
-    | 'duplicate-replay-first';
+  type Mode = 'verified' | 'empty-channel' | 'never-admitted' | 'lost-command-reply' | 'no-receipt';
 
   /**
    * carrierSocket is a relay with a stranger and the FF1 on the device
@@ -977,14 +971,6 @@ describe('secure generic carrier integration', () => {
         this.control({ type: 'ack', from: 'ff1', id: header.id });
         this.reply('stranger', body.messageID, { v: 1, jwe: 'forged-candidate' });
         const answer = device.handle(body.message as Record<string, unknown>).json;
-        if (mode.startsWith('duplicate')) {
-          // The FF1 got two copies (fan-out plus a late-joiner copy); the
-          // second is answered with a verified replay.
-          const replay = device.handle(body.message as Record<string, unknown>).json;
-          const order = mode === 'duplicate-ok-first' ? [answer, replay] : [replay, answer];
-          order.forEach((reply) => this.reply('ff1', body.messageID, reply));
-          return;
-        }
         if (mode === 'lost-command-reply') {
           this.dispatchEvent(new Event('close'));
           return;
@@ -1095,9 +1081,78 @@ describe('secure generic carrier integration', () => {
     assert.equal(legacyCalls, 0, 'a written frame may have reached the FF1');
   });
 
+  /**
+   * sendWithTwoCopies runs one v2 command through a fake relay client that
+   * delivers the sealed request to the FF1 twice (a fan-out plus a
+   * late-joiner copy): the first copy runs, the second is answered with a
+   * verified `replay`. Both replies are verified, strictly one after the
+   * other and in the given order, and the request settles with
+   * `settleWith`. No timers: the order is fixed on every platform.
+   */
+  async function sendWithTwoCopies(order: 'ok-first' | 'replay-first', settleWith: 0 | 1) {
+    const record = enrolledRecord('owner');
+    const device = fakeDevice();
+    let legacyCalls = 0;
+    const relayClientFn = () => ({
+      close: () => undefined,
+      requestPrepared: async (
+        prepare: () => Promise<{
+          command: string;
+          request: Record<string, unknown>;
+          verify: (value: Record<string, unknown>) => Promise<boolean>;
+        }>
+      ) => {
+        const prepared = await prepare();
+        const message = { command: prepared.command, request: prepared.request };
+        const ok = device.handle(message).json;
+        const replay = device.handle(message).json;
+        const replies = (order === 'ok-first' ? [ok, replay] : [replay, ok]).map((answer) => ({
+          type: 'RPC',
+          messageID: 'm',
+          message: answer,
+        }));
+        for (const reply of replies) {
+          assert.equal(await prepared.verify(reply), true);
+        }
+        return replies[settleWith];
+      },
+    });
+    const outcome = await sendSecureRequest(
+      {
+        device: { id: DEVICE_ID, host: HOST },
+        op: 'cmd',
+        cmd: 'next',
+        req: {},
+        retry: false,
+        relayerFallback: true,
+      },
+      record,
+      {
+        relayClientFn: relayClientFn as unknown as SecureTransportDeps['relayClientFn'],
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        getRelayerConfigFn: () => ({
+          baseUrl: 'https://legacy.test',
+          v2Endpoint: 'wss://v2.test',
+          v2Explicit: true,
+        }),
+        getTopicIdFn: () => 'optional-topic',
+        noticeFn: () => undefined,
+        fetchFn: async (input, init) => {
+          if (new URL(input.toString()).origin === HOST) {
+            throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+          }
+          legacyCalls++;
+          return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
+        },
+      }
+    );
+    return { outcome, device, legacyCalls };
+  }
+
   test('a verified replay on v2 is an unknown outcome: no counter jump, no resend', async () => {
     const before = loadController(DEVICE_ID, { dir: storeDir })?.ctr ?? 0;
-    const { outcome, device, legacyCalls } = await sendOverCarrier('duplicate-replay-first');
+    const { outcome, device, legacyCalls } = await sendWithTwoCopies('replay-first', 0);
     assert.equal(outcome.kind, 'failed');
     assert.match((outcome as { error: string }).error, /Outcome unknown/);
     assert.equal(legacyCalls, 0);
@@ -1107,9 +1162,12 @@ describe('secure generic carrier integration', () => {
   });
 
   test('the reply that settled the request is the answer, not a later one that also verified', async () => {
-    const { outcome } = await sendOverCarrier('duplicate-ok-first');
+    // The ok reply settles the request; the replay to the second copy
+    // verifies afterwards and must not replace it.
+    const { outcome, legacyCalls } = await sendWithTwoCopies('ok-first', 0);
     assert.equal(outcome.kind, 'reply');
     assert.equal((outcome as { reply: { ok: boolean } }).reply.ok, true);
+    assert.equal(legacyCalls, 0);
   });
 
   test('an ambiguous failure on the cached route forgets relayV2', async () => {

@@ -102,7 +102,12 @@ export interface SecureTransportDeps {
    * self-revoke sets it so v2 honors the same bound as its LAN request.
    */
   v2TimeoutMs?: number;
+  /** Creates the relay v2 client; tests drive replies through a fake. */
+  relayClientFn?: (endpoint: string, deviceId: string) => V2Client;
 }
+
+/** V2Client is the part of RelayClient that sendViaV2 uses. */
+export type V2Client = Pick<RelayClient, 'requestPrepared' | 'close'>;
 
 type ResolvedDeps = Required<Omit<SecureTransportDeps, 'controllerStore' | 'v2TimeoutMs'>> & {
   controllerStore: ControllerStoreOptions;
@@ -166,6 +171,8 @@ function resolveDeps(deps: SecureTransportDeps): ResolvedDeps {
     nowFn: deps.nowFn ?? (() => Math.floor(Date.now() / 1000)),
     controllerStore: deps.controllerStore ?? {},
     v2TimeoutMs: deps.v2TimeoutMs,
+    relayClientFn:
+      deps.relayClientFn ?? ((endpoint, deviceId) => new RelayClient(endpoint, deviceId)),
   };
 }
 
@@ -596,9 +603,9 @@ async function sendViaV2(
   endpoint: string,
   cachedRoute: boolean
 ): Promise<SecureOutcome> {
-  let client: RelayClient;
+  let client: V2Client;
   try {
-    client = new RelayClient(endpoint, record.profile.dev);
+    client = deps.relayClientFn(endpoint, record.profile.dev);
   } catch (error) {
     return { kind: 'failed', unreachable: true, error: (error as Error).message };
   }
