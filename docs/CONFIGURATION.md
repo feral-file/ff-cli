@@ -256,16 +256,19 @@ You can also manage devices independently with:
 - `ff-cli device rename <name> <new-name>` – Rename a device without touching its host, API key, or default status. Works offline; also accepts the host URL as the identifier, so unnamed legacy entries can be given a name.
 - `ff-cli device remove <name>` – Remove a device by name.
 - `ff-cli device default <name>` – Promote a device to the top of the list so it is used when `-d` is omitted.
-- `ff-cli device pair [name]` – Display a one-time handoff code and key-bound
-  security check, then securely receive the device's control profile (current
-  FF OS) or relayer topic (older FF OS) from Feral File mobile. Confirm both
-  values match before sharing in mobile. On current FF OS this pairs ff-cli as
-  a **controller**; see [Secure control pairing](#secure-control-pairing).
+- `ff-cli device pair [name]` – Show a QR code (and the same text to paste)
+  that an owner scans with **Add controller** in the Feral File app; once the
+  owner adds ff-cli, it pins the FF1's control profile from the owner's sealed
+  answer and enrolls as a **controller**. Needs an internet connection, and the
+  FF1 must already have an owner; see
+  [Secure control pairing](#secure-control-pairing).
 - `ff-cli device controllers [name]` – List the controllers paired with an FF1
   and any pending requests (owner only).
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
-- `ff-cli device unpair [name]` – Delete ff-cli's controller keys for an FF1. It always asks first (owner keys get a stronger warning); `-y, --yes` skips the question.
+- `ff-cli device unpair [name]` – Revoke ff-cli's own access on the FF1 (best
+  effort) and delete its controller keys. It always asks first (owner keys get
+  a stronger warning); `-y, --yes` skips the question.
   Owner keys need confirmation (or `--yes`): if no other owner can reach the
   FF1, deleting them leaves it without a reachable owner until a factory reset.
 
@@ -305,16 +308,15 @@ The `intent` field is **required** — without it the device returns `{"message"
 
 When LAN delivery is unreachable, `play` prints an explicit notice and retries
 the same command through `ff1Relayer.baseUrl`. The per-device topic is read from
-the operating system credential vault, never `config.json`. Pair it from the
-mobile app first:
+the operating system credential vault, never `config.json`. It arrives with
+the owner's answer when ff-cli is paired:
 
 ```bash
 ff-cli device pair office
 ```
 
-The CLI and mobile confirmation both show the same 12-hex-digit security check.
-Comparing it authenticates the CLI public key out of band, so an active broker
-cannot silently substitute its own encryption key.
+The topic is only stored when the owner's app sends one (FF1s that still use
+the topic relayer); it is never printed.
 
 The default relayer is
 `https://tv-cast-coordination.autonomy-system.workers.dev`. Override it with
@@ -324,9 +326,9 @@ gate may receive `ff1Relayer.apiKey` or `FF1_RELAYER_API_KEY`; ff-cli never
 bundles that shared key.
 
 Relayer access for paired CLIs will move to relay v2, which routes by FF1
-device ID instead of a topic (feral-file#3551). Nothing changes yet: this
-version still uses the topic relayer, and the controller keys and pairing carry
-over unchanged.
+device ID instead of a topic (feral-file#3551). Commands still use the topic
+relayer; pairing already needs the relay's pairing channel. The controller
+keys and pairing carry over unchanged.
 
 On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
@@ -340,7 +342,7 @@ Compatibility checks:
 
 - If the CLI cannot get a version from the device (e.g. network or malformed response), it continues and sends the command.
 - If the detected version is below the minimum, the command fails early with an error that includes the detected version.
-- `ssh` sends the relayer topic stored by `ff-cli device pair` (OS keyring) in the `X-FF1-Topic` header. A claimed FF1 on newer FF OS rejects `sshAccess` without it (HTTP 401 `topic_required`), so run `ff-cli device pair <name>` before `ff-cli ssh`. With no stored topic the request is sent without the header, which unclaimed devices and older FF OS accept.
+- `ssh` sends the relayer topic stored by `ff-cli device pair` (OS keyring) in the `X-FF1-Topic` header. A claimed FF1 on newer FF OS rejects plaintext `sshAccess` without it (HTTP 401 `topic_required`). With no stored topic the request is sent without the header, which unclaimed devices and older FF OS accept.
 
 - When ff-cli is paired as a controller (a controller file exists for the
   device), the preflight, `play` and `ssh` are all sent as secure envelopes
@@ -353,32 +355,53 @@ v1). The FF1 itself decides who may do what; the LAN and the relayer only carry
 encrypted, signed requests. ff-cli takes part as a controller:
 
 ```bash
-ff-cli device pair office                 # receive the profile, request access, wait
+ff-cli device pair office                 # show the QR, wait for an owner, enroll
 ff-cli device pair office --label studio  # name the owner sees (default: hostname); 1-64 characters,
                                           # no control or invisible formatting (bidi, zero-width) characters
-ff-cli device pair office --timeout 600   # wait longer for approval (seconds, at most 600)
-ff-cli device pair office --resume        # continue after Ctrl-C or a timeout
+ff-cli device pair office --timeout 600   # wait longer for an owner (seconds, 10-600; default 300)
+ff-cli device pair office --resume        # finish a pairing an owner already approved
 ff-cli device pair office --yes           # replace a pairing for another FF1 identity without asking
 ```
 
-1. In Feral File mobile choose **Pair with ff-cli** and enter the one-time
-   code. The app sends the FF1's public control profile (and, while the FF1
-   still uses it, the relayer topic). ff-cli pins that profile: every reply
-   must be signed by its key.
-2. ff-cli creates its controller keys and asks the FF1 for access (LAN first,
-   relayer if the LAN is unreachable), then prints a **6-digit approval code**.
-3. On an owner's phone, the Feral File app shows the request with its own code.
-   Approve only when the two codes match. The code is bound to the FF1 identity
-   ff-cli pinned, so a device impersonating the FF1 on your network produces a
-   different code.
-4. ff-cli checks for the approval every 2 seconds (5 minutes by default) and
-   prints the role it was granted.
+Pairing is owner-initiated, like adding an SSH key: nothing is requested from
+the FF1 and no code is compared.
+
+1. ff-cli shows a QR code and the same text to paste (`ff1-ctl:1|…`). It
+   carries this computer's public controller keys, a one-time pairing secret
+   and a relay channel ID. The QR uses this computer's existing keys for the
+   FF1 when it has them, so a re-pair (after a revoke, a role change or a
+   factory reset) keeps one controller ID on the FF1.
+2. On an owner's phone, open the FF1 in the Feral File app, choose **Add
+   controller**, scan the code (or paste the text), and pick the role.
+3. The app registers ff-cli on the FF1, then sends ff-cli a sealed answer over
+   the relay channel. ff-cli accepts only an answer it can open with this
+   run's keys that carries its pairing secret, its own controller ID, and the
+   configured FF1's device ID; anything else on the channel is ignored. It pins
+   the FF1's control profile from that answer: every reply must then be signed
+   by its key.
+4. ff-cli enrolls with the FF1 (LAN first, relayer if the LAN is unreachable)
+   and prints the role it was granted.
+
+Pairing needs an internet connection: the relay carries the owner's answer and
+keeps nothing. It also needs an FF1 that already has an owner (choose **Secure
+this FF1** in the app first); ff-cli cannot become an FF1's first owner. If no
+owner answers within the timeout, the pairing is "not completed", not
+rejected: nothing is saved, and running `device pair` again shows a new code.
+If an owner declines, the command fails and saves nothing. If the owner's
+answer arrived but enrolling did not finish (the FF1 was unreachable, Ctrl-C),
+`ff-cli device pair <name> --resume` finishes it without a new code.
 
 If ff-cli is already paired with the FF1 under a different identity (the FF1
-was factory reset, or the app sent an out-of-date one), it asks before pairing
-again, and keeps the current keys in place until the new pairing is approved:
-a refused or abandoned pairing never loses an existing grant. The pending
-replacement is kept in `controllers/pairing/` until then.
+was factory reset), it asks before replacing that pairing, and keeps the
+current keys in place until the new pairing is enrolled: a declined or
+abandoned pairing never loses an existing grant. The pending replacement is
+kept in `controllers/pairing/` until then.
+
+`ff-cli device unpair <name>` first asks the FF1 to revoke ff-cli's own access
+(a sealed self-revoke, best effort with a short timeout), then deletes the keys
+whatever the answer. Older FF OS refuses a controller's self-revoke, and an FF1
+never lets its last owner revoke itself; in those cases the FF1 keeps listing
+the controller until an owner revokes it.
 
 Roles:
 
@@ -393,8 +416,9 @@ $XDG_CONFIG_HOME/ff-cli/controllers/<device ID>.json   # default ~/.config/ff-cl
 ```
 
 The file holds this computer's private controller keys, the pinned FF1 profile
-(generation and key pins), the granted role and notification key, and the
-request counter. ff-cli creates it with mode `0600` inside a `0700` directory
+(generation and key pins), facts from the owner's answer (channel, FF1 name,
+role, expiry), the granted role, expiry and notification key, and the request
+counter. ff-cli creates it with mode `0600` inside a `0700` directory
 and replaces it atomically on every write. It is never printed or logged.
 **Windows:** mode bits do not apply; the file relies on the ACL of your user
 profile directory, so keep `%USERPROFILE%\.config` private to your account.
@@ -402,8 +426,11 @@ profile directory, so keep `%USERPROFILE%\.config` private to your account.
 Treat the file like an SSH private key: anyone who copies it can act as this
 controller until an owner revokes it. Do not restore it from an old backup —
 the counter inside must only grow, and an FF1 rejects reused counters
-(`replay`). If that happens, run `ff-cli device pair <name>` again: the current
-keys stay in place until the new pairing is approved. A controller file that
+(`replay`). When an FF1 answers `replay` in a reply signed by its key, ff-cli
+moves the counter ahead and sends the command once more as a new request. If
+it keeps happening, check that no other computer uses a copy of the file, then
+run `ff-cli device pair <name>` again: the current keys stay in place until the
+new pairing is finished. A controller file that
 cannot be read (permissions, a program holding it) is never overwritten; a
 corrupt one is moved aside to `<device ID>.json.corrupt-<time>` (after a
 question, or `--yes`) before a new pairing.
@@ -411,8 +438,8 @@ question, or `--yes`) before a new pairing.
 
 Requests go to `POST /api/cast` as
 `{"command":"ff1Envelope","request":{"v":1,"jwe":"…"}}` on the LAN. When the
-LAN is unreachable, `play`, pairing (`device pair`), `device controllers` and
-`device revoke` go through the relayer instead (they are encrypted and signed
+LAN is unreachable, `play`, enrolling (`device pair`), `device controllers`,
+`device revoke` and unpair's self-revoke go through the relayer instead (they are encrypted and signed
 either way); the version preflight and `ssh` stay LAN-only. Each attempt,
 including every retry, is a new request with a new counter. FF1s on older FF OS
 (no controller file for them) keep the plaintext path described above.
@@ -421,14 +448,16 @@ Errors and what to do:
 
 | Message | Cause | Fix |
 |---|---|---|
-| "This FF1 is secured and only accepts requests from paired controllers." | The FF1 refuses plaintext and ff-cli is not paired | `ff-cli device pair <name>`, approve in the app |
-| "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys | `ff-cli device pair <name>` (or `--resume`), approve in the app |
+| "This FF1 is secured and only accepts requests from paired controllers." | The FF1 refuses plaintext and ff-cli is not paired | `ff-cli device pair <name>`; an owner scans the code with **Add controller** |
+| "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys | `ff-cli device pair <name>` (or `--resume`); an owner scans the code with **Add controller** |
+| "Pairing was not completed: no owner answered…" | No verified answer reached ff-cli before `--timeout` | Run `ff-cli device pair <name>` again (needs internet) |
+| "Pairing is not available in this build of ff-cli…" | This build has no relay pairing channel yet | Update ff-cli |
 | "This command needs owner access…" | `ssh` or controller management with a controller grant | An owner grants the owner role in the app |
-| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is approved). Do not unpair |
+| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is finished). Do not unpair |
 | "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, `ff-cli device pair <name>`. Do not unpair |
 | "The FF1 is busy; try again." | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request) | Run the command again |
-| "The FF1 rejected the access request … as invalid." | The pairing label contains characters the FF1 refuses | Pair again with a plain `--label` |
-| "The FF1 did not accept the access request…" | An owner denied it in the last few minutes, or nobody secured the FF1 in the app | Wait a few minutes and pair again, or in the app choose **Secure this FF1**, then pair |
+| "The FF1 has no grant for ff-cli, although an owner's Feral File app reported adding it." | An owner removed ff-cli again before it enrolled | `ff-cli device pair <name>` |
+| "The FF1 rejected the request counter as already used." | The counter is still behind after ff-cli moved it ahead once (another computer uses a copy of the file) | Stop the other copy; run the command again. Do not unpair |
 | "The FF1 rejected the request as malformed." | Usually a clock more than 5 minutes ahead of the FF1's | Fix the clock on this computer (or let the FF1 finish setting its time), then retry |
 
 Troubleshooting note:
