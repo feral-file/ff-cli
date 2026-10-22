@@ -11,6 +11,7 @@ import { createPrompt, promptYesNo } from './helpers/prompt';
 import { configuredFF1Devices } from '../utilities/config-placeholders';
 import { parsePlaylistPrivateKeyToKeyObject } from '../utilities/ed25519-key-derive';
 import { resolveExplicitSigningKey } from '../utilities/signing-key-source';
+import { playlistSigningDidKey } from '../utilities/signing-identity';
 import {
   DP1_PLAYLIST_SIGNING_ROLES,
   resolveDp1PlaylistSigningRole,
@@ -21,9 +22,72 @@ interface SetupOptions {
   key?: string;
   keyFile?: string;
   generateKey?: boolean;
+  force?: boolean;
   role?: string;
   deviceHost?: string;
   deviceName?: string;
+}
+
+/**
+ * didKeyOrNull derives the signing identity for key material, or null when the
+ * material does not parse (a placeholder or corrupt value is not an identity
+ * anyone owns playlists with).
+ *
+ * @param {string} keyMaterial - Configured or supplied key material
+ * @returns {string | null} The did:key, or null
+ */
+function didKeyOrNull(keyMaterial: string): string | null {
+  try {
+    return playlistSigningDidKey(keyMaterial);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * assertKeyReplacementAllowed refuses to replace a configured signing key with
+ * a different one unless the caller passed --force.
+ *
+ * The configured key is the curator identity that owns every playlist it
+ * published: `publish --replace` and `unpublish` only accept that key. setup
+ * keeps no copy of the old key, so replacing it silently is permanent. This
+ * happened in practice: an agent ran the documented `setup --non-interactive
+ * --generate-key` on a machine that was already configured and swapped its
+ * owner key without a word. The interactive "Keep existing signing key?"
+ * question is its own confirmation and does not come through here.
+ *
+ * "Configured" means the identity signing uses today: the config key, or
+ * PLAYLIST_PRIVATE_KEY when config holds none. A config key always wins over
+ * the environment (getPlaylistConfig), so writing one would mask an
+ * environment identity just as surely as overwriting a config key.
+ *
+ * @param {string} currentKey - Effective key material (may be a placeholder or empty)
+ * @param {string} nextKey - Key material setup is about to write
+ * @param {string} flag - The flag that asked for the change, named in the error
+ * @param {boolean} force - Whether --force was passed
+ * @param {string} [source] - Where currentKey came from, when not config.json
+ * @throws {Error} When an existing, different identity would be replaced without --force
+ */
+function assertKeyReplacementAllowed(
+  currentKey: string,
+  nextKey: string,
+  flag: string,
+  force: boolean,
+  source?: string
+): void {
+  if (force || isMissingConfigValue(currentKey)) {
+    return;
+  }
+  const currentDid = didKeyOrNull(currentKey);
+  if (currentDid === null || currentDid === didKeyOrNull(nextKey)) {
+    return;
+  }
+  throw new Error(
+    `A signing key is already configured (${currentDid}${source ? `, from ${source}` : ''}). ` +
+      'It owns the playlists you published; ' +
+      'replacing it means you can no longer replace or unpublish them. ' +
+      `Re-run without ${flag} to keep it, or add --force to replace it.`
+  );
 }
 
 /** Generate a fresh Ed25519 signing key as base64 PKCS#8 DER (the recommended form). */
@@ -46,7 +110,11 @@ export const setupCommand = new Command('setup')
     '--key-file <path>',
     'Read the signing key from this file instead of the command line (preferred for provisioning)'
   )
-  .option('--generate-key', 'Generate a new Ed25519 signing key')
+  .option('--generate-key', 'Generate a new Ed25519 signing key (only when none is configured)')
+  .option(
+    '--force',
+    'Allow --generate-key, --key, or --key-file to replace a configured signing key (it owns your published playlists)'
+  )
   .option('--role <role>', `Signing role (${DP1_PLAYLIST_SIGNING_ROLES.join(', ')})`)
   .option(
     '--device-host <host>',
@@ -112,19 +180,40 @@ export const setupCommand = new Command('setup')
       let signingKey = currentKey;
       let signingRole = currentRole;
 
+      // The identity signing uses today. With no usable key in config, signing falls back to
+      // PLAYLIST_PRIVATE_KEY, and a config key written now would silently take its place.
+      const envKey = process.env.PLAYLIST_PRIVATE_KEY?.trim() || '';
+      const keyFromEnv = isMissingConfigValue(currentKey) && !isMissingConfigValue(envKey);
+      const effectiveKey = keyFromEnv ? envKey : currentKey;
+      const keySource = keyFromEnv ? 'PLAYLIST_PRIVATE_KEY' : undefined;
+      const force = Boolean(options.force);
+
       // Already resolved and validated above, before any file was created.
       if (explicitKey !== undefined) {
+        assertKeyReplacementAllowed(
+          effectiveKey,
+          explicitKey.material,
+          explicitKey.flag,
+          force,
+          keySource
+        );
         signingKey = explicitKey.material;
       } else if (nonInteractive) {
         // Key precedence with no explicit key: --generate-key, then keep an
         // existing usable key, otherwise generate one so signing works.
-        if (options.generateKey || isMissingConfigValue(currentKey)) {
-          signingKey = generateSigningKeyBase64();
+        if (options.generateKey || isMissingConfigValue(effectiveKey)) {
+          const generated = generateSigningKeyBase64();
+          assertKeyReplacementAllowed(effectiveKey, generated, '--generate-key', force, keySource);
+          signingKey = generated;
           console.log(chalk.dim('Generated a new Ed25519 signing key.'));
+        } else if (keyFromEnv) {
+          console.log(chalk.dim('Signing with PLAYLIST_PRIVATE_KEY; config.json keeps no key.'));
         }
       } else {
-        if (isMissingConfigValue(currentKey)) {
+        if (isMissingConfigValue(effectiveKey)) {
           signingKey = generateSigningKeyBase64();
+        } else if (keyFromEnv) {
+          console.log(chalk.dim('Signing with PLAYLIST_PRIVATE_KEY; config.json keeps no key.'));
         } else {
           const ask = getAsk();
           const keepKey = await promptYesNo(ask, 'Keep existing signing key?', true);
@@ -137,7 +226,9 @@ export const setupCommand = new Command('setup')
         }
       }
 
-      if (signingKey) {
+      // The role applies to whichever identity signs, including PLAYLIST_PRIVATE_KEY when
+      // config keeps no key; skipping it there silently dropped --role.
+      if (signingKey || keyFromEnv) {
         if (nonInteractive) {
           // Role precedence: --role, then existing role, then 'agent'.
           try {
@@ -171,7 +262,9 @@ export const setupCommand = new Command('setup')
 
         config.playlist = {
           ...(config.playlist || {}),
-          privateKey: signingKey,
+          // With the identity in PLAYLIST_PRIVATE_KEY, keep whatever config held (empty or a
+          // placeholder) so the environment key keeps signing.
+          privateKey: signingKey || (config.playlist?.privateKey ?? ''),
           role: signingRole,
         };
       }

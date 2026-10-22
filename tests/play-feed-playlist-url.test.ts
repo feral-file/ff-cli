@@ -80,10 +80,17 @@ describe('probeDiscoveryUrlAsPlaylist — feed playlist URLs play directly', () 
     assert.equal(await probeDiscoveryUrlAsPlaylist(FEED_URL), null);
   });
 
-  test('an HTTP error fails the probe', async () => {
-    mockFetchOnce('not found', 404);
+  test('a server error fails the probe and keeps redirecting', async () => {
+    mockFetchOnce('upstream down', 502);
 
     assert.equal(await probeDiscoveryUrlAsPlaylist(FEED_URL), null);
+  });
+
+  test('a URL that does not exist is refused, not redirected', async () => {
+    // The redirect also suggests `play --web`, which would cast the error page.
+    mockFetchOnce('not found', 404);
+
+    await assert.rejects(() => probeDiscoveryUrlAsPlaylist(FEED_URL), /Nothing at .* \(HTTP 404\)/);
   });
 
   test('non-URL discovery inputs are never probed', async () => {

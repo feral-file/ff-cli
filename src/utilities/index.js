@@ -276,9 +276,11 @@ async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
  * @param {Object} requirement - build_playlist requirement
  * @param {number} [duration] - Explicit display seconds
  * @param {Object} source - Active token source
+ * @param {Object} [report] - Filled with `missing` and `wanted` when named
+ *   token ids do not all resolve
  * @returns {Promise<Array<Object>>} DP-1 items
  */
-async function queryTokenIdsRequirement(requirement, duration, source) {
+async function queryTokenIdsRequirement(requirement, duration, source, report = {}) {
   const { blockchain, contractAddress, tokenIds, quantity } = requirement;
   console.log(
     chalk.cyan(
@@ -314,6 +316,14 @@ async function queryTokenIdsRequirement(requirement, duration, source) {
 
   const coords = tokenIds.map((tokenId) => ({ chain: knownChain, contractAddress, tokenId }));
   let items = await resolveCoordinates(coords, duration, source);
+  // Named token ids are an exact request: each one that does not resolve is
+  // something the caller asked for and did not get. The build loop turns this
+  // into a failure, so a playlist missing a named work never exits 0. Count
+  // before the quantity cap below, which would otherwise hide the miss.
+  if (items.length < coords.length) {
+    report.missing = coords.length - items.length;
+    report.wanted = coords.length;
+  }
   if (items.length > 0) {
     console.log(chalk.green(`✓ Got ${items.length} item(s)`));
   } else {
@@ -337,9 +347,11 @@ async function queryTokenIdsRequirement(requirement, duration, source) {
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @param {Object} [source] - Token source; defaults to the configured one.
  *   buildPlaylistDirect passes one so a whole build uses one vendor.
+ * @param {Object} [report] - Collects partial misses for named token ids
+ *   (see queryTokenIdsRequirement)
  * @returns {Promise<Array>} Array of DP-1 playlist items
  */
-async function queryRequirement(requirement, duration, source = getTokenSource()) {
+async function queryRequirement(requirement, duration, source = getTokenSource(), report = {}) {
   const { type, ownerAddress, playlistName, quantity, artworkId } = requirement;
 
   if (type === 'query_address') {
@@ -370,7 +382,7 @@ async function queryRequirement(requirement, duration, source = getTokenSource()
   }
 
   try {
-    return await queryTokenIdsRequirement(requirement, duration, source);
+    return await queryTokenIdsRequirement(requirement, duration, source, report);
   } catch (error) {
     // A capability error is already a complete sentence that the build loop
     // prints as the requirement's failure; printing it here too doubles it.
@@ -470,13 +482,20 @@ function shuffleArray(array) {
  * @param {Object} options - Build options
  * @param {boolean} [options.verbose] - Verbose output
  * @param {string} [options.outputPath] - Output file path
- * @returns {Promise<Object>} Result with playlist
+ * @returns {Promise<Object>} Result with playlist, publish outcome, and
+ *   `failures`: one line per requirement, send, or publish that did not happen
+ *   (empty when everything asked for succeeded)
  */
 async function buildPlaylistDirect(params, options = {}) {
   const { requirements, playlistSettings } = params;
   const { verbose = false, outputPath = 'playlist.json' } = options;
 
   const allItems = [];
+  // Everything the caller asked for that did not happen. The playlist is still
+  // saved when some of it is missing, but the command must not report a clean
+  // success: an agent trusting the exit code would otherwise hand over a
+  // partial playlist, or claim a playlist is on the wall when the send failed.
+  const failures = [];
   // Undefined means auto timing: video/audio items omit duration and play
   // their natural length (DP-1 §4.1); static items get the configured default.
   const duration = playlistSettings.durationPerItem;
@@ -497,10 +516,21 @@ async function buildPlaylistDirect(params, options = {}) {
     );
 
     try {
-      const items = await queryRequirement(requirement, duration, source);
+      const report = {};
+      const items = await queryRequirement(requirement, duration, source, report);
       allItems.push(...items);
+      // Some requirement types report "nothing found" by returning no items
+      // rather than throwing (fetch_feed does). It is the same miss.
+      if (items.length === 0) {
+        failures.push(`Requirement ${reqNum}: no items found`);
+      } else if (report.missing) {
+        failures.push(
+          `Requirement ${reqNum}: ${report.missing} of ${report.wanted} named tokens could not be resolved`
+        );
+      }
     } catch (error) {
       console.error(chalk.red(`  Failed: ${error.message}`));
+      failures.push(`Requirement ${reqNum}: ${error.message}`);
       if (verbose) {
         console.error(chalk.dim(error.stack));
       }
@@ -539,7 +569,10 @@ async function buildPlaylistDirect(params, options = {}) {
   // Send to device if requested
   if (playlistSettings.deviceName !== undefined) {
     console.log(chalk.cyan('\nSending to device...'));
-    await sendToDevice(playlist, playlistSettings.deviceName);
+    const sendResult = await sendToDevice(playlist, playlistSettings.deviceName);
+    if (!sendResult || !sendResult.success) {
+      failures.push(`Send to device: ${sendResult?.error || 'failed'}`);
+    }
   }
 
   // Publish to feed server if requested
@@ -560,12 +593,14 @@ async function buildPlaylistDirect(params, options = {}) {
         }
       } else {
         console.error(chalk.red(`Publish failed: ${publishResult.error}`));
+        failures.push(`Publish: ${publishResult.error}`);
         if (publishResult.message) {
           console.error(chalk.dim(`   ${publishResult.message}`));
         }
       }
     } catch (error) {
       console.error(chalk.red(`Publish failed: ${error.message}`));
+      failures.push(`Publish: ${error.message}`);
       if (verbose) {
         console.error(chalk.dim(error.stack));
       }
@@ -576,6 +611,7 @@ async function buildPlaylistDirect(params, options = {}) {
     playlist,
     published: publishResult?.success || false,
     publishResult,
+    failures,
   };
 }
 

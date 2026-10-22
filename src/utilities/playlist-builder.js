@@ -684,6 +684,8 @@ function detectMimeType(url) {
  *   (DP-1 §4.1). Needed when the URL has no file extension to detect from —
  *   e.g. extensionless IPFS gateway URLs, where without this hint a video
  *   would be misclassified as a static image and stamped a fixed duration.
+ * @param {boolean} [options.asWebPage] - Time the item as a web page whatever
+ *   the URL's extension says (`play --web`)
  * @returns {Object} DP1 playlist item
  */
 function buildUrlItem(url, duration, options = {}) {
@@ -732,12 +734,15 @@ function buildUrlItem(url, duration, options = {}) {
   // instead of the static-image default.
   const mimeHint = options.mimeType || (detectMimeType(sourceUrl) === '' ? 'text/html' : undefined);
 
-  applyTimingToItemBuilder(
-    itemBuilder,
-    { sourceUrl, mimeType: mimeHint },
-    duration,
-    buildDefaultDisplay()
-  );
+  // `play --web` says the URL is a page whatever its path looks like. Timing
+  // checks the URL extension before the MIME hint, so a page served at
+  // /page.mp4 would otherwise be timed as video (no duration, loop false);
+  // leaving the URL out of the timing hints makes the page timing win.
+  const timingHints = options.asWebPage
+    ? { mimeType: 'text/html' }
+    : { sourceUrl, mimeType: mimeHint };
+
+  applyTimingToItemBuilder(itemBuilder, timingHints, duration, buildDefaultDisplay());
 
   return itemBuilder.build();
 }

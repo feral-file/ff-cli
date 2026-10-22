@@ -83,9 +83,11 @@ describe('play delivery signing contract', () => {
       'utf-8'
     );
 
+    // A real media response: OK, not JSON. A 404 here would now be refused
+    // before signing (a URL that does not exist is not sent to the device).
     mediaServer = createServer((_req, res) => {
-      res.writeHead(404, { 'Content-Type': 'text/plain' });
-      res.end('not found');
+      res.writeHead(200, { 'Content-Type': 'video/mp4' });
+      res.end(Buffer.from([0, 0, 0, 24, 102, 116, 121, 112]));
     });
 
     await new Promise<void>((resolvePromise) => mediaServer.listen(0, resolvePromise));

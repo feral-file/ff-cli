@@ -122,7 +122,9 @@ deviceCommand
     let prompt: ReturnType<typeof createPrompt> | null = null;
     const ask = async (question: string): Promise<string> => {
       if (!prompt) {
-        prompt = createPrompt();
+        prompt = createPrompt(
+          'Pass --host http://<device-ip>:1111 and --name <name> to add or update a device without questions.'
+        );
       }
       return prompt.ask(question);
     };

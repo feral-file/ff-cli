@@ -177,6 +177,8 @@ export interface BuildPlaylistResult {
   success: boolean;
   playlist?: Playlist;
   error?: string;
+  /** One line per requirement, send, or publish that did not happen; empty on full success. */
+  failures?: string[];
   [key: string]: unknown;
 }
 

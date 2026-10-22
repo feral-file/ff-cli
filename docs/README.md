@@ -29,7 +29,10 @@ ff-cli setup --non-interactive --key-file /run/secrets/ff-signing.key \
 ```
 
 `--key` and `--key-file` together is an error, and an empty or unreadable key file is refused rather
-than quietly generating a new identity for the machine. See
+than quietly generating a new identity for the machine. Setup also never replaces a signing key that is
+already configured: `--generate-key`, `--key`, and `--key-file` refuse when a different key is in place,
+because that key owns every playlist you published (`publish --replace` and `unpublish` accept only it).
+Add `--force` to replace it anyway. See
 [Where the signing key can come from](./CONFIGURATION.md#where-the-signing-key-can-come-from).
 
 See the full configuration reference here: `./CONFIGURATION.md`.
@@ -105,8 +108,9 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 
 ## Commands (cheat sheet)
 
-- `build [params.json]` – Deterministic build from JSON or stdin
+- `build [params.json]` – Deterministic build from JSON or stdin. `ff-cli build --help` lists the requirement types and settings
   - Options: `-o, --output <file>`, `-v, --verbose`
+  - Exits 1 when any requirement finds nothing or fails, when named `tokenIds` do not all resolve, or when the send to `playlistSettings.deviceName` fails. The playlist is still saved when anything was collected; when nothing was, no file is written
 - `validate <file-or-url>` – Validate playlist structure only
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
@@ -116,13 +120,18 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Signing **appends** by default, so repeated runs accumulate endorsements. That is only correct while the signed content is unchanged: editing a signed playlist moves bytes the earlier signatures cover, and the envelope check then refuses to write the result. `--replace-signatures` discards every existing entry — including a feed's own co-signature — and signs the document as it stands. It is the required step before `publish --replace`
   - **An in-place run refuses when it would discard a still-valid signature from another key**, since only its holder could make that signature again: write the result elsewhere with `-o, --output`, which leaves the original where it is. The refusal is about what cannot be recovered — an in-place run still proceeds when the only entries dropped are your own, or ones that no longer verify
   - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, and verifies it against the document as it now stands. Your own earlier signature is replaced by the same run. Another key's entry that **still verifies** — which is every entry when the content was not edited, since the signing payload excludes `signatures` — is reported as removed; keep the previous file if you want it back. An entry that does **not** verify is reported as exactly that and no more: the command has only the document as it stands, so it cannot tell an edit from an entry that was never valid, and it does not guess. Roles are carried through as found (`agent`, `institution` and `licensor` are as valid as `curator`), and a flat legacy `signature` is reported as not checkable, since it carries no key or role at all
-- `play <source>` – Play a playlist file, playlist URL, or media URL on an FF1 device (runs `verify` before sending; only the CLI-synthesized media URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
-  - Options: `-d, --device <name>`, `--skip-verify` (skip signature verification; not recommended)
+- `play <source>` – Play a playlist file, playlist URL, media URL, or web page on an FF1 device (runs `verify` before sending; only the CLI-synthesized media/web URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
+  - Any URL that does not load as a playlist is sent as a single item: a media file plays as media, and anything else plays as a web page
+  - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never cast as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
+  - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` plays the page itself instead
+  - Options: `-d, --device <name>`, `--web` (play the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
   - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `--no-play` (never cast; combine with `-y` to build and save without playing), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it plays the playlist on a device, so add `--no-play` to skip casting), `--skip-verify`
+  - A wallet address picks one work by the artist at that address. For what a wallet owns, use `build` with a `query_address` requirement
+  - Without a terminal, pass `-y`: a question with no terminal to answer it fails with exit 1 and names the flag, rather than waiting or exiting 0 with nothing built
 - `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards. With the opt-in Raster token source no still image is supplied, so `enrich` adds artist and description but no thumbnail; thumbnails come from the default indexer source
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`
@@ -160,7 +169,8 @@ ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
 # Save without playing
 ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 -o send-receive.json
 
-# Wallet address (owner lookup); cap the number of tokens with --limit
+# Wallet address: one work by the artist at that address; cap the number of tokens with --limit
+# (for what a wallet owns, use build with a query_address requirement)
 ff-cli find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
 
 # Build and publish to a configured feed server
@@ -265,8 +275,12 @@ npm run dev -- play playlist.json -d "Living Room Display"
 # Play a hosted DP-1 playlist
 npm run dev -- play "https://cdn.example.com/playlist.json"
 
-# Play a media URL directly
+# Play a media URL or any web page directly
 npm run dev -- play "https://example.com/video.mp4"
+npm run dev -- play "https://example.com/"
+
+# Play a page on a marketplace site as a page (play would otherwise send it to find)
+npm run dev -- play --web "https://feralfile.com/"
 
 # Skip signature verification only if you must send a non-conformant payload (not recommended)
 npm run dev -- play playlist.json --skip-verify
@@ -298,8 +312,8 @@ ff-cli ssh disable -d "Living Room Display"
 ### Publish to feed server
 
 ```bash
-# Publish to first configured feed server
-npm run dev -- publish playlist.json
+# Publish to the first configured feed server (-s is required when more than one is configured)
+npm run dev -- publish playlist.json -s 0
 
 # Publish to specific server (if multiple configured)
 npm run dev -- publish playlist.json -s 0
@@ -453,7 +467,7 @@ Setup preserves existing devices when adding new ones. See selection rules and e
 
 ## Constraints
 
-- Max 20 items total across all requirements
+- Per-requirement caps: `build_playlist` up to 20 with `tokenIds` (100 without), `query_address` up to 100 when `quantity` is a number (omitted or `"all"` takes the whole wallet), `fetch_feed` up to 20. Requirements add up; there is no total cap beyond DP-1's 1024 items
 - Per-source caps enforced in utilities
 - Per-item timing: when no duration is given, video/audio items carry **no** `duration` and `display.loop: false`, so the player advances at end-of-stream (DP-1 §4.1) — the media plays its natural length. Static items use `defaultDuration` (10s unless configured). An explicit duration always wins.
 

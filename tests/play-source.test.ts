@@ -3,7 +3,11 @@ import { describe, test, before, after } from 'node:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { resolvePlaySource } from '../src/utilities/playlist-source';
+import {
+  buildMediaPlaySource,
+  checkWebPageUrl,
+  resolvePlaySource,
+} from '../src/utilities/playlist-source';
 import { validatePlaylist } from '../src/utilities/playlist-verifier';
 
 const samplePlaylist = {
@@ -103,16 +107,137 @@ describe('resolvePlaySource', () => {
     }
   });
 
-  test('falls back to kind=media when a URL returns a non-OK status', async () => {
+  test('falls back to kind=media with a note when the server refuses the CLI', async () => {
+    // Bot protection often answers 403 to a command-line client while the
+    // device, fetching as a browser, gets the page. Send it, but say so.
     const original = global.fetch;
-    global.fetch = async () => new Response('not found', { status: 404 });
+    global.fetch = async () => new Response('forbidden', { status: 403 });
 
     try {
       const result = await resolvePlaySource('https://example.com/clip.mp4', 10);
       assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.match(result.note ?? '', /403/);
+        assert.match(result.note ?? '', /sending it to the device anyway/);
+      }
     } finally {
       global.fetch = original;
     }
+  });
+
+  test('an ordinary web page wraps as media with no note', async () => {
+    const original = global.fetch;
+    global.fetch = async () =>
+      new Response('<html><body>art</body></html>', {
+        status: 200,
+        headers: { 'Content-Type': 'text/html' },
+      });
+
+    try {
+      const result = await resolvePlaySource('https://example.com/', undefined);
+      assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.equal(result.note, undefined);
+        assert.equal(result.playlist.items[0].source, 'https://example.com/');
+      }
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a download cut off mid-body wraps as media with a note', async () => {
+    // An interrupted read says nothing about whether the URL is a playlist,
+    // so it must not pass silently like an ordinary page.
+    const original = global.fetch;
+    global.fetch = async () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('{"dpVersion":'));
+            controller.error(new Error('socket hang up'));
+          },
+        }),
+        { status: 200 }
+      );
+
+    try {
+      const result = await resolvePlaySource('https://example.com/feed/latest', 10);
+      assert.equal(result.kind, 'media');
+      if (result.kind === 'media') {
+        assert.match(result.note ?? '', /socket hang up/);
+      }
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  for (const status of [404, 410]) {
+    test(`refuses a URL that answers ${status} instead of casting the error page`, async () => {
+      const original = global.fetch;
+      global.fetch = async () => new Response('gone', { status });
+
+      try {
+        await assert.rejects(
+          () => resolvePlaySource('https://example.com/missing', 10),
+          new RegExp(`Nothing at https://example\\.com/missing \\(HTTP ${status}\\)`)
+        );
+      } finally {
+        global.fetch = original;
+      }
+    });
+  }
+
+  test('refuses a host that does not resolve', async () => {
+    const original = global.fetch;
+    global.fetch = async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND nope.invalid'), {
+          code: 'ENOTFOUND',
+        }),
+      });
+    };
+
+    try {
+      await assert.rejects(
+        () => resolvePlaySource('https://nope.invalid/page', 10),
+        /No such host for https:\/\/nope\.invalid\/page/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('refuses a .json URL that cannot be loaded as a playlist', async () => {
+    const original = global.fetch;
+    global.fetch = async () => new Response('upstream down', { status: 502 });
+
+    try {
+      await assert.rejects(
+        () => resolvePlaySource('https://cdn.example.com/playlist.json', 10),
+        /looks like a playlist \(\.json\) but could not be loaded/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a forced page is timed as a page even when its URL looks like media', async () => {
+    // --web says the URL is a page. A path ending in .mp4 must not turn it into
+    // open-ended video timing (no duration, display.loop false).
+    const forced = await buildMediaPlaySource('https://example.com/page.mp4', { asWebPage: true });
+    const asVideo = await buildMediaPlaySource('https://example.com/page.mp4');
+    const page = await buildMediaPlaySource('https://example.com/page');
+    const forcedItem = forced.playlist.items[0] as {
+      duration?: number;
+      display?: { loop?: boolean };
+    };
+    const videoItem = asVideo.playlist.items[0] as {
+      duration?: number;
+      display?: { loop?: boolean };
+    };
+    assert.equal(videoItem.display?.loop, false, 'precondition: an .mp4 URL is timed as video');
+    assert.notEqual(forcedItem.display?.loop, false);
+    assert.equal(forcedItem.duration, page.playlist.items[0].duration);
   });
 
   test('validatePlaylist rejects a structurally invalid playlist', async () => {
@@ -123,5 +248,57 @@ describe('resolvePlaySource', () => {
 
     assert.equal(result.valid, false);
     assert.match(result.error ?? '', /items/i);
+  });
+});
+
+describe('checkWebPageUrl (play --web)', () => {
+  const original = global.fetch;
+  const respond = (status: number) => {
+    global.fetch = async () => new Response('page', { status });
+  };
+
+  test('a live page passes with no note', async () => {
+    respond(200);
+    try {
+      assert.equal(await checkWebPageUrl('https://feralfile.com'), undefined);
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a page that answers 404 is refused', async () => {
+    respond(404);
+    try {
+      await assert.rejects(
+        () => checkWebPageUrl('https://feralfile.com/nope'),
+        /Nothing at https:\/\/feralfile\.com\/nope \(HTTP 404\)/
+      );
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a page the CLI is refused passes with a note', async () => {
+    respond(403);
+    try {
+      assert.match((await checkWebPageUrl('https://example.com/')) ?? '', /HTTP 403/);
+    } finally {
+      global.fetch = original;
+    }
+  });
+
+  test('a host that does not resolve is refused', async () => {
+    global.fetch = async () => {
+      throw new TypeError('fetch failed', {
+        cause: Object.assign(new Error('getaddrinfo ENOTFOUND nope.invalid'), {
+          code: 'ENOTFOUND',
+        }),
+      });
+    };
+    try {
+      await assert.rejects(() => checkWebPageUrl('https://nope.invalid/'), /No such host/);
+    } finally {
+      global.fetch = original;
+    }
   });
 });

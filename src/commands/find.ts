@@ -88,11 +88,31 @@ type BuildToken = TokenCoords & { rasterToken: RasterToken | null };
 
 const RASTER_PAGE_SIZE = 100;
 
+/**
+ * FIND_NON_INTERACTIVE_HINT is what `find` tells a caller without a terminal
+ * when one of its questions comes up. `-y` answers every question with its
+ * default, and that default is Play, so the hint names `--no-play` in the same
+ * breath for a caller that only wants the file.
+ */
+const FIND_NON_INTERACTIVE_HINT =
+  'Re-run with -y to accept the defaults (it builds the playlist and plays it on your FF1); add --no-play to only save it.';
+
+/**
+ * playAPageHint points a caller who handed `find` a page it cannot resolve to
+ * the command that shows a page as it is.
+ *
+ * @param {string} input - The URL the caller gave `find`
+ * @returns {string} One line naming `ff-cli play --web`
+ */
+function playAPageHint(input: string): string {
+  return `To show this page itself on your FF1, run: ff-cli play --web "${input}"`;
+}
+
 export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address (picks one work by the artist at that address; for what a wallet owns, see `ff-cli build --help`)'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -123,6 +143,13 @@ export const findCommand = new Command('find')
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
         );
+        // A plain web page or media URL is not an artwork lookup at all; `play`
+        // casts those directly, so name it rather than leave the caller stuck.
+        if (/^https?:\/\//i.test(input.trim())) {
+          console.error(
+            chalk.dim(`To play a web page or media URL as it is, run: ff-cli play "${input}"`)
+          );
+        }
         process.exit(1);
       }
       if (parsed.kind === 'unsupported') {
@@ -132,6 +159,9 @@ export const findCommand = new Command('find')
           return;
         }
         console.error(chalk.red(parsed.reason));
+        // `play` sends unrecognized pages on these hosts here, so the way out
+        // of that loop has to be printed on this side too.
+        console.error(chalk.dim(playAPageHint(input)));
         process.exit(1);
       }
 
@@ -365,6 +395,15 @@ async function resolveTarget(
     if (catalog.length === 0) {
       throw new Error('Artist has no artworks indexed on Raster.');
     }
+    // A wallet address reads naturally as "what this wallet owns", and this
+    // path builds something else: one work by the artist at the address. Say
+    // so every time, so neither a person nor an agent mistakes the result.
+    console.log(
+      chalk.dim(
+        'find on an address plays one work by the artist at that address. ' +
+          'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
+      )
+    );
     const picked = await pickFromCatalog(catalog, skipPrompt);
     return {
       kind: 'series',
@@ -571,7 +610,7 @@ async function pickFromCatalog(
     console.log(chalk.dim(`  ${i}: ${row.title}`));
   });
   console.log();
-  const prompt = createPrompt();
+  const prompt = createPrompt(FIND_NON_INTERACTIVE_HINT);
   const answer = await prompt.ask(`Pick one (0-${catalog.length - 1}, default 0): `);
   prompt.close();
   console.log();
@@ -587,7 +626,7 @@ async function pickFromCatalog(
 async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boolean> {
   const noun = count === 1 ? 'token' : 'tokens';
   const label = hasMore ? `the first ${count} ${noun}` : `${count} ${noun}`;
-  const prompt = createPrompt();
+  const prompt = createPrompt(FIND_NON_INTERACTIVE_HINT);
   const yes = await promptYesNo(prompt.ask, `Build playlist with ${label}?`, true);
   prompt.close();
   console.log();
@@ -634,7 +673,9 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
 export type { FindOptions, BuildToken, ResolvedTarget };
 
 async function promptNextAction(): Promise<PostBuildAction> {
-  const prompt = createPrompt();
+  const prompt = createPrompt(
+    'The playlist is saved. Pass --play to cast it, or --publish to publish it.'
+  );
   const answer = (
     await prompt.ask('Next? [P]lay on FF1 / just [S]ave / pub[L]ish to feed (default: Play): ')
   )
