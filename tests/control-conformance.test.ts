@@ -3,6 +3,8 @@
  * every vector in tests/fixtures/ff1-control-v1 (vendored from the Go
  * reference; see SOURCE.md there) against the CLI codec, plus round-trips of
  * the CLI's own requests through an independent node:crypto device opener.
+ * The controllerQR and registration vectors (§5.6) run in
+ * tests/control-registration.test.ts.
  */
 
 import assert from 'node:assert/strict';
@@ -85,11 +87,21 @@ describe('ff1-control-v1 fixture inventory', () => {
   test('every fixture kind is handled', () => {
     const kinds = new Set([...positive, ...negative].map((f) => f.kind));
     for (const kind of kinds) {
-      assert.ok(['request', 'notification', 'reply', 'approvalCode'].includes(kind), kind);
+      assert.ok(
+        [
+          'request',
+          'notification',
+          'reply',
+          'approvalCode',
+          'controllerQR',
+          'registration',
+        ].includes(kind),
+        kind
+      );
     }
-    // 43 files at ffos-user 4ba8b18: keys.json + 10 positive + 32 negative.
-    assert.equal(positive.length, 10);
-    assert.equal(negative.length, 32);
+    // 63 files at ffos-user 502bb86: keys.json + 16 positive + 46 negative.
+    assert.equal(positive.length, 16);
+    assert.equal(negative.length, 46);
   });
 
   test('the reordered-ctr vector is accepted (ctr inside the window, unseen)', async () => {
@@ -199,25 +211,33 @@ describe('positive request vectors', () => {
         }
       });
 
-      test('a request the CLI seals with the same claims opens on the device side', async () => {
-        const c = f.claims as RequestClaims;
-        const sealed = await sealRequest({
-          profile,
-          keys: controllerKeys(f.from as string),
-          ctr: c.ctr,
-          op: c.op,
-          cmd: c.cmd,
-          req: c.req,
-          enroll: c.enroll,
-          now: c.iat,
-          lifetimeSeconds: c.exp - c.iat,
-          rid: c.rid,
-          rk: b64uDecode(c.rk),
-        });
-        const opened = openRequest(sealed.compact, device.enc, grants);
-        assert.equal(opened.payload, f.payload);
-        assert.deepEqual(opened.claims, f.claims);
-      });
+      // ff-cli no longer sends requestAccess (§5.2 is a LAN-only fallback it
+      // does not offer), so its builder refuses that op; the vector's bytes
+      // are still checked above.
+      const sends = (f.claims as RequestClaims).op !== ('requestAccess' as string);
+      test(
+        'a request the CLI seals with the same claims opens on the device side',
+        { skip: !sends },
+        async () => {
+          const c = f.claims as RequestClaims;
+          const sealed = await sealRequest({
+            profile,
+            keys: controllerKeys(f.from as string),
+            ctr: c.ctr,
+            op: c.op,
+            cmd: c.cmd,
+            req: c.req,
+            enroll: c.enroll,
+            now: c.iat,
+            lifetimeSeconds: c.exp - c.iat,
+            rid: c.rid,
+            rk: b64uDecode(c.rk),
+          });
+          const opened = openRequest(sealed.compact, device.enc, grants);
+          assert.equal(opened.payload, f.payload);
+          assert.deepEqual(opened.claims, f.claims);
+        }
+      );
 
       test('with the vector epk and IV the CLI reproduces the Go ciphertext', async () => {
         // jose emits epk members as x,crv,kty,y and Go as crv,kty,x,y, so the
