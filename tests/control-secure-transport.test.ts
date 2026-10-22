@@ -20,9 +20,10 @@ import {
   loadController,
   markEnrolled,
   nextCounter,
+  recordRegistration,
   saveController,
-  updateLabel,
 } from '../src/utilities/control/controller-store';
+import { REPLAY_COUNTER_JUMP, sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
 import { sendSshAccessCommand } from '../src/utilities/ssh-access';
 import { FakeFF1, sealReply, type Jwk } from './helpers/control-device';
@@ -193,7 +194,7 @@ describe('controller key store', () => {
     assert.equal(deleteController(DEVICE_ID, { dir: storeDir }), true);
   });
 
-  test('a label update re-reads under the lock and keeps a newer counter', () => {
+  test('storing a registration result re-reads under the lock and keeps a newer counter', () => {
     const stale = createController(
       { profile: parseProfile(keys.device.profile), label: 'a' },
       { dir: storeDir }
@@ -201,10 +202,18 @@ describe('controller key store', () => {
     nextCounter(DEVICE_ID, { dir: storeDir });
     nextCounter(DEVICE_ID, { dir: storeDir });
     assert.equal(stale.ctr, 0); // the caller's copy is out of date
-    const updated = updateLabel(DEVICE_ID, 'b', { dir: storeDir });
+    const registration = {
+      channelId: '7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9',
+      deviceName: 'Office',
+      role: 'controller' as const,
+      receivedAt: NOW,
+    };
+    const updated = recordRegistration(DEVICE_ID, { label: 'b', registration }, { dir: storeDir });
     assert.equal(updated.ctr, 2);
-    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 2);
-    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.label, 'b');
+    const reloaded = loadController(DEVICE_ID, { dir: storeDir })!;
+    assert.equal(reloaded.ctr, 2);
+    assert.equal(reloaded.label, 'b');
+    assert.deepEqual(reloaded.registration, registration);
   });
 
   test('a failed atomic write leaves no temp file with key material', () => {
@@ -554,7 +563,7 @@ describe('secure displayPlaylist', () => {
     assert.equal(result.success, false);
     assert.match(result.error!, /revoked/);
     assert.match(result.details!, /ff-cli device pair Office/);
-    assert.match(result.details!, /approve/);
+    assert.match(result.details!, /Add controller/);
     // The preflight refusal stops the command before the playlist is sent.
     assert.deepEqual(
       device.seen.map((c) => c.cmd),
@@ -652,6 +661,77 @@ describe('secure displayPlaylist', () => {
     assert.equal(result.success, false);
     assert.match(result.details!, /--resume/);
     assert.equal(calls, 0);
+  });
+});
+
+describe('replay recovery (§14.4)', () => {
+  const device = { name: 'Office', id: DEVICE_ID, host: HOST };
+  const request = {
+    device,
+    op: 'cmd' as const,
+    cmd: 'getDeviceStatus',
+    req: {},
+    relayerFallback: false,
+    retry: false,
+  };
+
+  test('a verified replay moves the counter ahead and sends the command once more', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice((claims) =>
+      Number(claims.ctr) < REPLAY_COUNTER_JUMP
+        ? { ok: false, code: 'replay' }
+        : { ok: true, res: {} }
+    );
+    const outcome = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(outcome.kind === 'reply' && outcome.reply.ok, true);
+    assert.deepEqual(
+      fake.seen.map((c) => c.ctr),
+      [1, REPLAY_COUNTER_JUMP + 2]
+    );
+    assert.notEqual(fake.seen[0].rid, fake.seen[1].rid);
+    assert.notEqual(fake.seen[0].rk, fake.seen[1].rk);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, REPLAY_COUNTER_JUMP + 2);
+  });
+
+  test('a second verified replay is not retried again', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ ok: false, code: 'replay' }));
+    const result = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(result.kind === 'reply' && result.reply.code, 'replay');
+    assert.equal(fake.seen.length, 2);
+  });
+
+  test('a public replay is never evidence: no counter jump, no retry', async () => {
+    const record = enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ publicCode: 'replay' }));
+    const outcome = await sendSecureRequest(request, record, {
+      fetchFn: lanFetch(fake),
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(outcome.kind, 'public');
+    assert.equal(fake.seen.length, 1);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.ctr, 1);
+  });
+
+  test('a replay that persists is reported without advising unpair', async () => {
+    enrolledRecord('owner');
+    const fake = fakeDevice(() => ({ ok: false, code: 'replay' }));
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      { fetchFn: lanFetch(fake), controllerStore: { dir: storeDir }, nowFn: () => NOW }
+    );
+    assert.equal(result.success, false);
+    assert.match(result.details!, /moved its request counter ahead/);
+    assert.match(result.details!, /Do not unpair/);
   });
 });
 

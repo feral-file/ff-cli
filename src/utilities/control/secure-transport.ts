@@ -19,6 +19,10 @@
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
  *   only, and retrying would hand an attacker a free oracle.
+ * - A `replay` in a reply that VERIFIED under the pinned devSig is the one
+ *   answer that moves the counter: it proves the request did not run, so the
+ *   counter jumps past the FF1's window and the command is sent once more
+ *   (§14.4). A public error is never evidence of this.
  */
 
 import { defaultDeadlineFetch } from '../http';
@@ -48,6 +52,7 @@ import {
   isEnrolled,
   loadController,
   nextCounter,
+  skipCounterAhead,
 } from './controller-store';
 import {
   type ControlFailure,
@@ -63,6 +68,12 @@ const MAX_RETRY_DELAY_MS = 30_000;
 // §4.4 public errors come back as LAN 401/403, and `busy` (the device was
 // authenticating too many envelopes at once; nothing was executed) as 503.
 const PUBLIC_ERROR_STATUSES = new Set([401, 403, 503]);
+/**
+ * REPLAY_COUNTER_JUMP is how far a verified `replay` moves the counter. The
+ * spec asks for at least the 64-entry window; a restored backup can be many
+ * requests behind, and skipped counters cost nothing, so one jump covers it.
+ */
+export const REPLAY_COUNTER_JUMP = 1024;
 
 export type Transport = 'lan' | 'relayer';
 
@@ -165,7 +176,7 @@ export function findSecureController(
       failure: {
         code: 'pending',
         error: 'Pairing ff-cli with this FF1 is not finished.',
-        details: `Run \`${pairCommand(device.name ?? device.id)} --resume\` and approve the request in the Feral File app on an owner's phone, or run \`${unpairCommand(device.name ?? device.id)}\` to go back to unpaired access.`,
+        details: `Run \`${pairCommand(device.name ?? device.id)} --resume\` to finish it, or run \`${unpairCommand(device.name ?? device.id)}\` to go back to unpaired access.`,
       },
     };
   }
@@ -334,6 +345,8 @@ function isDeadlineError(error: unknown): boolean {
 
 /**
  * sendSecureRequest delivers one logical command and returns its outcome.
+ * A verified `replay` (the counter fell behind the FF1's window) moves the
+ * counter ahead and sends the command once more as a new request (§14.4).
  *
  * @param request - The command and its routing rules
  * @param record - The device's enrolled (or, for pairing, pending) controller record
@@ -346,6 +359,31 @@ export async function sendSecureRequest(
   overrides: SecureTransportDeps = {}
 ): Promise<SecureOutcome> {
   const deps = resolveDeps(overrides);
+  const outcome = await sendOnce(request, record, deps);
+  if (outcome.kind !== 'reply' || outcome.reply.ok || outcome.reply.code !== 'replay') {
+    return outcome;
+  }
+  try {
+    skipCounterAhead(request.device.id, REPLAY_COUNTER_JUMP, deps.controllerStore);
+  } catch (error) {
+    logger.debug(`Could not move the controller counter ahead: ${(error as Error).message}`);
+    return outcome;
+  }
+  logger.debug(
+    `The FF1 answered replay; counter moved ahead by ${REPLAY_COUNTER_JUMP}, retrying once`
+  );
+  return sendOnce(request, record, deps);
+}
+
+/**
+ * sendOnce is one logical delivery: the LAN with its retry budget, then the
+ * relayer when the LAN was unreachable.
+ */
+async function sendOnce(
+  request: SecureRequest,
+  record: ControllerRecord,
+  deps: ResolvedDeps
+): Promise<SecureOutcome> {
   const attempts = request.retry ? RETRY_ATTEMPTS : 1;
   let last: SecureOutcome | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -362,8 +400,8 @@ export async function sendSecureRequest(
         };
       }
       // §14.4: a command may be sent again (new ctr, LAN or relayer) only when
-      // the failure proves it never left this machine. requestAccess and
-      // enroll are idempotent on the FF1 (§5.2, §5.3), so they keep retrying.
+      // the failure proves it never left this machine. enroll is idempotent
+      // on the FF1 (§5.3), so it keeps retrying.
       if (request.op === 'cmd' && !isConnectPhaseNetworkError(error)) {
         return outcomeUnknown(request, error as Error);
       }

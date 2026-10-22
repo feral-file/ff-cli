@@ -1,14 +1,18 @@
 /**
  * Command actions for FF1 controller pairing and management
- * (`ff-cli device pair|controllers|revoke|unpair`, feral-file#3551 M6).
+ * (`ff-cli device pair|controllers|revoke|unpair`, feral-file#3551).
  *
  * Copy rules: never print private key material or the relayer topic; print
- * the controllerId (a public thumbprint) and the approval code freely.
+ * the controllerId (a public thumbprint) freely. The controller QR and its
+ * pasteable string carry the one-time pairing secret by design (§5.6): they
+ * are shown for the owner to scan and are useless once this run ends.
  */
 
 import chalk from 'chalk';
+import qrcodeTerminal from 'qrcode-terminal';
+import * as logger from '../../logger';
 import { resolveConfiguredDevice } from '../../utilities/ff1-compatibility';
-import { type HandoffPayload, HandoffReceiver } from '../../utilities/handoff-client';
+import { fetchWithTimeout } from '../../utilities/http';
 import { storeTopicId } from '../../utilities/topic-store';
 import { createPrompt, promptYesNo } from './prompt';
 import type { FF1Device } from '../../types';
@@ -23,19 +27,35 @@ import {
   dropStagedController,
   isEnrolled,
   loadController,
+  normalizeDeviceId,
   promoteStagedController,
+  sameIdentity,
   stagingStore,
 } from '../../utilities/control/controller-store';
 import {
   DEFAULT_PAIR_TIMEOUT_MS,
+  type EnrollResult,
   MAX_PAIR_TIMEOUT_MS,
+  chooseControllerKeys,
   defaultControllerLabel,
-  localApprovalCode,
-  pollEnrollment,
-  prepareController,
-  requestAccess,
-  sameIdentity,
+  enrollRegistered,
+  prepareRegisteredController,
+  registrationRecordOf,
 } from '../../utilities/control/pairing';
+import {
+  type PairingChannel,
+  type PairingChannelOpener,
+  PairingTransportUnavailableError,
+  pairingChannelOpener,
+} from '../../utilities/control/pairing-channel';
+import {
+  type PairingMaterial,
+  type RegistrationResult,
+  controllerQrCtl,
+  controllerQrString,
+  generatePairingMaterial,
+  openRegistration,
+} from '../../utilities/control/registration';
 import {
   type SecureCommandResult,
   type SecureTransportDeps,
@@ -54,12 +74,25 @@ export interface PairOptions {
   yes?: boolean;
 }
 
+/** PairDeps are the seams of `device pair`; production uses the defaults. */
+export interface PairDeps extends SecureTransportDeps {
+  /** Joins the relay pairing channel (default: the installed relay adapter). */
+  openChannel?: PairingChannelOpener;
+  /** Shows the controller QR payload (default: a terminal QR code). */
+  showQr?: (payload: string) => void;
+  /** Stores the relayer topic from the result (default: the OS keyring). */
+  storeTopicFn?: (deviceId: string, topicId: string) => void;
+  /** Asks a yes/no question (default: the TTY, refusing when not interactive). */
+  confirmFn?: (question: string) => Promise<boolean>;
+  /** Pause between enroll attempts. */
+  enrollRetryMs?: number;
+}
+
 /**
- * REQUEST_ACCESS_RETRY_MS is the pause before asking again after `busy` or
- * `rate_limited` (§5.2: the device refuses a new request within 10 s of the
- * last one and changes nothing).
+ * UNPAIR_REVOKE_TIMEOUT_MS bounds each request of unpair's best-effort
+ * self-revoke, so an unreachable FF1 delays deleting the keys only briefly.
  */
-export const REQUEST_ACCESS_RETRY_MS = 10_000;
+export const UNPAIR_REVOKE_TIMEOUT_MS = 5_000;
 
 /** CommandFailure is thrown by actions and printed by the command wrapper. */
 export class CommandFailure extends Error {
@@ -97,8 +130,7 @@ function deviceLabel(device: FF1Device): string {
 }
 
 /**
- * parseTimeoutMs validates `--timeout <seconds>` (10 s to the device's
- * 10-minute cap on a pending request).
+ * parseTimeoutMs validates `--timeout <seconds>` (10 s to 10 minutes).
  *
  * @param value - Flag value
  * @returns Milliseconds
@@ -112,7 +144,7 @@ export function parseTimeoutMs(value: string | undefined): number {
   if (!Number.isInteger(seconds) || seconds < 10 || seconds * 1000 > MAX_PAIR_TIMEOUT_MS) {
     throw new CommandFailure(
       `--timeout must be a whole number of seconds between 10 and ${MAX_PAIR_TIMEOUT_MS / 1000}`,
-      'The FF1 drops an access request 10 minutes after it was first made, so waiting longer cannot succeed.'
+      'If an owner needs longer, run the pairing again to show a new code.'
     );
   }
   return seconds * 1000;
@@ -142,62 +174,298 @@ export function parseLabel(value: string | undefined): string {
 }
 
 /**
- * runPair is `ff-cli device pair [name]`: receive the app handoff (or resume
- * a pending pairing), then request access and wait for owner approval.
+ * runPair is `ff-cli device pair [name]`: show the controller QR, wait for an
+ * owner to add ff-cli in the Feral File app, then enroll (§5.6), or finish an
+ * interrupted pairing with --resume.
  *
  * @param name - Optional device name
  * @param options - Flags
+ * @param deps - Seams (tests)
  */
-export async function runPair(name: string | undefined, options: PairOptions): Promise<void> {
+export async function runPair(
+  name: string | undefined,
+  options: PairOptions,
+  deps: PairDeps = {}
+): Promise<void> {
   const device = requirePairableDevice(name);
   const timeoutMs = parseTimeoutMs(options.timeout);
   const label = parseLabel(options.label);
+  await pairDevice(device, { label, timeoutMs, resume: options.resume, yes: options.yes }, deps);
+}
+
+/**
+ * pairDevice is runPair after flag parsing.
+ *
+ * @param device - Device with ID
+ * @param options - Parsed label and wait, and the resume and yes flags
+ * @param deps - Seams (tests)
+ */
+export async function pairDevice(
+  device: PairDevice,
+  options: { label: string; timeoutMs: number; resume?: boolean; yes?: boolean },
+  deps: PairDeps = {}
+): Promise<void> {
+  const store = deps.controllerStore ?? {};
   if (options.resume) {
-    // A staged pairing (one that will replace an existing record) wins: it is
-    // the one the last run was waiting on. One whose keys the main file
-    // already holds was promoted by a run that stopped before removing it;
-    // its counter is stale, so the main file is used.
-    dropStagedController(device.id, true);
-    const staged = loadController(device.id, stagingStore());
-    const record = staged ?? loadController(device.id);
-    if (!record) {
-      throw new CommandFailure(
-        `There is no pairing to resume for ${deviceLabel(device)}.`,
-        `Run \`${pairCommand(deviceLabel(device))}\` to start one.`
-      );
-    }
-    await enrollController(device, record, timeoutMs, false, {}, staged !== null);
+    await resumePairing(device, deps);
     return;
   }
   // A staged replacement that already enrolled is this computer's confirmed
   // grant; a new pairing would overwrite or drop it. --resume promotes it.
-  dropStagedController(device.id, true);
-  // An unreadable controller file fails here, before the app handoff, not
-  // after it; a corrupt one is handled (asked about, moved aside) below.
-  loadUnlessCorrupt(device.id);
-  if (enrolledStagedPairing(device.id)) {
+  dropStagedController(device.id, true, store);
+  // An unreadable controller file fails here, before the QR is shown.
+  const existing = loadUnlessCorrupt(device.id, store);
+  if (enrolledStagedPairing(device.id, store)) {
     throw new CommandFailure(
       `An earlier pairing with ${deviceLabel(device)} was approved but not finished.`,
       `Run \`${pairCommand(deviceLabel(device))} --resume\` to finish it.`
     );
   }
-  const payload = await receiveHandoff(device);
-  if (payload.v === 1) {
-    storeTopicId(device.id, payload.topicId);
-    console.log(chalk.green('\n✓ Relayer access stored in the operating system secure storage.\n'));
+  const confirmFn = deps.confirmFn ?? confirmInteractively;
+  if (existing === 'corrupt') {
+    await confirmCorruptReplacement(device, options, confirmFn);
+  }
+  const { keys, reused } = chooseControllerKeys(device.id, store);
+  const material = generatePairingMaterial(keys, options.label);
+  const nowFn = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
+  const outcome = await withInterrupt((signal) =>
+    waitForOwner(device, material, options.timeoutMs, signal, deps, reused)
+  );
+  if (outcome.status === 'interrupted') {
+    console.log(
+      chalk.yellow(
+        `\nPairing interrupted; nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+      )
+    );
+    process.exitCode = 130;
     return;
   }
-  if (payload.topicId) {
-    storeHandoffTopic(device.id, payload.topicId);
+  if (outcome.status !== 'result') {
+    throw new CommandFailure(
+      `Pairing was not completed: no owner answered within ${Math.round(options.timeoutMs / 1000)}s.`,
+      `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+    );
   }
-  await confirmReplacement(device, payload.profile, options);
-  const { record, reused, staged } = prepareController(payload.profile, label);
+  const result = outcome.result;
+  if (result.outcome === 'rejected') {
+    throw new CommandFailure(
+      `An owner declined to add ff-cli to ${deviceLabel(device)}.`,
+      `Nothing was saved. To try again, run \`${pairCommand(deviceLabel(device))}\`.`
+    );
+  }
+  const profile = result.profile!;
+  await confirmReplacement(device, profile, options, confirmFn, store);
+  const { record, staged } = prepareRegisteredController(
+    { profile, keys, label: options.label, registration: registrationRecordOf(result, nowFn()) },
+    store
+  );
+  if (result.topicId) {
+    storeRelayerTopic(device.id, result.topicId, deps.storeTopicFn);
+  }
   console.log(
-    chalk.dim(
-      `\n${reused ? 'Using this computer’s existing' : 'Created new'} controller keys: ${controllerFilePath(device.id, staged ? stagingStore() : {})}`
+    chalk.green(
+      `\n✓ An owner added ff-cli to ${result.deviceName} as ${chalk.bold(result.role)}. Finishing the pairing...`
     )
   );
-  await enrollController(device, record, timeoutMs, !reused, {}, staged);
+  console.log(
+    chalk.dim(
+      `Controller keys: ${controllerFilePath(device.id, staged ? stagingStore(store) : store)}`
+    )
+  );
+  await finishEnrollment(device, record, staged, deps);
+}
+
+/**
+ * resumePairing is `device pair --resume`: enroll the record that holds an
+ * owner's verified result (no pairing channel is needed), then promote it
+ * when it replaces an existing record.
+ */
+async function resumePairing(device: PairDevice, deps: PairDeps): Promise<void> {
+  const store = deps.controllerStore ?? {};
+  // A staged pairing (one that will replace an existing record) wins: it is
+  // the one the last run was finishing. One whose keys the main file already
+  // holds was promoted by a run that stopped before removing it; its counter
+  // is stale, so the main file is used.
+  dropStagedController(device.id, true, store);
+  const staged = loadController(device.id, stagingStore(store));
+  const record = staged ?? loadController(device.id, store);
+  if (!record) {
+    throw new CommandFailure(
+      `There is no pairing to resume for ${deviceLabel(device)}.`,
+      `Run \`${pairCommand(deviceLabel(device))}\` to start one.`
+    );
+  }
+  await finishEnrollment(device, record, staged !== null, deps);
+}
+
+/**
+ * waitForOwner joins the pairing channel, shows the controller QR and waits
+ * for a sealed result that passes every §5.6.3 check. Messages that do not
+ * open or fail a check are ignored: anyone who saw the QR can write to the
+ * channel, and only a verified result ends the wait. The channel is always
+ * closed.
+ */
+async function waitForOwner(
+  device: PairDevice,
+  material: PairingMaterial,
+  timeoutMs: number,
+  interrupt: AbortSignal,
+  deps: PairDeps,
+  reused: boolean
+): Promise<
+  { status: 'result'; result: RegistrationResult } | { status: 'timeout' | 'interrupted' }
+> {
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), timeoutMs);
+  const signal = AbortSignal.any([interrupt, timeout.signal]);
+  const stopped = () =>
+    interrupt.aborted ? ({ status: 'interrupted' } as const) : ({ status: 'timeout' } as const);
+  let channel: PairingChannel | undefined;
+  try {
+    try {
+      channel = await (deps.openChannel ?? pairingChannelOpener())(material.qr.channelId, signal);
+    } catch (error) {
+      if (signal.aborted) {
+        return stopped();
+      }
+      throw new CommandFailure(
+        error instanceof PairingTransportUnavailableError
+          ? `Pairing is not available in this build of ff-cli: ${error.message}.`
+          : `Could not open the pairing channel: ${(error as Error).message}`,
+        'Pairing needs an internet connection to the Feral File relay. Check the connection and try again.'
+      );
+    }
+    showPairingCode(device, material, timeoutMs, reused, deps.showQr);
+    const wantDev = normalizeDeviceId(device.id);
+    const now = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
+    const messages = channel.messages()[Symbol.asyncIterator]();
+    for (;;) {
+      let next: IteratorResult<Uint8Array> | null;
+      try {
+        next = await nextOrAbort(messages, signal);
+      } catch (error) {
+        if (signal.aborted) {
+          return stopped();
+        }
+        throw new CommandFailure(
+          `The pairing channel failed: ${(error as Error).message}`,
+          `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+        );
+      }
+      if (next === null) {
+        return stopped();
+      }
+      if (next.done) {
+        throw new CommandFailure(
+          'The pairing channel closed before an owner answered.',
+          `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+        );
+      }
+      try {
+        return { status: 'result', result: openRegistration(material, next.value, wantDev, now()) };
+      } catch (error) {
+        logger.debug(`Ignored a pairing channel message: ${(error as Error).message}`);
+      }
+    }
+  } finally {
+    clearTimeout(timer);
+    if (channel) {
+      try {
+        await channel.close();
+      } catch {
+        // The relay keeps nothing; a close failure must not hide a result.
+      }
+    }
+  }
+}
+
+/** nextOrAbort awaits the next channel message, or null once signal aborts. */
+function nextOrAbort<T>(
+  iterator: AsyncIterator<T>,
+  signal: AbortSignal
+): Promise<IteratorResult<T> | null> {
+  if (signal.aborted) {
+    return Promise.resolve(null);
+  }
+  return new Promise((resolve, reject) => {
+    const onAbort = () => resolve(null);
+    signal.addEventListener('abort', onAbort, { once: true });
+    iterator.next().then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      }
+    );
+  });
+}
+
+/** renderQr renders a QR payload for a terminal (half-height blocks, level M). */
+function renderQr(payload: string): string {
+  let rendered = '';
+  qrcodeTerminal.setErrorLevel('M');
+  qrcodeTerminal.generate(payload, { small: true }, (qr) => {
+    rendered = qr;
+  });
+  return rendered;
+}
+
+/** showPairingCode prints what the owner scans or pastes, and what happens next. */
+function showPairingCode(
+  device: PairDevice,
+  material: PairingMaterial,
+  timeoutMs: number,
+  reused: boolean,
+  showQr: (payload: string) => void = (payload) => console.log(renderQr(payload))
+): void {
+  const payload = controllerQrString(material.qr);
+  console.log(chalk.blue(`\nAdd ff-cli to ${deviceLabel(device)}\n`));
+  console.log(
+    'On an owner’s phone, open this FF1 in the Feral File app, choose “Add controller”, and scan this code:\n'
+  );
+  showQr(payload);
+  console.log('\nOr paste this text into the app:\n');
+  console.log(`  ${payload}\n`);
+  console.log(chalk.dim(`Name the owner sees: ${material.qr.label}`));
+  console.log(
+    chalk.dim(
+      `Controller ID: ${controllerQrCtl(material.qr)}${reused ? ' (this computer’s existing keys)' : ''}`
+    )
+  );
+  console.log(
+    chalk.dim(
+      `Waiting up to ${Math.round(timeoutMs / 1000)}s for an owner. This needs an internet connection. Press Ctrl-C to stop.`
+    )
+  );
+}
+
+/**
+ * finishEnrollment enrolls a record that holds a pinned profile, promotes a
+ * staged one, and reports the result.
+ */
+async function finishEnrollment(
+  device: PairDevice,
+  record: ControllerRecord,
+  staged: boolean,
+  deps: PairDeps
+): Promise<void> {
+  const mainStore = deps.controllerStore ?? {};
+  const pairDeps = staged ? { ...deps, controllerStore: stagingStore(mainStore) } : deps;
+  const result = await withInterrupt(async (signal): Promise<EnrollResult> => {
+    const enrolled = await enrollRegistered(device, record, pairDeps, {
+      cancelled: () => signal.aborted,
+      storeOptions: pairDeps.controllerStore,
+      retryMs: deps.enrollRetryMs,
+    });
+    if (enrolled.status === 'enrolled' && staged) {
+      return { status: 'enrolled', record: promoteStagedController(device.id, mainStore) };
+    }
+    return enrolled;
+  });
+  reportEnrollment(device, result);
 }
 
 /**
@@ -220,19 +488,52 @@ function loadUnlessCorrupt(
 }
 
 /** enrolledStagedPairing reports whether the staging store holds an enrolled record. */
-function enrolledStagedPairing(deviceId: string): boolean {
-  const staged = loadUnlessCorrupt(deviceId, stagingStore());
+function enrolledStagedPairing(deviceId: string, options: ControllerStoreOptions = {}): boolean {
+  const staged = loadUnlessCorrupt(deviceId, stagingStore(options));
   return staged !== null && staged !== 'corrupt' && isEnrolled(staged);
 }
 
 /**
- * confirmReplacement asks before a pairing for another control identity
- * replaces an ENROLLED record: the app may have handed over a stale identity,
- * and once the new pairing is approved the old grant (possibly the last
- * reachable owner) is gone. Same rule as unpair: ask on a TTY, or --yes.
+ * confirmCorruptReplacement asks before a pairing replaces a corrupt
+ * controller file (it is moved aside, not deleted, once an owner's result
+ * arrives). Asked before the QR is shown, so a refusal costs the owner
+ * nothing. Ask on a TTY, or --yes.
  *
  * @param device - Device with ID
- * @param profile - Profile from the handoff
+ * @param options - `yes` skips the confirmation
+ * @param confirmFn - Confirmation prompt
+ * @throws {CommandFailure} When declined
+ */
+export async function confirmCorruptReplacement(
+  device: PairDevice,
+  options: { yes?: boolean },
+  confirmFn: (question: string) => Promise<boolean> = confirmInteractively
+): Promise<void> {
+  if (options.yes) {
+    return;
+  }
+  console.log(
+    chalk.yellow(
+      `\nThe controller file for ${deviceLabel(device)} is corrupt. It is moved aside (not deleted) and replaced by the new pairing; ` +
+        'if it held this computer’s only owner keys for this FF1, the FF1 may need another owner or a factory reset.'
+    )
+  );
+  if (!(await confirmFn('Move it aside and pair again?'))) {
+    throw new CommandFailure(
+      'Pairing cancelled; the controller file was left as it is.',
+      'Pass --yes to skip this check.'
+    );
+  }
+}
+
+/**
+ * confirmReplacement asks before a pairing for another control identity
+ * replaces an ENROLLED record: once the new pairing is enrolled, the old grant
+ * (possibly the last reachable owner) is gone from this computer. Same rule
+ * as unpair: ask on a TTY, or --yes.
+ *
+ * @param device - Device with ID
+ * @param profile - Profile from the owner's verified result
  * @param options - `yes` skips the confirmation
  * @param confirmFn - Confirmation prompt (tests inject one)
  * @param storeOptions - Store options (tests)
@@ -246,25 +547,8 @@ export async function confirmReplacement(
   storeOptions: ControllerStoreOptions = {}
 ): Promise<void> {
   const existing = loadUnlessCorrupt(device.id, storeOptions);
-  if (existing === 'corrupt') {
-    if (options.yes) {
-      return;
-    }
-    console.log(
-      chalk.yellow(
-        `\nThe controller file for ${deviceLabel(device)} is corrupt. It is moved aside (not deleted) and replaced by the new pairing; ` +
-          'if it held this computer’s only owner keys for this FF1, the FF1 may need another owner or a factory reset.'
-      )
-    );
-    if (!(await confirmFn('Move it aside and pair again?'))) {
-      throw new CommandFailure(
-        'Pairing cancelled; the controller file was left as it is.',
-        'Pass --yes to skip this check.'
-      );
-    }
-    return;
-  }
   if (
+    existing === 'corrupt' ||
     !existing ||
     !isEnrolled(existing) ||
     sameIdentity(existing.profile, profile) ||
@@ -274,9 +558,9 @@ export async function confirmReplacement(
   }
   console.log(
     chalk.yellow(
-      `\nff-cli is already paired with ${deviceLabel(device)} as ${existing.role}, under a different FF1 identity than the app just sent. ` +
-        'If the FF1 was not factory reset, the app may have sent an out-of-date identity. ' +
-        'Once the new pairing is approved, the current keys are replaced' +
+      `\nff-cli is already paired with ${deviceLabel(device)} as ${existing.role}, under a different FF1 identity than the owner’s app just sent. ` +
+        'That is expected after a factory reset. ' +
+        'Once the new pairing is enrolled, the current pairing is replaced' +
         (existing.role === 'owner'
           ? '; if no other owner can reach this FF1, it is then left without a reachable owner until a factory reset.'
           : '.')
@@ -291,18 +575,19 @@ export async function confirmReplacement(
 }
 
 /**
- * storeHandoffTopic stores the v2 handoff's relayer topic. On a v2 handoff
- * the topic only enables the relayer fallback; the controller pairing works
- * without it, so an unavailable keyring (headless Linux has no secret
- * service) is a warning, not a failed pairing. The topic is never printed.
+ * storeRelayerTopic stores the relayer topic an owner's registration result
+ * carried (§5.6.2 topicId). It only enables the legacy relayer route; the
+ * controller pairing works without it, so an unavailable keyring (headless
+ * Linux has no secret service) is a warning, not a failed pairing. The topic
+ * is never printed.
  *
  * @param deviceId - FF1 device ID
- * @param topicId - Relayer topic from the handoff
+ * @param topicId - Relayer topic from the result
  * @param storeFn - Keyring writer (tests inject a failing one)
  * @param warnFn - Warning sink
  * @returns True when the topic was stored
  */
-export function storeHandoffTopic(
+export function storeRelayerTopic(
   deviceId: string,
   topicId: string,
   storeFn: (deviceId: string, topicId: string) => void = storeTopicId,
@@ -320,33 +605,6 @@ export function storeHandoffTopic(
   }
 }
 
-/** receiveHandoff runs the existing broker handoff and always closes the channel. */
-async function receiveHandoff(device: PairDevice): Promise<HandoffPayload> {
-  let receiver: HandoffReceiver | undefined;
-  try {
-    receiver = await HandoffReceiver.create();
-    console.log(chalk.blue('\nPair ff-cli with Feral File mobile\n'));
-    console.log(`  Device: ${chalk.bold(device.name || device.id)}`);
-    console.log(`  Device ID: ${chalk.dim(device.id)}`);
-    console.log("\nIn the mobile app, open this Art Computer's options and choose");
-    console.log(chalk.bold('“Pair with ff-cli”'), 'then enter:');
-    console.log(`\n  ${chalk.bold(receiver.shortCode)}\n`);
-    console.log('Before sharing, confirm the mobile security check matches:');
-    console.log(`\n  ${chalk.bold(receiver.verificationCode)}\n`);
-    console.log(chalk.dim(`This one-time code expires at ${receiver.expiresAt}. Waiting...`));
-    return await receiver.receiveHandoff({ expectedDeviceId: device.id });
-  } finally {
-    if (receiver) {
-      try {
-        await receiver.close();
-      } catch {
-        // The channel is short-lived and expires automatically. A close
-        // failure must not erase or misreport an already received handoff.
-      }
-    }
-  }
-}
-
 /**
  * formatCode renders a 6-digit approval code as "123 456" for reading aloud.
  *
@@ -357,132 +615,8 @@ export function formatCode(code: string): string {
   return `${code.slice(0, 3)} ${code.slice(3)}`;
 }
 
-/**
- * enrollController requests access, shows the approval code, and polls until
- * the owner approves. Ctrl-C stops polling between requests (the controller
- * file is always consistent) and prints how to resume; a second Ctrl-C exits
- * at once.
- *
- * @param device - Device with ID
- * @param record - Controller record (pending or enrolled)
- * @param timeoutMs - Approval wait
- * @param createdNow - Whether this run created the record (deleted on refusal)
- * @param deps - Transport and store seams (tests); controllerStore is the main store
- * @param staged - The record is in the staging store and replaces the main
- *   record only once enrolled
- */
-export async function enrollController(
-  device: PairDevice,
-  record: ControllerRecord,
-  timeoutMs: number,
-  createdNow: boolean,
-  deps: SecureTransportDeps = {},
-  staged = false
-): Promise<void> {
-  const ctl = controllerIdOf(record.keys);
-  const mainStore = deps.controllerStore ?? {};
-  const pairDeps = staged ? { ...deps, controllerStore: stagingStore(mainStore) } : deps;
-  const wait = deps.waitFn ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
-  // A pending controller file switches every command to envelopes, so a file
-  // created by THIS run is removed whenever the run ends without a request the
-  // owner can approve: refused (an FF1 with no secure owner answers
-  // not_approved), unreachable, a code mismatch, or Ctrl-C before the request
-  // was confirmed. A reused file belonged to an earlier pairing; keep it. A
-  // staged file is the only one discarded; the record it would replace stays.
-  const discard = () => {
-    if (createdNow) {
-      deleteController(device.id, pairDeps.controllerStore);
-    }
-  };
-  // SIGINT handling is installed before requestAccess, so a Ctrl-C while the
-  // request is in flight is seen and cleaned up instead of killing the process.
-  const result = await withInterrupt(async (cancelled) => {
-    const startedAtMs = Date.now();
-    console.log(
-      `\nRequesting access to ${chalk.bold(deviceLabel(device))} as "${record.label}"...`
-    );
-    let access = await requestAccess(device, record, pairDeps);
-    // busy / rate_limited (§4.4, §5.2) changed nothing on the FF1, and a
-    // request that hit its deadline is refreshed by asking again: retry
-    // within the approval wait instead of making the user redo the handoff.
-    for (
-      let left = Math.floor(timeoutMs / REQUEST_ACCESS_RETRY_MS);
-      access.status === 'failed' &&
-      (access.failure.code === 'busy' ||
-        access.failure.code === 'rate_limited' ||
-        access.failure.code === 'timeout') &&
-      left > 0 &&
-      !cancelled();
-      left -= 1
-    ) {
-      console.log(
-        chalk.dim(
-          access.failure.code === 'timeout'
-            ? 'The FF1 did not answer in time; asking again in 10s...'
-            : 'The FF1 is handling other requests; asking again in 10s...'
-        )
-      );
-      await wait(REQUEST_ACCESS_RETRY_MS);
-      if (cancelled()) {
-        break;
-      }
-      access = await requestAccess(device, record, pairDeps);
-    }
-    if (cancelled()) {
-      discard();
-      return { status: 'interrupted-early' as const };
-    }
-    if (access.status === 'failed') {
-      discard();
-      throw new CommandFailure(access.failure.error, access.failure.details);
-    }
-    // §14.3: `approved` for a key that holds no grant here is treated as
-    // pending, so the code is always shown before an owner can approve.
-    if (access.status === 'pending' || !isEnrolled(record)) {
-      const code = localApprovalCode(record);
-      // The device signs its code with the pinned devSig over the same
-      // inputs, so a mismatch cannot be a man-in-the-middle; it is a bug.
-      if (access.status === 'pending' && access.code !== code) {
-        discard();
-        throw new CommandFailure(
-          'The FF1 reported a different approval code than ff-cli computed.'
-        );
-      }
-      console.log('\nOn an owner’s phone, open the Feral File app and approve this request.');
-      console.log('Approve it only if the app shows this code:');
-      console.log(`\n  ${chalk.bold.cyan(formatCode(code))}\n`);
-      console.log(chalk.dim(`Controller ID: ${ctl}`));
-      console.log(chalk.dim(`Waiting up to ${Math.round(timeoutMs / 1000)}s for approval...`));
-    }
-    const enrolled = await pollEnrollment(device, record, pairDeps, {
-      timeoutMs,
-      cancelled,
-      storeOptions: pairDeps.controllerStore,
-      refresh: () => requestAccess(device, record, pairDeps),
-      startedAtMs,
-    });
-    if (enrolled.status === 'enrolled' && staged) {
-      return { status: 'enrolled' as const, record: promoteStagedController(device.id, mainStore) };
-    }
-    return enrolled;
-  });
-  if (result.status === 'interrupted-early') {
-    console.log(
-      chalk.yellow(
-        `\nPairing interrupted. Run \`${pairCommand(deviceLabel(device))}\` to start again.`
-      )
-    );
-    process.exitCode = 130;
-    return;
-  }
-  reportEnrollment(device, result);
-}
-
 /** reportEnrollment prints the final pairing state or throws a failure. */
-function reportEnrollment(
-  device: PairDevice,
-  result: Awaited<ReturnType<typeof pollEnrollment>>
-): void {
+function reportEnrollment(device: PairDevice, result: EnrollResult): void {
   const resume = `${pairCommand(deviceLabel(device))} --resume`;
   switch (result.status) {
     case 'enrolled': {
@@ -490,6 +624,13 @@ function reportEnrollment(
       console.log(
         chalk.green(`\n✓ ff-cli is paired with ${deviceLabel(device)} as ${chalk.bold(role)}.`)
       );
+      if (result.record.expiresAt !== undefined) {
+        console.log(
+          chalk.dim(
+            `This access expires at ${new Date(result.record.expiresAt * 1000).toISOString()}.`
+          )
+        );
+      }
       console.log(
         chalk.dim(
           role === 'owner'
@@ -499,51 +640,46 @@ function reportEnrollment(
       );
       return;
     }
-    case 'timeout':
-      throw new CommandFailure(
-        'Timed out waiting for approval.',
-        `To ask again, run \`${resume}\`.`
-      );
     case 'cancelled':
       console.log(
         chalk.yellow(
-          `\nPairing interrupted. The request stays pending on the FF1 for a few minutes; run \`${resume}\` to continue.`
+          `\nPairing interrupted. An owner already added ff-cli; run \`${resume}\` to finish.`
         )
       );
       process.exitCode = 130;
       return;
     default: {
-      // The controller file is kept after a failed poll, so --resume asks
-      // again with the same keys; no new app handoff is needed.
+      // The record with the owner's verified result is kept, so --resume
+      // finishes it without a new code.
       const details = result.failure.details ?? '';
       throw new CommandFailure(
         result.failure.error,
-        details.includes('--resume')
+        details.includes(pairCommand(deviceLabel(device)))
           ? details
-          : `${details ? `${details} ` : ''}To try again with the same keys, run \`${resume}\`.`
+          : `${details ? `${details} ` : ''}To finish the pairing, run \`${resume}\`.`
       );
     }
   }
 }
 
 /**
- * withInterrupt runs fn with a cancellation flag wired to the first Ctrl-C.
- * A second Ctrl-C exits immediately; that is safe because counter
- * allocation and grant storage are synchronous, so no signal handler can run
- * in the middle of a file update.
+ * withInterrupt runs fn with an abort signal wired to the first Ctrl-C. A
+ * second Ctrl-C exits immediately; that is safe because counter allocation
+ * and grant storage are synchronous, so no signal handler can run in the
+ * middle of a file update.
  */
-async function withInterrupt<T>(fn: (cancelled: () => boolean) => Promise<T>): Promise<T> {
-  let interrupted = false;
+async function withInterrupt<T>(fn: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
   const onSigint = () => {
-    if (interrupted) {
+    if (controller.signal.aborted) {
       process.exit(130);
     }
-    interrupted = true;
-    console.log(chalk.yellow('\nStopping after the current request... (Ctrl-C again to quit now)'));
+    controller.abort();
+    console.log(chalk.yellow('\nStopping... (Ctrl-C again to quit now)'));
   };
   process.on('SIGINT', onSigint);
   try {
-    return await fn(() => interrupted);
+    return await fn(controller.signal);
   } finally {
     process.off('SIGINT', onSigint);
   }
@@ -575,9 +711,10 @@ async function runOwnerCommand(
   device: PairDevice,
   record: ControllerRecord,
   cmd: string,
-  req: Record<string, unknown>
+  req: Record<string, unknown>,
+  deps: SecureTransportDeps = {}
 ): Promise<SecureCommandResult> {
-  return runSecureCommand({ device, record, cmd, req, relayerFallback: true, retry: false });
+  return runSecureCommand({ device, record, cmd, req, relayerFallback: true, retry: false }, deps);
 }
 
 /** OWNER_COMMAND_REASONS map §5.5 `res.error` reasons to copy. */
@@ -757,9 +894,51 @@ async function confirmInteractively(question: string): Promise<boolean> {
 }
 
 /**
- * runUnpair is `ff-cli device unpair [name]`: delete the local controller
- * file. The FF1 keeps the grant until an owner revokes it, so the message
- * says so and prints the controller ID to revoke.
+ * selfRevoke sends the best-effort sealed self-revoke of §14.7
+ * (`revokeController` with this controller's own ctl) before its keys are
+ * deleted. Every failure is ignored: old firmware answers permission_denied,
+ * a sole owner gets last_owner, the FF1 may be offline. Each request is
+ * bounded by UNPAIR_REVOKE_TIMEOUT_MS so an unreachable FF1 only briefly
+ * delays the delete.
+ *
+ * @param device - Device with ID
+ * @param record - Enrolled controller record
+ * @param deps - Transport seams; controllerStore is the store the record is in
+ * @returns True when the FF1 confirmed the revoke
+ */
+async function selfRevoke(
+  device: PairDevice,
+  record: ControllerRecord,
+  deps: SecureTransportDeps
+): Promise<boolean> {
+  try {
+    const result = await runOwnerCommand(
+      device,
+      record,
+      'revokeController',
+      { ctl: controllerIdOf(record.keys) },
+      {
+        ...deps,
+        fetchFn:
+          deps.fetchFn ??
+          ((input, init) => fetchWithTimeout(input, init ?? {}, UNPAIR_REVOKE_TIMEOUT_MS)),
+        noticeFn: () => undefined,
+      }
+    );
+    if (!result.success) {
+      logger.debug(`Self-revoke was not confirmed: ${result.error ?? ''} ${result.details ?? ''}`);
+    }
+    return result.success;
+  } catch (error) {
+    logger.debug(`Self-revoke failed: ${(error as Error).message}`);
+    return false;
+  }
+}
+
+/**
+ * runUnpair is `ff-cli device unpair [name]`: revoke this controller on the
+ * FF1 (best effort, §14.7), then delete the local controller file whatever
+ * the outcome.
  *
  * Deleting keys always asks first (or needs --yes), like Remove in the app
  * (§14.3). An OWNER grant gets a stronger warning: it is the device's
@@ -768,31 +947,32 @@ async function confirmInteractively(question: string): Promise<boolean> {
  * @param name - Optional device name
  * @param options - `yes` skips the confirmation
  * @param confirmFn - Confirmation prompt (tests inject one)
+ * @param deps - Transport seams for the self-revoke (tests)
  */
 export async function runUnpair(
   name: string | undefined,
   options: { yes?: boolean } = {},
-  confirmFn: (question: string) => Promise<boolean> = confirmInteractively
+  confirmFn: (question: string) => Promise<boolean> = confirmInteractively,
+  deps: SecureTransportDeps = {}
 ): Promise<void> {
   const device = requirePairableDevice(name);
-  let ctl: string | undefined;
+  const store = deps.controllerStore ?? {};
+  let record: ControllerRecord | null = null;
   let role: string | undefined;
   let present = false;
   try {
-    const record = loadController(device.id);
-    ctl = record ? controllerIdOf(record.keys) : undefined;
+    record = loadController(device.id, store);
     role = record?.role;
     present = record !== null;
   } catch (error) {
     if (!(error instanceof ControllerFileCorruptError)) {
       throw error; // unreadable: deleting it may remove a working owner key
     }
-    ctl = undefined; // corrupt file: delete it anyway
-    present = true;
+    present = true; // corrupt file: delete it anyway
   }
   // An approved but unfinished replacement pairing is deleted too; its role
   // decides the warning as much as the main file's does.
-  const staged = loadUnlessCorrupt(device.id, stagingStore());
+  const staged = loadUnlessCorrupt(device.id, stagingStore(store));
   if (staged !== null) {
     present = true;
     if (staged !== 'corrupt' && staged.role === 'owner') {
@@ -804,7 +984,7 @@ export async function runUnpair(
       chalk.yellow(
         role === 'owner'
           ? `\nff-cli is an OWNER of ${deviceLabel(device)}. If no other owner can reach this FF1, deleting these keys leaves it without a reachable owner until a factory reset.`
-          : `\nff-cli loses its access to ${deviceLabel(device)}. Pairing again needs an owner's approval.`
+          : `\nff-cli loses its access to ${deviceLabel(device)}. Pairing again needs an owner to add it in the Feral File app.`
       )
     );
     if (
@@ -818,16 +998,23 @@ export async function runUnpair(
       );
     }
   }
-  deleteController(device.id, stagingStore()); // an unfinished replacement pairing
-  if (!deleteController(device.id)) {
+  if (staged !== null && staged !== 'corrupt' && isEnrolled(staged)) {
+    await selfRevoke(device, staged, { ...deps, controllerStore: stagingStore(store) });
+  }
+  const revoked = record !== null && isEnrolled(record) && (await selfRevoke(device, record, deps));
+  deleteController(device.id, stagingStore(store)); // an unfinished replacement pairing
+  if (!deleteController(device.id, store)) {
     console.log(chalk.dim(`\nff-cli has no controller keys for ${deviceLabel(device)}.\n`));
     return;
   }
   console.log(chalk.green(`\n✓ Deleted ff-cli's controller keys for ${deviceLabel(device)}.`));
-  if (ctl) {
+  if (revoked) {
+    console.log(chalk.dim('The FF1 revoked this controller’s access.'));
+  } else if (record) {
+    const ctl = controllerIdOf(record.keys);
     console.log(
       chalk.dim(
-        `The FF1 still lists controller ${ctl} until an owner revokes it in the Feral File app or with \`ff-cli device revoke ${ctl}\`.`
+        `The FF1 may still list controller ${ctl} until an owner revokes it in the Feral File app or with \`ff-cli device revoke ${ctl}\`.`
       )
     );
   }

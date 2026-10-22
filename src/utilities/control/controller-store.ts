@@ -3,8 +3,10 @@
  * `<config dir>/controllers/<deviceId>.json` (feral-file#3551 M6).
  *
  * The file holds this CLI's private controller keys (ctlSig, ctlEnc), the
- * device profile it pinned during `ff-cli device pair` (the ONLY trust root
- * for replies), the grant (role, nk) once enrolled, and the request counter.
+ * device profile it pinned from an owner's sealed registration result during
+ * `ff-cli device pair` (the ONLY trust root for replies), the verified
+ * registration facts, the grant (role, nk, expiry) once enrolled, and the
+ * request counter.
  *
  * Invariants a later change must keep:
  * - Mode 0600 in a 0700 directory on POSIX. Windows has no mode bits; there
@@ -33,7 +35,7 @@ import {
   controllerIdOf,
   parseProfile,
 } from './codec';
-import { generatePrivateJwk, parsePrivateJwk, thumbprint } from './jwk';
+import { generatePrivateJwk, parsePrivateJwk, sameKey, thumbprint } from './jwk';
 import {
   ControlFormatError,
   isB64uOfLength,
@@ -42,6 +44,22 @@ import {
   strictObject,
   uintMember,
 } from './strict-json';
+
+/**
+ * RegistrationRecord keeps the facts of the owner's verified registration
+ * result (ff1-control-v1 §5.6.2) that `ff-cli device pair --resume` needs to
+ * finish enrolling without the pairing channel. The profile it pinned is the
+ * record's profile; the relayer topic, when sent, is in the OS keyring.
+ */
+export interface RegistrationRecord {
+  channelId: string;
+  /** The FF1's name as the owner's app sent it. */
+  deviceName: string;
+  /** The role the owner registered; the enroll reply is authoritative. */
+  role: ControlRole;
+  expiresAt?: number;
+  receivedAt: number;
+}
 
 /** ControllerRecord is the parsed controller file. */
 export interface ControllerRecord {
@@ -55,6 +73,10 @@ export interface ControllerRecord {
   role?: ControlRole;
   /** Notification key, b64u(32); absent until enrollment completes. */
   nk?: string;
+  /** Grant expiry from the last enroll reply; absent for a grant that never expires. */
+  expiresAt?: number;
+  /** Present when the profile was pinned from an owner's registration result. */
+  registration?: RegistrationRecord;
   /** Last counter allocated; the next request uses ctr + 1. */
   ctr: number;
   createdAt: number;
@@ -123,6 +145,17 @@ export function normalizeDeviceId(deviceId: string): string {
 }
 
 /**
+ * sameIdentity reports whether two profiles are the same control identity.
+ *
+ * @param a - First profile
+ * @param b - Second profile
+ * @returns True when dev, gen and both keys match
+ */
+export function sameIdentity(a: DeviceProfile, b: DeviceProfile): boolean {
+  return a.dev === b.dev && a.gen === b.gen && sameKey(a.sig, b.sig) && sameKey(a.enc, b.enc);
+}
+
+/**
  * isEnrolled reports whether a record has completed enrollment.
  *
  * @param record - Controller record
@@ -145,7 +178,7 @@ export function parseControllerRecord(text: string): ControllerRecord {
   const obj = strictObject(
     parseStrictJson(text),
     ['v', 'deviceId', 'gen', 'pins', 'profile', 'keys', 'label', 'ctr', 'createdAt'],
-    ['role', 'nk', 'enrolledAt'],
+    ['role', 'nk', 'enrolledAt', 'expiresAt', 'registration'],
     'controller file'
   );
   if (uintMember(obj, 'v') !== 1) {
@@ -193,7 +226,37 @@ export function parseControllerRecord(text: string): ControllerRecord {
   if ('enrolledAt' in obj) {
     record.enrolledAt = uintMember(obj, 'enrolledAt');
   }
+  if ('expiresAt' in obj) {
+    record.expiresAt = uintMember(obj, 'expiresAt');
+  }
+  if ('registration' in obj) {
+    record.registration = parseRegistrationRecord(obj.registration);
+  }
   return record;
+}
+
+/** parseRegistrationRecord validates the stored registration facts. */
+function parseRegistrationRecord(value: unknown): RegistrationRecord {
+  const obj = strictObject(
+    value,
+    ['channelId', 'deviceName', 'role', 'receivedAt'],
+    ['expiresAt'],
+    'controller file registration'
+  );
+  const role = stringMember(obj, 'role');
+  if (role !== 'owner' && role !== 'controller') {
+    throw new ControlFormatError('controller file registration role is invalid');
+  }
+  const registration: RegistrationRecord = {
+    channelId: stringMember(obj, 'channelId'),
+    deviceName: stringMember(obj, 'deviceName'),
+    role,
+    receivedAt: uintMember(obj, 'receivedAt'),
+  };
+  if ('expiresAt' in obj) {
+    registration.expiresAt = uintMember(obj, 'expiresAt');
+  }
+  return registration;
 }
 
 /**
@@ -220,6 +283,12 @@ function serializeControllerRecord(record: ControllerRecord): string {
   }
   if (record.enrolledAt !== undefined) {
     body.enrolledAt = record.enrolledAt;
+  }
+  if (record.expiresAt !== undefined) {
+    body.expiresAt = record.expiresAt;
+  }
+  if (record.registration !== undefined) {
+    body.registration = record.registration;
   }
   return `${JSON.stringify(body, null, 2)}\n`;
 }
@@ -381,26 +450,36 @@ export function saveController(
 }
 
 /**
- * createController generates fresh controller keys for a pinned profile and
- * saves them as a pending (not yet enrolled) record with ctr 0.
+ * createController saves a pending (not yet enrolled) record with ctr 0 for a
+ * pinned profile: with the given keys (the ones the owner registered), else
+ * freshly generated ones.
  *
- * @param input - Pinned profile and label
+ * @param input - Pinned profile, label, and optionally keys and registration facts
  * @param options - Optional directory override
  * @returns The saved record
  */
 export function createController(
-  input: { profile: DeviceProfile; label: string; now?: number },
+  input: {
+    profile: DeviceProfile;
+    label: string;
+    keys?: ControllerKeys;
+    registration?: RegistrationRecord;
+    now?: number;
+  },
   options: ControllerStoreOptions = {}
 ): ControllerRecord {
   const record: ControllerRecord = {
     v: 1,
     deviceId: input.profile.dev,
     profile: input.profile,
-    keys: { sig: generatePrivateJwk(), enc: generatePrivateJwk() },
+    keys: input.keys ?? { sig: generatePrivateJwk(), enc: generatePrivateJwk() },
     label: input.label,
     ctr: 0,
     createdAt: input.now ?? Math.floor(Date.now() / 1000),
   };
+  if (input.registration) {
+    record.registration = input.registration;
+  }
   const file = controllerFilePath(record.deviceId, options);
   withControllerLock(file, () => saveController(record, options));
   return record;
@@ -458,7 +537,7 @@ export function promoteStagedController(
         renameCorruptAside(to);
         current = null;
       }
-      if (!current || !sameKeys(current.keys, record.keys)) {
+      if (!current || !sameControl(current, record)) {
         saveController(record, options);
         fs.rmSync(from, { force: true });
         return record;
@@ -503,7 +582,7 @@ export function dropStagedController(
         } catch {
           return false; // corrupt: leave both for the user to see
         }
-        if (!record || !current || !sameKeys(current.keys, record.keys)) {
+        if (!record || !current || !sameControl(current, record)) {
           return false;
         }
       }
@@ -513,8 +592,18 @@ export function dropStagedController(
   );
 }
 
-function sameKeys(a: ControllerKeys, b: ControllerKeys): boolean {
-  return a.sig.d === b.sig.d && a.enc.d === b.enc.d;
+/**
+ * sameControl reports whether two records are the same keys under the same
+ * control identity. Keys alone are not enough: a pairing after a factory
+ * reset may register this computer's existing keys with the new identity,
+ * and that staged record must still replace the old one.
+ */
+function sameControl(a: ControllerRecord, b: ControllerRecord): boolean {
+  return (
+    a.keys.sig.d === b.keys.sig.d &&
+    a.keys.enc.d === b.keys.enc.d &&
+    sameIdentity(a.profile, b.profile)
+  );
 }
 
 /**
@@ -538,18 +627,19 @@ export function deleteController(deviceId: string, options: ControllerStoreOptio
 }
 
 /**
- * updateLabel changes a record's label as a locked re-read + save, so a
- * counter allocated concurrently by another process is never rolled back.
+ * recordRegistration stores a verified registration result on an existing
+ * record (same keys, same identity) as a locked re-read + save, so a counter
+ * allocated concurrently by another process is never rolled back.
  *
  * @param deviceId - FF1 device ID
- * @param label - New label
+ * @param update - The label the owner registered and the result's facts
  * @param options - Optional directory override
  * @returns The updated record
  * @throws {Error} When the file is missing or corrupt
  */
-export function updateLabel(
+export function recordRegistration(
   deviceId: string,
-  label: string,
+  update: { label: string; registration: RegistrationRecord },
   options: ControllerStoreOptions = {}
 ): ControllerRecord {
   const file = controllerFilePath(deviceId, options);
@@ -558,10 +648,9 @@ export function updateLabel(
     if (!record) {
       throw new Error(`No controller file for ${deviceId}`);
     }
-    if (record.label !== label) {
-      record.label = label;
-      saveController(record, options);
-    }
+    record.label = update.label;
+    record.registration = update.registration;
+    saveController(record, options);
     return record;
   });
 }
@@ -736,17 +825,51 @@ export function nextCounter(
 }
 
 /**
- * markEnrolled stores the grant from a successful enroll reply. It re-reads
- * under the lock so a counter allocated concurrently is not rolled back.
+ * skipCounterAhead moves the counter forward by `by` under the lock (§14.4
+ * replay recovery): a verified `replay` means the FF1's window is ahead of
+ * this file (a restored backup, a second copy of the keys), and the window
+ * has no upper bound, so jumping ahead is always safe.
  *
  * @param deviceId - FF1 device ID
- * @param grant - Role and nk from the reply
+ * @param by - How far to move ctr
+ * @param options - Optional directory override
+ * @returns The updated record
+ * @throws {Error} When the file is missing or corrupt, or ctr would overflow
+ */
+export function skipCounterAhead(
+  deviceId: string,
+  by: number,
+  options: ControllerStoreOptions = {}
+): ControllerRecord {
+  const file = controllerFilePath(deviceId, options);
+  return withControllerLock(file, () => {
+    const record = loadController(deviceId, options);
+    if (!record) {
+      throw new Error(`No controller file for ${deviceId}; run \`ff-cli device pair\``);
+    }
+    if (!Number.isSafeInteger(record.ctr + by + 1)) {
+      throw new Error('Controller counter exhausted; run `ff-cli device unpair` and pair again');
+    }
+    record.ctr += by;
+    saveController(record, options);
+    return record;
+  });
+}
+
+/**
+ * markEnrolled stores the grant from a successful enroll reply. It re-reads
+ * under the lock so a counter allocated concurrently is not rolled back. A
+ * grant without expiresAt clears any expiry the record had (§5.5: the grant
+ * states its whole state).
+ *
+ * @param deviceId - FF1 device ID
+ * @param grant - Role, nk and expiry from the reply
  * @param options - Optional directory override
  * @returns The updated record
  */
 export function markEnrolled(
   deviceId: string,
-  grant: { role: ControlRole; nk: string; now?: number },
+  grant: { role: ControlRole; nk: string; expiresAt?: number; now?: number },
   options: ControllerStoreOptions = {}
 ): ControllerRecord {
   const file = controllerFilePath(deviceId, options);
@@ -758,6 +881,11 @@ export function markEnrolled(
     record.role = grant.role;
     record.nk = grant.nk;
     record.enrolledAt = grant.now ?? Math.floor(Date.now() / 1000);
+    if (grant.expiresAt !== undefined) {
+      record.expiresAt = grant.expiresAt;
+    } else {
+      delete record.expiresAt;
+    }
     saveController(record, options);
     return record;
   });
