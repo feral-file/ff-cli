@@ -1100,6 +1100,7 @@ async function selfRevoke(
         fetchFn:
           deps.fetchFn ??
           ((input, init) => fetchWithTimeout(input, init ?? {}, UNPAIR_REVOKE_TIMEOUT_MS)),
+        v2TimeoutMs: deps.v2TimeoutMs ?? UNPAIR_REVOKE_TIMEOUT_MS,
         noticeFn: () => undefined,
       }
     );

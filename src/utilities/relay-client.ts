@@ -1,11 +1,36 @@
 /** Maximum reconstructed command size, matching the FF1 command ingress. */
 const MAX_MESSAGE = 4 * 1024 * 1024;
+/**
+ * MAX_ASSEMBLY_BYTES bounds every unfinished inbound transfer together. Until
+ * a peer is pinned any co-channel peer may start one, so a per-peer bound
+ * alone would let 35 strangers make the CLI hold 35 × 4 MiB.
+ */
+const MAX_ASSEMBLY_BYTES = MAX_MESSAGE;
+const ASSEMBLY_TIMEOUT_MS = 180000;
 const CHUNK_SIZE = 32768;
+/** RECEIPT_TIMEOUT_MS is how long one frame waits for its relay receipts. */
+const RECEIPT_TIMEOUT_MS = 5000;
+/**
+ * FANOUT_GRACE_MS is how long a fan-out frame keeps waiting for the other
+ * peers once one peer has acknowledged it. A silent stranger on the public
+ * channel then costs about a second per chunk, not the whole receipt timeout.
+ */
+const FANOUT_GRACE_MS = 1000;
+/**
+ * CONNECT_ATTEMPTS bounds reconnects before the first `hello`. §10 calls a
+ * connect-time refusal (HTTP 429, close 1008) transient; a browser-style
+ * WebSocket cannot tell it from a 404, so the attempts are bounded and the
+ * command is reported undelivered (the next command tries again).
+ */
+const CONNECT_ATTEMPTS = 3;
+const BACKOFF_BASE_MS = 250;
+const BACKOFF_MAX_MS = 4000;
+const ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder('utf-8', { fatal: true });
 
 type Header = { v: 2; id: string; to: string; from?: string };
-type Pending = { resolve: (value: any) => void; reject: (error: Error) => void };
+type Pending = { resolve: (value: unknown) => void; reject: (error: Error) => void };
 type Assembly = {
   id: string;
   count: number;
@@ -14,6 +39,60 @@ type Assembly = {
   parts: Uint8Array[];
   expires: number;
 };
+type Prepared = {
+  command: string;
+  request: Record<string, unknown>;
+  verify: (value: Record<string, unknown>) => Promise<boolean>;
+};
+/** Delivery records whether any part of one request may have reached a peer. */
+type Delivery = { touched: boolean };
+/**
+ * PeerState is what one request's sends proved about one peer: it holds the
+ * whole body (`full`), it may hold part of it (`touched`), or the relay
+ * refused it transiently (`retry`) or because the peer is gone (`gone`).
+ */
+type PeerState = 'full' | 'touched' | 'retry' | 'gone';
+type ReceiptResult = {
+  empty: boolean;
+  acked: Set<string>;
+  refused: Map<string, string>;
+  unanswered: Set<string>;
+};
+type Receipt = {
+  delivery: Delivery;
+  to: string;
+  fanout: boolean;
+  awaiting: Set<string>;
+  result: ReceiptResult;
+  finish: () => void;
+  timer: ReturnType<typeof setTimeout>;
+  grace?: ReturnType<typeof setTimeout>;
+};
+
+/**
+ * RelayUndeliveredError means the request provably never reached a peer: it
+ * was never sent, or the relay refused it for every target and no chunk of
+ * it was acknowledged (ff1-control-v1 §10). Only this error allows a resend
+ * or a fallback to another route.
+ */
+export class RelayUndeliveredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RelayUndeliveredError';
+  }
+}
+
+/**
+ * RelayAmbiguousError means some part of the request may have reached a peer
+ * (an acknowledgement, a missing acknowledgement, a socket drop after a
+ * send). The FF1 may have run it, so it is never resent (§14.4).
+ */
+export class RelayAmbiguousError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RelayAmbiguousError';
+  }
+}
 
 /** relayURL selects the public device channel without credentials. */
 export function relayURL(baseUrl: string, deviceId: string): string {
@@ -62,7 +141,7 @@ export function decodeRelayFrame(frame: ArrayBuffer): { header: Header; payload:
   if (
     header.v !== 2 ||
     ![header.id, header.to, header.from].every(
-      (value) => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value)
+      (value) => typeof value === 'string' && ID_PATTERN.test(value)
     )
   ) {
     throw new Error('Invalid relay routing');
@@ -70,125 +149,77 @@ export function decodeRelayFrame(frame: ArrayBuffer): { header: Header; payload:
   return { header, payload: new Uint8Array(frame, size + 2) };
 }
 
-/** RelayClient carries existing JSON commands and notifications over relay v2.
- * A peer is selected only after the supplied endpoint validator accepts a reply.
- * Receipt ACKs never imply application acceptance.
+/**
+ * RelayClient carries protected JSON commands over relay v2 (§10).
+ *
+ * The first send of a request fans out to `to:"peers"`, and the client pins
+ * the peer whose reply the caller's validator accepts (the reply verifies
+ * under the enrolled profile). Peers that join later, or that the relay
+ * refused transiently, get the same sealed bytes by unicast; a peer that may
+ * already hold them never gets them twice. Failures are typed: see
+ * RelayUndeliveredError and RelayAmbiguousError. Receipt ACKs never imply
+ * application acceptance.
  */
 export class RelayClient {
   private nextFrameAt = 0;
   private frameWrites = Promise.resolve();
-  private socket: WebSocket;
+  private socket!: WebSocket;
+  private readonly url: string;
+  private connected = false;
+  private retryTimer?: ReturnType<typeof setTimeout>;
   private player?: string;
   private peers = new Set<string>();
   private pending = new Map<string, Pending>();
+  private receipts = new Map<string, Receipt>();
   private validators = new Map<string, (value: Record<string, unknown>) => Promise<boolean>>();
   private assemblies = new Map<string, Assembly>();
   private closed = false;
   private sequence = Promise.resolve();
-  private readiness: Pending;
+  private readiness!: Pending;
   private ready: Promise<void>;
-  onNotification?: (message: Record<string, unknown>) => void;
 
-  /** Create a controller connection; request() waits for a player to arrive. */
+  /** Create a controller connection; requests wait for the relay's hello. */
   constructor(
     baseUrl: string,
     deviceId: string,
-    socketFactory = (url: string) => new WebSocket(url, 'ff-relay.v2')
+    private readonly socketFactory = (url: string) => new WebSocket(url, 'ff-relay.v2')
   ) {
     this.ready = new Promise((resolve, reject) => {
-      this.readiness = { resolve, reject };
+      this.readiness = { resolve: () => resolve(), reject };
     });
     // Connection errors may precede the first request; retain rejection without
     // producing an unhandled promise while the caller prepares its command.
     void this.ready.catch(() => undefined);
-    this.socket = socketFactory(relayURL(baseUrl, deviceId));
-    this.socket.binaryType = 'arraybuffer';
-    this.socket.addEventListener('message', (event) => {
-      try {
-        this.receive(event.data);
-      } catch (error) {
-        this.close(error as Error);
-      }
-    });
-    this.socket.addEventListener('error', () => this.close(new Error('Relayer connection failed')));
-    this.socket.addEventListener('close', () => this.close(new Error('Relayer disconnected')));
+    this.url = relayURL(baseUrl, deviceId);
+    this.connect(0);
   }
 
-  /** requestPrepared seals only after connection and send-queue readiness.
-   * The endpoint validator alone selects the responding device; unknown peers
-   * may receive ciphertext but cannot settle a request with an unverified reply.
+  /**
+   * requestPrepared seals only after the connection is ready, sends the
+   * sealed command and resolves with the first reply its validator accepts.
+   *
+   * @param prepare - Seals the command; called at most once
+   * @param timeoutMs - Deadline for the whole request, connecting included
+   * @returns The verified RPC reply
+   * @throws {RelayUndeliveredError} When no part of the command reached a peer
+   * @throws {RelayAmbiguousError} When the command may have reached a peer
    */
   async requestPrepared(
-    prepare: () => Promise<{
-      command: string;
-      request: Record<string, unknown>;
-      verify: (value: Record<string, unknown>) => Promise<boolean>;
-    }>,
+    prepare: () => Promise<Prepared>,
     timeoutMs = 30000
   ): Promise<Record<string, unknown>> {
     const id = crypto.randomUUID();
+    const delivery: Delivery = { touched: false };
     // Bound queue/open waits before allocating a replay counter or sealing.
     const result = this.wait(`rpc:${id}`, timeoutMs);
     void result.catch(() => undefined);
-    const work = this.sequence.then(async () => {
-      await Promise.race([this.ready, result]);
-      if (!this.pending.has(`rpc:${id}`) || this.closed) {
-        throw new Error('Relay request expired');
-      }
-      const prepared = await prepare();
-      if (!this.pending.has(`rpc:${id}`) || this.closed) {
-        throw new Error('Relay request expired');
-      }
-      this.validators.set(id, prepared.verify);
-      if (prepared.command !== 'ff1Envelope') {
-        throw new Error('V2 requires a protected envelope');
-      }
-      const body = encoder.encode(
-        JSON.stringify({
-          messageID: id,
-          message: { command: prepared.command, request: prepared.request },
-        })
-      );
-      const sent = new Set<string>();
-      while (this.pending.has(`rpc:${id}`) && !this.closed) {
-        // Presence can initially contain only another controller. Probe each
-        // new candidate once while discovery is pending, using the SAME sealed
-        // request so forwarded/replayed copies cannot execute twice.
-        const targets = (this.player ? [this.player] : [...this.peers]).filter(
-          (peer) => !sent.has(peer)
-        );
-        targets.forEach((peer) => sent.add(peer));
-        const queue = [...targets];
-        await Promise.allSettled(
-          Array.from({ length: Math.min(4, queue.length) }, async () => {
-            while (queue.length) {
-              const peer = queue.shift();
-              if (!peer) {
-                break;
-              }
-              try {
-                await this.send(body, peer, () => this.pending.has(`rpc:${id}`));
-              } catch {
-                /* A failed candidate cannot prevent discovery of FF1. */
-              }
-            }
-          })
-        );
-        if (this.pending.has(`rpc:${id}`)) {
-          await Promise.race([
-            new Promise((resolve) => setTimeout(resolve, 100)),
-            result.then(
-              () => undefined,
-              () => undefined
-            ),
-          ]);
-        }
-      }
-    });
+    const work = this.sequence.then(() => this.run(id, prepare, result, delivery));
     this.sequence = work.catch(() => undefined);
     void work.catch((error) => this.settle(`rpc:${id}`, undefined, error as Error));
     try {
-      return await result;
+      return (await result) as Record<string, unknown>;
+    } catch (error) {
+      throw classify(error as Error, delivery);
     } finally {
       this.validators.delete(id);
     }
@@ -200,7 +231,11 @@ export class RelayClient {
       return;
     }
     this.closed = true;
+    clearTimeout(this.retryTimer);
     this.readiness.reject(error);
+    for (const receipt of [...this.receipts.values()]) {
+      receipt.finish();
+    }
     for (const pending of this.pending.values()) {
       pending.reject(error);
     }
@@ -210,8 +245,122 @@ export class RelayClient {
     this.socket.close();
   }
 
-  /** wait owns one bounded transport or RPC deadline. */
-  private wait(key: string, timeoutMs: number): Promise<any> {
+  /**
+   * connect opens one socket. Before the first hello a failure reconnects
+   * with backoff (CONNECT_ATTEMPTS); afterwards it closes the client.
+   */
+  private connect(attempt: number): void {
+    const socket = this.socketFactory(this.url);
+    socket.binaryType = 'arraybuffer';
+    this.socket = socket;
+    let lostOnce = false;
+    const lost = (error: Error) => {
+      if (lostOnce || socket !== this.socket || this.closed) {
+        return;
+      }
+      lostOnce = true;
+      if (!this.connected && attempt + 1 < CONNECT_ATTEMPTS) {
+        socket.close();
+        this.retryTimer = setTimeout(() => this.connect(attempt + 1), backoffMs(attempt));
+        return;
+      }
+      this.close(error);
+    };
+    socket.addEventListener('message', (event) => {
+      if (socket !== this.socket) {
+        return;
+      }
+      try {
+        this.receive(event.data);
+      } catch (error) {
+        this.close(error as Error);
+      }
+    });
+    socket.addEventListener('error', () => lost(new Error('Relayer connection failed')));
+    socket.addEventListener('close', (event) => {
+      const code = (event as CloseEvent).code;
+      lost(new Error(code ? `Relayer disconnected (${code})` : 'Relayer disconnected'));
+    });
+  }
+
+  /** run is one request's work, serialized behind earlier requests. */
+  private async run(
+    id: string,
+    prepare: () => Promise<Prepared>,
+    result: Promise<unknown>,
+    delivery: Delivery
+  ): Promise<void> {
+    const active = () => this.pending.has(`rpc:${id}`) && !this.closed;
+    await Promise.race([this.ready, result]);
+    if (!active()) {
+      throw new Error('Relay request expired');
+    }
+    const prepared = await prepare();
+    if (!active()) {
+      throw new Error('Relay request expired');
+    }
+    if (prepared.command !== 'ff1Envelope') {
+      throw new Error('V2 requires a protected envelope');
+    }
+    this.validators.set(id, prepared.verify);
+    const body = encoder.encode(
+      JSON.stringify({
+        messageID: id,
+        message: { command: prepared.command, request: prepared.request },
+      })
+    );
+    await this.deliver(body, delivery, active, result);
+  }
+
+  /**
+   * deliver sends one sealed body until a reply settles the request: first
+   * to the pinned player, or fanned out to `peers` (§10), then by unicast to
+   * peers that never received it. It throws RelayUndeliveredError as soon as
+   * no peer is left to try and nothing was delivered.
+   */
+  private async deliver(
+    body: Uint8Array,
+    delivery: Delivery,
+    active: () => boolean,
+    result: Promise<unknown>
+  ): Promise<void> {
+    const states = new Map<string, PeerState>();
+    const retries = new Map<string, { attempt: number; at: number }>();
+    const first = await this.send(body, this.player ?? 'peers', active, delivery, states);
+    if (first.empty) {
+      throw new RelayUndeliveredError('Relay: no peer is connected to this FF1 channel');
+    }
+    while (active()) {
+      const now = Date.now();
+      const candidates = (this.player ? [this.player] : [...this.peers]).filter((peer) => {
+        const state = states.get(peer);
+        return state === undefined || (state === 'retry' && (retries.get(peer)?.at ?? 0) <= now);
+      });
+      if (!candidates.length && !this.retryable(states) && !delivery.touched) {
+        throw new RelayUndeliveredError('Relay refused the command for every peer');
+      }
+      for (const peer of candidates) {
+        const attempt = states.get(peer) === 'retry' ? (retries.get(peer)?.attempt ?? 0) + 1 : 0;
+        await this.send(body, peer, active, delivery, states);
+        retries.set(peer, { attempt, at: Date.now() + backoffMs(attempt) });
+      }
+      await Promise.race([
+        new Promise((resolve) => setTimeout(resolve, 100)),
+        result.then(
+          () => undefined,
+          () => undefined
+        ),
+      ]);
+    }
+  }
+
+  /** retryable reports a live peer the relay refused only transiently. */
+  private retryable(states: Map<string, PeerState>): boolean {
+    return [...states].some(([peer, state]) => state === 'retry' && this.peers.has(peer));
+  }
+
+  /** wait owns the bounded deadline of one request. */
+  private wait(key: string, timeoutMs: number): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(key);
@@ -244,51 +393,135 @@ export class RelayClient {
     }
   }
 
-  /** send serializes chunks and waits for each receipt to respect relay credit. */
-  private async send(body: Uint8Array, to: string, active: () => boolean): Promise<void> {
+  /**
+   * send writes one body to `to` (a peer or `peers`) chunk by chunk and
+   * records what the receipts proved per peer in `states`. It stops early
+   * once no peer holds every chunk so far, since none could reassemble it.
+   */
+  private async send(
+    body: Uint8Array,
+    to: string,
+    active: () => boolean,
+    delivery: Delivery,
+    states: Map<string, PeerState>
+  ): Promise<{ empty: boolean }> {
     if (body.length > MAX_MESSAGE) {
       throw new Error('Relay message too large');
     }
     const transfer = crypto.randomUUID();
     const count = Math.ceil(body.length / CHUNK_SIZE);
-    for (let index = 0; index < count; index++) {
-      if (!active()) {
-        throw new Error('Relay request expired');
+    const sendStates = new Map<string, PeerState>();
+    for (let index = 0; index < count && active(); index++) {
+      const payload = chunkPayload(body, transfer, index, count);
+      const receipt = await this.writeFrame(payload, to, delivery);
+      if (receipt.empty) {
+        return { empty: true };
       }
-      let part: Uint8Array = body.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
-      if (count > 1) {
-        part = encoder.encode(
-          JSON.stringify({
-            relayChunk: { id: transfer, index, count, data: btoa(String.fromCharCode(...part)) },
-          })
-        );
+      mergeChunkResult(sendStates, receipt, index === 0);
+      if (![...sendStates.values()].includes('full')) {
+        break;
       }
-      const id = crypto.randomUUID();
-      const frame = encodeRelayFrame({ v: 2, id, to }, part);
-      const write = this.frameWrites.then(async () => {
-        const delay = this.nextFrameAt - Date.now();
-        if (delay > 0) {
-          await new Promise((resolve) => setTimeout(resolve, delay));
-        }
-        if (!active() || this.closed) {
-          throw new Error('Relay request expired');
-        }
-        this.nextFrameAt = Date.now() + Math.max(20, Math.ceil((frame.byteLength * 1000) / 750000));
-        const receipt = this.wait(`ack:${to}:${id}`, 5000);
-        void receipt.catch(() => undefined);
-        try {
-          this.socket.send(frame);
-        } catch (error) {
-          this.settle(`ack:${to}:${id}`, undefined, error as Error);
-        }
-        return { receipt };
-      });
-      this.frameWrites = write.then(
-        () => undefined,
-        () => undefined
-      );
-      const { receipt } = await write;
-      await receipt;
+    }
+    for (const [peer, state] of sendStates) {
+      states.set(peer, state);
+    }
+    return { empty: false };
+  }
+
+  /** writeFrame paces one frame below the relay's byte ceiling and awaits its receipts. */
+  private writeFrame(payload: Uint8Array, to: string, delivery: Delivery): Promise<ReceiptResult> {
+    const id = crypto.randomUUID();
+    const frame = encodeRelayFrame({ v: 2, id, to }, payload);
+    const write = this.frameWrites.then(async () => {
+      const delay = this.nextFrameAt - Date.now();
+      if (delay > 0) {
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      }
+      this.nextFrameAt = Date.now() + Math.max(20, Math.ceil((frame.byteLength * 1000) / 750000));
+      if (this.closed) {
+        return refusedLocally(to);
+      }
+      const receipt = this.expectReceipt(id, to, delivery);
+      try {
+        this.socket.send(frame);
+      } catch (error) {
+        this.close(error as Error);
+      }
+      return { receipt };
+    });
+    this.frameWrites = write.then(
+      () => undefined,
+      () => undefined
+    );
+    return write.then((written) => ('receipt' in written ? written.receipt : written));
+  }
+
+  /**
+   * expectReceipt registers the receipts one frame waits for: the target's,
+   * or every currently known peer's for a fan-out. A peer that never answers
+   * marks the request touched, since the relay may have forwarded the frame.
+   */
+  private expectReceipt(id: string, to: string, delivery: Delivery): Promise<ReceiptResult> {
+    return new Promise((resolve) => {
+      const fanout = to === 'peers';
+      const result: ReceiptResult = {
+        empty: false,
+        acked: new Set(),
+        refused: new Map(),
+        unanswered: new Set(),
+      };
+      const receipt: Receipt = {
+        delivery,
+        to,
+        fanout,
+        awaiting: new Set(fanout ? this.peers : [to]),
+        result,
+        timer: setTimeout(() => receipt.finish(), RECEIPT_TIMEOUT_MS),
+        finish: () => {
+          clearTimeout(receipt.timer);
+          clearTimeout(receipt.grace);
+          this.receipts.delete(id);
+          receipt.awaiting.forEach((peer) => result.unanswered.add(peer));
+          receipt.awaiting.clear();
+          if (result.unanswered.size) {
+            delivery.touched = true;
+          }
+          resolve(result);
+        },
+      };
+      this.receipts.set(id, receipt);
+    });
+  }
+
+  /** onReceipt applies one relay ack or routing error to its frame. */
+  private onReceipt(event: Record<string, unknown>): void {
+    const receipt = typeof event.id === 'string' ? this.receipts.get(event.id) : undefined;
+    if (!receipt) {
+      return;
+    }
+    const peer = event.type === 'ack' ? event.from : event.to;
+    if (!receipt.fanout && peer !== receipt.to) {
+      // Only the targeted recipient can answer a unicast frame.
+      return;
+    }
+    if (event.type === 'ack' && typeof event.from === 'string') {
+      receipt.result.acked.add(event.from);
+      receipt.awaiting.delete(event.from);
+      receipt.delivery.touched = true;
+      if (receipt.fanout && receipt.awaiting.size && !receipt.grace) {
+        receipt.grace = setTimeout(() => receipt.finish(), FANOUT_GRACE_MS);
+      }
+    } else if (event.type === 'error' && event.to === 'peers') {
+      receipt.result.empty = true;
+      receipt.awaiting.clear();
+    } else if (event.type === 'error' && typeof event.to === 'string') {
+      receipt.result.refused.set(event.to, String(event.code));
+      receipt.awaiting.delete(event.to);
+    } else {
+      return;
+    }
+    if (!receipt.fanout || !receipt.awaiting.size) {
+      receipt.finish();
     }
   }
 
@@ -303,104 +536,98 @@ export class RelayClient {
     }
     const { header, payload } = decodeRelayFrame(data);
     this.socket.send(JSON.stringify({ type: 'ack', from: header.from, id: header.id }));
-    if (!this.peers.has(header.from!) || (this.player && header.from !== this.player)) {
+    const from = header.from!;
+    if (!this.peers.has(from) || (this.player && from !== this.player)) {
       return;
     }
-    let body: Uint8Array | undefined;
+    let message: Record<string, unknown> | undefined;
     try {
-      body = this.assemble(header.from!, payload);
+      message = parseMessage(this.assemble(from, payload));
     } catch {
       return;
     }
-    if (!body) {
+    if (message?.type === 'RPC' && typeof message.messageID === 'string') {
+      this.verifyReply(from, message);
+    }
+  }
+
+  /**
+   * verifyReply settles a request with a reply its validator accepts, and
+   * pins that peer. An unverified reply settles nothing: on the public
+   * channel a forgery costs availability only.
+   */
+  private verifyReply(from: string, message: Record<string, unknown>): void {
+    const messageID = message.messageID as string;
+    const verify = this.validators.get(messageID);
+    if (!verify) {
       return;
     }
-    let message: Record<string, unknown>;
-    try {
-      const parsed: unknown = JSON.parse(decoder.decode(body));
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        return;
-      }
-      message = parsed as Record<string, unknown>;
-    } catch {
-      return;
-    }
-    if (message.type === 'RPC' && typeof message.messageID === 'string') {
-      const verify = this.validators.get(message.messageID);
-      if (verify) {
-        void verify(message)
-          .then((accepted) => {
-            if (
-              accepted &&
-              this.peers.has(header.from!) &&
-              this.pending.has(`rpc:${message.messageID}`)
-            ) {
-              this.player = header.from;
-              this.settle(`rpc:${message.messageID}`, message);
-            }
-          })
-          .catch(() => undefined);
-      }
-    } else {
-      if (header.from === this.player) {
-        this.onNotification?.(message);
-      }
-    }
+    void verify(message)
+      .then((accepted) => {
+        if (accepted && this.peers.has(from) && this.pending.has(`rpc:${messageID}`)) {
+          this.player = from;
+          this.settle(`rpc:${messageID}`, message);
+        }
+      })
+      .catch(() => undefined);
   }
 
   /** control keeps connection presence separate from command completion. */
-  private control(event: any): void {
+  private control(event: Record<string, unknown>): void {
     if (event.type === 'hello') {
-      for (const peer of (event.peers ?? []).slice(0, 35)) {
-        this.peers.add(peer);
-      }
-    }
-    if (event.type === 'peer_connected' && this.peers.size < 35) {
+      this.onHello(event);
+    } else if (event.type === 'peer_connected' && validId(event.connectionId)) {
       this.peers.add(event.connectionId);
-    }
-    if (event.type === 'peer_disconnected') {
-      this.peers.delete(event.connectionId);
-      this.assemblies.delete(event.connectionId);
-      if (event.connectionId === this.player) {
-        this.close(new Error('Player disconnected'));
-        return;
-      }
-    }
-    if (!this.player && this.peers.size) {
-      this.readiness.resolve(undefined);
-    }
-    if (event.type === 'ack') {
-      this.settle(`ack:${event.from}:${event.id}`);
-    }
-    if (event.type === 'error') {
-      this.settle(`ack:${event.to}:${event.id}`, undefined, new Error(`Relay: ${event.code}`));
+    } else if (event.type === 'peer_disconnected' && typeof event.connectionId === 'string') {
+      this.onPeerGone(event.connectionId);
+    } else if (event.type === 'ack' || event.type === 'error') {
+      this.onReceipt(event);
     }
   }
 
-  /** assemble enforces one ordered 4 MiB transfer per selected player. */
+  /** onHello records the peers present at connect and releases waiting requests. */
+  private onHello(event: Record<string, unknown>): void {
+    if (!validId(event.connectionId) || !Array.isArray(event.peers)) {
+      throw new Error('Invalid relay hello');
+    }
+    // Every live peer is kept: the relay caps a channel at 36 connections,
+    // and a client-side cap would let strangers crowd the FF1 out.
+    for (const peer of event.peers) {
+      if (validId(peer)) {
+        this.peers.add(peer);
+      }
+    }
+    this.connected = true;
+    this.readiness.resolve(undefined);
+  }
+
+  /** onPeerGone forgets a peer; losing the pinned player ends the connection. */
+  private onPeerGone(peer: string): void {
+    this.peers.delete(peer);
+    this.assemblies.delete(peer);
+    if (peer === this.player) {
+      this.close(new Error('Player disconnected'));
+      return;
+    }
+    // A peer that left before answering may still have received the frame.
+    for (const receipt of [...this.receipts.values()]) {
+      if (receipt.awaiting.delete(peer)) {
+        receipt.result.unanswered.add(peer);
+        if (!receipt.awaiting.size) {
+          receipt.finish();
+        }
+      }
+    }
+  }
+
+  /** assemble enforces one ordered 4 MiB transfer per peer and a shared byte budget. */
   private assemble(from: string, payload: Uint8Array): Uint8Array | undefined {
     const chunk = JSON.parse(decoder.decode(payload)).relayChunk;
     if (!chunk) {
       return payload;
     }
-    if (
-      typeof chunk.id !== 'string' ||
-      !/^[A-Za-z0-9_-]{1,64}$/.test(chunk.id) ||
-      !Number.isInteger(chunk.count) ||
-      chunk.count < 2 ||
-      chunk.count > 128 ||
-      !Number.isInteger(chunk.index) ||
-      chunk.index < 0 ||
-      chunk.index >= chunk.count ||
-      typeof chunk.data !== 'string' ||
-      chunk.data.length > 43692
-    ) {
-      throw new Error('Invalid relay chunk');
-    }
-    const bytes = Uint8Array.from(atob(chunk.data), (char) => char.charCodeAt(0));
-    if (!bytes.length || bytes.length > CHUNK_SIZE) {
-      throw new Error('Invalid chunk size');
-    }
+    const bytes = chunkBytes(chunk);
+    this.sweepAssemblies();
     if (chunk.index === 0) {
       this.assemblies.set(from, {
         id: chunk.id,
@@ -408,7 +635,7 @@ export class RelayClient {
         next: 0,
         bytes: 0,
         parts: [],
-        expires: Date.now() + 180000,
+        expires: Date.now() + ASSEMBLY_TIMEOUT_MS,
       });
     }
     const assembly = this.assemblies.get(from);
@@ -417,9 +644,10 @@ export class RelayClient {
       assembly.id !== chunk.id ||
       assembly.count !== chunk.count ||
       assembly.next !== chunk.index ||
-      Date.now() >= assembly.expires ||
-      assembly.bytes + bytes.length > MAX_MESSAGE
+      assembly.bytes + bytes.length > MAX_MESSAGE ||
+      this.assemblyBytes() + bytes.length > MAX_ASSEMBLY_BYTES
     ) {
+      this.assemblies.delete(from);
       throw new Error('Invalid chunk sequence');
     }
     assembly.parts.push(bytes);
@@ -428,13 +656,156 @@ export class RelayClient {
     if (assembly.next !== assembly.count) {
       return undefined;
     }
-    const result = new Uint8Array(assembly.bytes);
-    let offset = 0;
-    for (const part of assembly.parts) {
-      result.set(part, offset);
-      offset += part.length;
-    }
     this.assemblies.delete(from);
-    return result;
+    return concat(assembly.parts, assembly.bytes);
   }
+
+  /** sweepAssemblies drops transfers past their 180 s reassembly window. */
+  private sweepAssemblies(): void {
+    const now = Date.now();
+    for (const [peer, assembly] of this.assemblies) {
+      if (now >= assembly.expires) {
+        this.assemblies.delete(peer);
+      }
+    }
+  }
+
+  /** assemblyBytes is the total held by unfinished transfers. */
+  private assemblyBytes(): number {
+    let total = 0;
+    for (const assembly of this.assemblies.values()) {
+      total += assembly.bytes;
+    }
+    return total;
+  }
+}
+
+/** backoffMs is a jittered exponential delay for transient relay refusals. */
+function backoffMs(attempt: number): number {
+  const ceiling = Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** attempt);
+  return Math.ceil(ceiling * (0.5 + Math.random() / 2));
+}
+
+/** refusalState maps a relay refusal code to what it proves about the peer. */
+function refusalState(code: string): PeerState {
+  // backpressure and duplicate_packet mean "not forwarded this time", which
+  // §10 makes transient; peer_unavailable means the target is gone.
+  return code === 'backpressure' || code === 'duplicate_packet' ? 'retry' : 'gone';
+}
+
+/**
+ * mergeChunkResult folds one chunk's receipts into the per-peer states of a
+ * body. A peer is `full` only when it acknowledged every chunk; a peer that
+ * acknowledged some chunks, or never answered, is `touched`.
+ */
+function mergeChunkResult(
+  states: Map<string, PeerState>,
+  receipt: ReceiptResult,
+  first: boolean
+): void {
+  for (const peer of receipt.unanswered) {
+    states.set(peer, 'touched');
+  }
+  for (const peer of receipt.acked) {
+    if (first) {
+      states.set(peer, 'full');
+    } else if (states.get(peer) !== 'full') {
+      states.set(peer, 'touched');
+    }
+  }
+  for (const [peer, code] of receipt.refused) {
+    const previous = states.get(peer);
+    if (first || previous === 'retry' || previous === 'gone') {
+      states.set(peer, refusalState(code));
+    } else {
+      states.set(peer, 'touched');
+    }
+  }
+}
+
+/** refusedLocally is the receipt of a frame the closed client never wrote. */
+function refusedLocally(to: string): ReceiptResult {
+  return {
+    empty: false,
+    acked: new Set(),
+    refused: new Map(to === 'peers' ? [] : [[to, 'peer_unavailable']]),
+    unanswered: new Set(),
+  };
+}
+
+/** classify types a request failure by whether any part of it may have arrived. */
+function classify(error: Error, delivery: Delivery): Error {
+  if (error instanceof RelayUndeliveredError || error instanceof RelayAmbiguousError) {
+    return error;
+  }
+  return delivery.touched
+    ? new RelayAmbiguousError(error.message)
+    : new RelayUndeliveredError(error.message);
+}
+
+/** validId reports a relay connection ID. */
+function validId(value: unknown): value is string {
+  return typeof value === 'string' && ID_PATTERN.test(value);
+}
+
+/** chunkPayload is chunk `index` of `body`, wrapped in relayChunk when split. */
+function chunkPayload(body: Uint8Array, transfer: string, index: number, count: number) {
+  const part = body.slice(index * CHUNK_SIZE, (index + 1) * CHUNK_SIZE);
+  if (count === 1) {
+    return part;
+  }
+  return encoder.encode(
+    JSON.stringify({
+      relayChunk: { id: transfer, index, count, data: Buffer.from(part).toString('base64') },
+    })
+  );
+}
+
+/** chunkBytes validates one inbound relayChunk and decodes its data. */
+function chunkBytes(chunk: Record<string, unknown>): Uint8Array {
+  const { id, index, count, data } = chunk;
+  if (
+    typeof id !== 'string' ||
+    !ID_PATTERN.test(id) ||
+    typeof count !== 'number' ||
+    !Number.isInteger(count) ||
+    count < 2 ||
+    count > 128 ||
+    typeof index !== 'number' ||
+    !Number.isInteger(index) ||
+    index < 0 ||
+    index >= count ||
+    typeof data !== 'string' ||
+    data.length > 43692
+  ) {
+    throw new Error('Invalid relay chunk');
+  }
+  const bytes = Uint8Array.from(atob(data), (char) => char.charCodeAt(0));
+  if (!bytes.length || bytes.length > CHUNK_SIZE) {
+    throw new Error('Invalid chunk size');
+  }
+  return bytes;
+}
+
+/** concat joins reassembled parts. */
+function concat(parts: Uint8Array[], size: number): Uint8Array {
+  const result = new Uint8Array(size);
+  let offset = 0;
+  for (const part of parts) {
+    result.set(part, offset);
+    offset += part.length;
+  }
+  return result;
+}
+
+/** parseMessage decodes a complete application message, or undefined when incomplete. */
+function parseMessage(body: Uint8Array | undefined): Record<string, unknown> | undefined {
+  if (!body) {
+    return undefined;
+  }
+  const parsed: unknown = JSON.parse(decoder.decode(body));
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined;
+  }
+  return parsed as Record<string, unknown>;
 }

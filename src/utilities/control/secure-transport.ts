@@ -15,7 +15,9 @@
  *   2xx bodies), plus the two encrypted codes the spec says to retry with a
  *   new ctr (internal_error) or after a pause (rate_limited).
  * - The relayer is used only after LAN reachability is exhausted, never after
- *   an HTTP or protocol answer, exactly like the legacy fallback.
+ *   an HTTP or protocol answer, exactly like the legacy fallback. With a v2
+ *   endpoint the v2 device channel is tried first; the legacy topic follows
+ *   only when v2 proves the command undelivered (§10).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
  *   only, and retrying would hand an attacker a free oracle.
@@ -25,7 +27,7 @@
  *   (§14.4). A public error is never evidence of this.
  */
 
-import { RelayClient } from '../relay-client';
+import { RelayClient, RelayUndeliveredError } from '../relay-client';
 import { defaultDeadlineFetch } from '../http';
 import * as logger from '../../logger';
 import { getFF1RelayerConfig } from '../../config';
@@ -76,6 +78,8 @@ const PUBLIC_ERROR_STATUSES = new Set([401, 403, 503]);
  * requests behind, and skipped counters cost nothing, so one jump covers it.
  */
 export const REPLAY_COUNTER_JUMP = 1024;
+/** V2_TIMEOUT_MS is the default deadline of one relay v2 command. */
+const V2_TIMEOUT_MS = 30_000;
 
 export type Transport = 'lan' | 'relayer';
 
@@ -89,10 +93,16 @@ export interface SecureTransportDeps {
   controllerStore?: ControllerStoreOptions;
   /** Unix seconds; tests pin the clock. */
   nowFn?: () => number;
+  /**
+   * Deadline of one relay v2 request, connecting included. Unpair's
+   * self-revoke sets it so v2 honors the same bound as its LAN request.
+   */
+  v2TimeoutMs?: number;
 }
 
-type ResolvedDeps = Required<Omit<SecureTransportDeps, 'controllerStore'>> & {
+type ResolvedDeps = Required<Omit<SecureTransportDeps, 'controllerStore' | 'v2TimeoutMs'>> & {
   controllerStore: ControllerStoreOptions;
+  v2TimeoutMs?: number;
 };
 
 /** SecureRequest describes one logical command; attempts are sealed from it. */
@@ -151,6 +161,7 @@ function resolveDeps(deps: SecureTransportDeps): ResolvedDeps {
     noticeFn: deps.noticeFn ?? logger.always,
     nowFn: deps.nowFn ?? (() => Math.floor(Date.now() / 1000)),
     controllerStore: deps.controllerStore ?? {},
+    v2TimeoutMs: deps.v2TimeoutMs,
   };
 }
 
@@ -489,8 +500,8 @@ async function fallbackOrUnreachable(
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
       }
-      // Only the binding probe ran. The user's command was never sent, so an
-      // optional legacy topic can carry a fresh sealed request to older firmware.
+      // Proven undelivered: no chunk reached a peer, so an optional legacy
+      // topic may carry a freshly sealed request (new ctr) instead.
     }
   } catch (error) {
     return {
@@ -517,9 +528,16 @@ async function fallbackOrUnreachable(
   return sendViaRelayer(request, record, deps, topicId);
 }
 
-/** sendViaV2 binds this connection with a fresh sealed status request before
- * sending the caller's command. Neither a rejected candidate nor a receipt can
- * select the device. A lost result is reported without LAN/legacy resubmission.
+/**
+ * sendViaV2 carries one freshly sealed command on the relay v2 device channel
+ * (§10). The relay client fans the first envelope out and accepts only a reply
+ * that verifies under the pinned profile, so neither a stranger's reply nor a
+ * receipt can answer it. It is not followed by a status probe: notifications
+ * are not consumed here, and a probe would cost a ctr and a round trip.
+ *
+ * Failures keep the §14.4 split: RelayUndeliveredError (no chunk reached a
+ * peer) is reported `unreachable` so the caller may use the legacy topic;
+ * anything else may have run on the FF1 and is never resent.
  */
 async function sendViaV2(
   request: SecureRequest,
@@ -533,13 +551,11 @@ async function sendViaV2(
   } catch (error) {
     return { kind: 'failed', unreachable: true, error: (error as Error).message };
   }
-  let commandStarted = false;
-  const exchange = async (next: SecureRequest): Promise<SecureOutcome> => {
-    let accepted: SecureOutcome | undefined;
-    const size = JSON.stringify(next.req ?? {}).length;
+  let accepted: SecureOutcome | undefined;
+  try {
     await client.requestPrepared(
       async () => {
-        const sealed = await sealNext(next, deps);
+        const sealed = await sealNext(request, deps);
         return {
           command: 'ff1Envelope',
           request: { v: 1, jwe: sealed.compact },
@@ -557,32 +573,42 @@ async function sendViaV2(
           },
         };
       },
-      30000 + (size > 32768 ? Math.ceil(size / 24000) * 1000 : 0)
+      deps.v2TimeoutMs ?? v2Deadline(request)
     );
     return accepted!;
-  };
-  try {
-    if (request.op === 'cmd') {
-      const bound = await exchange({ ...request, cmd: 'getDeviceStatus', req: {}, retry: false });
-      if (bound.kind !== 'reply' || !bound.reply.ok) {
-        return bound;
-      }
-    }
-    commandStarted = true;
-    return await exchange(request);
   } catch (error) {
-    return {
-      kind: 'failed',
-      error: commandStarted
-        ? 'Secure relay result unavailable; execution outcome may be unknown'
-        : 'Secure relay binding unavailable; command not sent',
-      unreachable: !commandStarted,
-      details: (error as Error).message,
-      transport: 'relayer',
-    };
+    return v2Failure(request, error as Error);
   } finally {
     client.close();
   }
+}
+
+/** v2Deadline gives a large command time to cross the relay's byte ceiling. */
+function v2Deadline(request: SecureRequest): number {
+  const size = JSON.stringify(request.req ?? {}).length;
+  return V2_TIMEOUT_MS + (size > 32768 ? Math.ceil(size / 24000) * 1000 : 0);
+}
+
+/** v2Failure maps a typed relay error to an outcome (§10, §14.4). */
+function v2Failure(request: SecureRequest, error: Error): SecureOutcome {
+  if (error instanceof RelayUndeliveredError) {
+    logger.debug(`Relay v2 did not deliver the command: ${error.message}`);
+    return {
+      kind: 'failed',
+      unreachable: true,
+      error: 'The FF1 relay did not deliver the command',
+      details: error.message,
+      transport: 'relayer',
+    };
+  }
+  const label = request.device.name || request.device.id;
+  return {
+    kind: 'failed',
+    error: `Outcome unknown: the relay result from "${label}" was lost (${error.message})`,
+    details:
+      'The FF1 may already have run it, so ff-cli did not send it again. Check the FF1, then run the command again if it did not take effect.',
+    transport: 'relayer',
+  };
 }
 
 /** sendViaRelayer seals a NEW request (new ctr) and casts it on the topic. */

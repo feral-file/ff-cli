@@ -918,125 +918,214 @@ describe('secure sshAccess', () => {
 // These exercise the existing endpoint fixture through the new carrier; no
 // registration contract or crypto is implemented by the transport tests.
 describe('secure generic carrier integration', () => {
-  for (const mode of ['verified', 'binding-unavailable', 'lost-command-reply'] as const) {
-    test(mode, async () => {
-      const record = enrolledRecord('owner');
-      const device = fakeDevice();
-      const previous = globalThis.WebSocket;
-      let legacyCalls = 0;
-      let bindings = 0;
-      let originalCommands = 0;
-      class Socket extends EventTarget {
-        binaryType = '';
-        constructor(url: string, protocol: string) {
-          super();
-          assert.equal(protocol, 'ff-relay.v2');
-          assert.match(url, /\/v2\/channels\//);
-          queueMicrotask(() => {
-            if (mode === 'binding-unavailable') {
-              this.dispatchEvent(new Event('error'));
-            } else {
-              this.message(
-                JSON.stringify({ type: 'hello', connectionId: 'cli', peers: ['attacker', 'ff1'] })
-              );
-            }
-          });
-        }
-        message(data: unknown) {
-          this.dispatchEvent(new MessageEvent('message', { data }));
-        }
-        close() {
-          /* No actual network socket. */
-        }
-        send(data: unknown) {
-          if (!(data instanceof Uint8Array)) {
+  type Mode = 'verified' | 'empty-channel' | 'never-admitted' | 'lost-command-reply';
+
+  /**
+   * carrierSocket is a relay with a stranger and the FF1 on the device
+   * channel. The stranger ACKs everything and answers with a forgery.
+   */
+  function carrierSocket(device: FakeFF1, mode: Mode, sent: string[]) {
+    return class Socket extends EventTarget {
+      binaryType = '';
+      constructor(url: string, protocol: string) {
+        super();
+        assert.equal(protocol, 'ff-relay.v2');
+        assert.match(url, /\/v2\/channels\//);
+        queueMicrotask(() => {
+          if (mode === 'never-admitted') {
+            this.dispatchEvent(new Event('error'));
             return;
           }
-          const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
-          const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
-          const body = JSON.parse(new TextDecoder().decode(data.slice(2 + length)));
-          queueMicrotask(() => {
-            this.message(JSON.stringify({ type: 'ack', from: header.to, id: header.id }));
-            let answer: unknown = { v: 1, jwe: 'forged-candidate' };
-            if (header.to === 'ff1') {
-              answer = device.handle(body.message).json;
-              if (device.seen.at(-1)?.cmd === 'getDeviceStatus') {
-                bindings++;
-              } else {
-                assert.equal(bindings, 1, 'command sent before verified binding');
-                originalCommands++;
-                if (mode === 'lost-command-reply') {
-                  this.dispatchEvent(new Event('close'));
-                  return;
-                }
-              }
-            }
-            const reply = encodeRelayFrame(
-              { v: 2, id: crypto.randomUUID(), from: header.to, to: 'cli' },
-              new TextEncoder().encode(
-                JSON.stringify({ type: 'RPC', messageID: body.messageID, message: answer })
-              )
-            );
-            this.message(reply.buffer);
-          });
-        }
+          const peers = mode === 'empty-channel' ? [] : ['stranger', 'ff1'];
+          this.message(JSON.stringify({ type: 'hello', connectionId: 'cli', peers }));
+        });
       }
-      globalThis.WebSocket = Socket as unknown as typeof WebSocket;
-      try {
-        const outcome = await sendSecureRequest(
-          {
-            device: { id: DEVICE_ID, host: HOST },
-            op: 'cmd',
-            cmd: 'next',
-            req: {},
-            retry: false,
-            relayerFallback: true,
-          },
-          record,
-          {
-            controllerStore: { dir: storeDir },
-            nowFn: () => NOW,
-            getRelayerConfigFn: () => ({
-              baseUrl: 'https://legacy.test',
-              v2Endpoint: 'wss://v2.test',
-            }),
-            getTopicIdFn: () => 'optional-topic',
-            noticeFn: () => undefined,
-            fetchFn: async (input, init) => {
-              if (new URL(input.toString()).origin === HOST) {
-                throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
-              }
-              legacyCalls++;
-              return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
-            },
-          }
+      message(data: unknown) {
+        this.dispatchEvent(new MessageEvent('message', { data }));
+      }
+      close() {
+        /* No actual network socket. */
+      }
+      send(data: unknown) {
+        if (!(data instanceof Uint8Array)) {
+          return;
+        }
+        const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
+        const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
+        const body = JSON.parse(new TextDecoder().decode(data.slice(2 + length)));
+        sent.push(header.to);
+        queueMicrotask(() => this.deliver(header, body));
+      }
+      deliver(header: { id: string; to: string }, body: { messageID: string; message: unknown }) {
+        if (mode === 'empty-channel') {
+          this.control({ type: 'error', code: 'peer_unavailable', id: header.id, to: 'peers' });
+          return;
+        }
+        this.control({ type: 'ack', from: 'stranger', id: header.id });
+        this.control({ type: 'ack', from: 'ff1', id: header.id });
+        this.reply('stranger', body.messageID, { v: 1, jwe: 'forged-candidate' });
+        const answer = device.handle(body.message as Record<string, unknown>).json;
+        if (mode === 'lost-command-reply') {
+          this.dispatchEvent(new Event('close'));
+          return;
+        }
+        this.reply('ff1', body.messageID, answer);
+      }
+      control(event: Record<string, unknown>) {
+        this.message(JSON.stringify(event));
+      }
+      reply(from: string, messageID: string, message: unknown) {
+        const frame = encodeRelayFrame(
+          { v: 2, id: crypto.randomUUID(), from, to: 'cli' },
+          new TextEncoder().encode(JSON.stringify({ type: 'RPC', messageID, message }))
         );
-        if (mode === 'verified') {
-          assert.equal(outcome.kind, 'reply');
-          assert.equal(originalCommands, 1);
-          assert.equal(legacyCalls, 0);
-          assert.deepEqual(
-            device.seen.map((c) => c.cmd),
-            ['getDeviceStatus', 'next']
-          );
-        } else if (mode === 'binding-unavailable') {
-          assert.equal(outcome.kind, 'reply');
-          assert.equal(originalCommands, 0);
-          assert.equal(legacyCalls, 1);
-          assert.deepEqual(
-            device.seen.map((c) => c.cmd),
-            ['next']
-          );
-        } else {
-          assert.equal(outcome.kind, 'failed');
-          assert.equal(originalCommands, 1);
-          assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
-        }
-      } finally {
-        globalThis.WebSocket = previous;
+        this.message(frame.buffer);
       }
+    };
+  }
+
+  async function sendOverCarrier(mode: Mode, overrides: { v2TimeoutMs?: number } = {}) {
+    const record = enrolledRecord('owner');
+    const device = fakeDevice();
+    const previous = globalThis.WebSocket;
+    const sent: string[] = [];
+    let legacyCalls = 0;
+    globalThis.WebSocket = carrierSocket(device, mode, sent) as unknown as typeof WebSocket;
+    try {
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'next',
+          req: {},
+          retry: false,
+          relayerFallback: true,
+        },
+        record,
+        {
+          ...overrides,
+          controllerStore: { dir: storeDir },
+          nowFn: () => NOW,
+          getRelayerConfigFn: () => ({
+            baseUrl: 'https://legacy.test',
+            v2Endpoint: 'wss://v2.test',
+          }),
+          getTopicIdFn: () => 'optional-topic',
+          noticeFn: () => undefined,
+          fetchFn: async (input, init) => {
+            if (new URL(input.toString()).origin === HOST) {
+              throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+            }
+            legacyCalls++;
+            return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
+          },
+        }
+      );
+      return { outcome, device, sent, legacyCalls };
+    } finally {
+      globalThis.WebSocket = previous;
+    }
+  }
+
+  test('a verified reply over a fan-out settles the command; no status probe precedes it', async () => {
+    const { outcome, device, sent, legacyCalls } = await sendOverCarrier('verified');
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 0);
+    assert.deepEqual(sent, ['peers']);
+    assert.deepEqual(
+      device.seen.map((c) => c.cmd),
+      ['next']
+    );
+  });
+
+  for (const mode of ['empty-channel', 'never-admitted'] as const) {
+    test(`proven undelivered (${mode}) falls back to the legacy topic with a fresh request`, async () => {
+      const { outcome, device, legacyCalls } = await sendOverCarrier(mode);
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(outcome.transport, 'relayer');
+      assert.equal(legacyCalls, 1);
+      assert.deepEqual(
+        device.seen.map((c) => c.cmd),
+        ['next']
+      );
     });
   }
+
+  test('a lost reply after delivery is outcome unknown and never falls back', async () => {
+    const { outcome, device, legacyCalls } = await sendOverCarrier('lost-command-reply');
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal((outcome as { unreachable?: boolean }).unreachable, undefined);
+    assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
+    assert.equal(device.seen.length, 1);
+  });
+
+  test('the v2 deadline bounds a command the FF1 never answers', async () => {
+    const started = Date.now();
+    const record = enrolledRecord('owner');
+    const previous = globalThis.WebSocket;
+    globalThis.WebSocket = class extends EventTarget {
+      binaryType = '';
+      constructor() {
+        super();
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({ type: 'hello', connectionId: 'cli', peers: ['ff1'] }),
+            })
+          )
+        );
+      }
+      send(data: unknown) {
+        if (!(data instanceof Uint8Array)) {
+          return;
+        }
+        const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
+        const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({ type: 'ack', from: 'ff1', id: header.id }),
+            })
+          )
+        );
+      }
+      close() {
+        /* No actual network socket. */
+      }
+    } as unknown as typeof WebSocket;
+    try {
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'revokeController',
+          req: {},
+          retry: false,
+          relayerFallback: true,
+        },
+        record,
+        {
+          v2TimeoutMs: 300,
+          controllerStore: { dir: storeDir },
+          nowFn: () => NOW,
+          getRelayerConfigFn: () => ({
+            baseUrl: 'https://legacy.test',
+            v2Endpoint: 'wss://v2.test',
+          }),
+          getTopicIdFn: () => 'optional-topic',
+          noticeFn: () => undefined,
+          fetchFn: async () => {
+            throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+          },
+        }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.ok(Date.now() - started < 2000, 'the default 30 s deadline was used');
+    } finally {
+      globalThis.WebSocket = previous;
+    }
+  });
 });
 
 describe('replay copy', () => {

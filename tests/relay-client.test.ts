@@ -1,18 +1,37 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  RelayAmbiguousError,
   RelayClient,
+  RelayUndeliveredError,
   relayURL,
   encodeRelayFrame,
   decodeRelayFrame,
 } from '../src/utilities/relay-client';
 
+type Header = { v: 2; id: string; to: string };
+type Sent = { header: Header; body: Record<string, unknown>; size: number; at: number };
+
+/**
+ * Socket is a scripted relay connection. `onFrame` sees each binary frame the
+ * client writes; `frames` keeps them decoded (relayChunk bodies stay wrapped).
+ */
 class Socket extends EventTarget {
   binaryType = '';
   sent: unknown[] = [];
+  frames: Sent[] = [];
   closed = false;
+  onFrame?: (header: Header, body: Record<string, unknown>) => void;
   send(data: unknown) {
     this.sent.push(data);
+    if (!(data instanceof Uint8Array)) {
+      return;
+    }
+    const size = new DataView(data.buffer, data.byteOffset).getUint16(0);
+    const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + size))) as Header;
+    const body = JSON.parse(new TextDecoder().decode(data.slice(2 + size)));
+    this.frames.push({ header, body, size: data.byteLength, at: Date.now() });
+    queueMicrotask(() => this.onFrame?.(header, body));
   }
   close() {
     this.closed = true;
@@ -20,7 +39,47 @@ class Socket extends EventTarget {
   message(data: unknown) {
     this.dispatchEvent(new MessageEvent('message', { data }));
   }
+  control(event: Record<string, unknown>) {
+    this.message(JSON.stringify(event));
+  }
+  hello(peers: string[]) {
+    this.control({ type: 'hello', connectionId: 'cli', peers });
+  }
+  ack(from: string, id: string) {
+    this.control({ type: 'ack', from, id });
+  }
+  refuse(to: string, id: string, code: string) {
+    this.control({ type: 'error', code, id, to });
+  }
+  reply(from: string, messageID: unknown, message: unknown = { ok: true }) {
+    const frame = encodeRelayFrame(
+      { v: 2, id: crypto.randomUUID(), to: 'cli', from } as Header,
+      new TextEncoder().encode(JSON.stringify({ type: 'RPC', messageID, message }))
+    );
+    this.message(frame.buffer);
+  }
 }
+
+function client(socket: Socket) {
+  return new RelayClient('https://relay.example', 'FF1-TEST', () => socket as unknown as WebSocket);
+}
+
+/** request supplies a test endpoint validator; production uses pinned JOSE verification. */
+function request(
+  relay: RelayClient,
+  body: Record<string, unknown> = {},
+  timeout?: number,
+  verify: (value: Record<string, unknown>) => Promise<boolean> = async () => true
+) {
+  return relay.requestPrepared(
+    async () => ({ command: 'ff1Envelope', request: body, verify }),
+    timeout
+  );
+}
+
+const tick = () => new Promise((resolve) => setImmediate(resolve));
+const genuine = async (value: Record<string, unknown>) =>
+  (value.message as { genuine?: boolean }).genuine === true;
 
 test('routes by device ID and rejects credential-bearing endpoints', () => {
   assert.equal(
@@ -36,194 +95,283 @@ test('routes by device ID and rejects credential-bearing endpoints', () => {
   }
 });
 
-test('RPC waits for device response, not the transport ACK', async () => {
+test('the first envelope fans out to peers and the RPC waits for the reply, not the ACK', async () => {
   const socket = new Socket();
-  const client = new RelayClient(
-    'https://relay.example',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
-  );
-  socket.message(JSON.stringify({ type: 'hello', peers: ['player-1'] }));
+  const relay = client(socket);
+  socket.hello(['player-1']);
   let finished = false;
-  const result = request(client, 'getDeviceStatus', {}).then((value) => {
+  const result = request(relay).then((value) => {
     finished = true;
     return value;
   });
-  await new Promise((resolve) => setImmediate(resolve));
-  const frame = socket.sent[0] as Uint8Array;
-  const headerSize = new DataView(frame.buffer).getUint16(0);
-  const header = JSON.parse(new TextDecoder().decode(frame.slice(2, 2 + headerSize)));
-  const command = JSON.parse(new TextDecoder().decode(frame.slice(2 + headerSize)));
-  assert.equal(command.message.command, 'ff1Envelope');
-  socket.message(JSON.stringify({ type: 'ack', from: 'player-1', id: header.id }));
-  await new Promise((resolve) => setImmediate(resolve));
+  await tick();
+  const [{ header, body }] = socket.frames;
+  assert.equal(header.to, 'peers');
+  assert.equal((body.message as { command: string }).command, 'ff1Envelope');
+  socket.ack('player-1', header.id);
+  await tick();
   assert.equal(finished, false);
-  const response = { type: 'RPC', messageID: command.messageID, message: { ok: true } };
-  const reply = encodeRelayFrame(
-    { v: 2, id: 'reply-1', to: 'controller-1', from: 'player-1' },
-    new TextEncoder().encode(JSON.stringify(response))
-  );
-  socket.message(reply.buffer);
-  assert.deepEqual(await result, response);
+  socket.reply('player-1', body.messageID);
+  assert.deepEqual((await result).message, { ok: true });
   assert.equal(JSON.parse(socket.sent.at(-1) as string).type, 'ack');
-  client.close();
+  relay.close();
 });
 
-test('disconnect rejects pending commands and malformed frames are bounded', async () => {
+test('the verified peer is pinned; later requests are unicast to it', async () => {
   const socket = new Socket();
-  const client = new RelayClient(
-    'https://relay.example',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
+  socket.onFrame = (header, body) => {
+    socket.ack('stranger', header.id);
+    socket.ack('ff1', header.id);
+    socket.reply('stranger', body.messageID, { forged: true });
+    socket.reply('ff1', body.messageID, { genuine: true });
+  };
+  const relay = client(socket);
+  socket.hello(['stranger', 'ff1']);
+  assert.deepEqual((await request(relay, {}, 2000, genuine)).message, { genuine: true });
+  assert.deepEqual((await request(relay, {}, 2000, genuine)).message, { genuine: true });
+  assert.deepEqual(
+    socket.frames.map((frame) => frame.header.to),
+    ['peers', 'ff1']
   );
-  const pending = request(client, 'getDeviceStatus', {});
-  client.close();
-  await assert.rejects(pending, /closed/);
+  relay.close();
+});
+
+test('strangers filling the channel cannot keep the FF1 from being probed', async () => {
+  const socket = new Socket();
+  const strangers = Array.from({ length: 35 }, (_, index) => `stranger-${index}`);
+  socket.onFrame = (header, body) => {
+    for (const peer of [...strangers, 'ff1']) {
+      socket.ack(peer, header.id);
+    }
+    socket.reply('ff1', body.messageID, { genuine: true });
+  };
+  const relay = client(socket);
+  socket.hello([...strangers, 'ff1']);
+  assert.deepEqual((await request(relay, {}, 2000, genuine)).message, { genuine: true });
+  assert.equal(socket.frames.length, 1, 'one fan-out frame, no per-peer unicast');
+  relay.close();
+});
+
+test('an empty channel is proven undelivered at once', async () => {
+  const socket = new Socket();
+  socket.onFrame = (header) => socket.refuse('peers', header.id, 'peer_unavailable');
+  const relay = client(socket);
+  socket.hello([]);
+  const started = Date.now();
+  await assert.rejects(request(relay, {}, 5000), RelayUndeliveredError);
+  assert.ok(Date.now() - started < 1000);
+  relay.close();
+});
+
+test('a refusal by every target with no ACK is proven undelivered', async () => {
+  const socket = new Socket();
+  socket.onFrame = (header) => {
+    socket.refuse('a', header.id, 'peer_unavailable');
+    socket.refuse('b', header.id, 'peer_unavailable');
+  };
+  const relay = client(socket);
+  socket.hello(['a', 'b']);
+  await assert.rejects(request(relay, {}, 5000), RelayUndeliveredError);
+  relay.close();
+});
+
+test('an ACKed command with no verified reply is ambiguous, never undelivered', async () => {
+  const socket = new Socket();
+  socket.onFrame = (header) => socket.ack('ff1', header.id);
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await assert.rejects(request(relay, {}, 300), RelayAmbiguousError);
+  relay.close();
+});
+
+test('a socket drop after sending is ambiguous', async () => {
+  const socket = new Socket();
+  socket.onFrame = () => socket.dispatchEvent(new Event('close'));
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await assert.rejects(request(relay, {}, 2000), RelayAmbiguousError);
+});
+
+test('backpressure is transient: the peer is retried after a backoff', async () => {
+  const socket = new Socket();
+  socket.onFrame = (header, body) => {
+    if (header.to === 'peers') {
+      socket.refuse('ff1', header.id, 'backpressure');
+      return;
+    }
+    socket.ack('ff1', header.id);
+    socket.reply('ff1', body.messageID);
+  };
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await request(relay, {}, 3000);
+  assert.deepEqual(
+    socket.frames.map((frame) => frame.header.to),
+    ['peers', 'ff1']
+  );
+  relay.close();
+});
+
+test('a peer that may already hold the command never gets it twice', async () => {
+  // ff1 neither ACKs nor refuses: the relay may have forwarded the frame.
+  const socket = new Socket();
+  const relay = client(socket);
+  socket.hello(['ff1']);
+  await assert.rejects(request(relay, {}, 6000), RelayAmbiguousError);
+  assert.equal(socket.frames.length, 1);
+  relay.close();
+});
+
+test('connect failures are retried with backoff before the first hello', async () => {
+  const sockets: Socket[] = [];
+  const relay = new RelayClient('https://relay.example', 'FF1-TEST', () => {
+    const socket = new Socket();
+    sockets.push(socket);
+    queueMicrotask(() => {
+      if (sockets.length < 3) {
+        socket.dispatchEvent(new Event('error'));
+        return;
+      }
+      socket.onFrame = (header, body) => {
+        socket.ack('ff1', header.id);
+        socket.reply('ff1', body.messageID);
+      };
+      socket.hello(['ff1']);
+    });
+    return socket as unknown as WebSocket;
+  });
+  await request(relay, {}, 5000);
+  assert.equal(sockets.length, 3);
+  relay.close();
+});
+
+test('a relay that never admits the client leaves the command undelivered', async () => {
+  let attempts = 0;
+  const relay = new RelayClient('https://relay.example', 'FF1-TEST', () => {
+    attempts++;
+    const socket = new Socket();
+    queueMicrotask(() => socket.dispatchEvent(new Event('close')));
+    return socket as unknown as WebSocket;
+  });
+  await assert.rejects(request(relay, {}, 5000), RelayUndeliveredError);
+  assert.equal(attempts, 3);
+});
+
+test('close before sending rejects pending commands as undelivered; malformed frames are bounded', async () => {
+  const socket = new Socket();
+  const relay = client(socket);
+  const pending = request(relay);
+  relay.close();
+  await assert.rejects(pending, RelayUndeliveredError);
   assert.throws(() => decodeRelayFrame(new ArrayBuffer(65537)));
   assert.throws(() => decodeRelayFrame(new Uint8Array([0, 255, 0]).buffer));
 });
 
 test('expired queued commands are never sent after transport credit is released', async () => {
   const socket = new Socket();
-  const client = new RelayClient(
-    'https://relay.example',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
-  );
-  socket.message(JSON.stringify({ type: 'hello', peers: ['player-1'] }));
-  const first = request(client, 'first', {}, 1000);
+  const relay = client(socket);
+  socket.hello(['player-1']);
+  const first = request(relay, {}, 1000);
   const firstRejected = assert.rejects(first);
-  await new Promise((resolve) => setImmediate(resolve));
-  const second = request(client, 'expired', {}, 10);
+  await tick();
+  const second = request(relay, {}, 10);
   await assert.rejects(second, /timed out|timeout/i);
-  const frame = socket.sent[0] as Uint8Array;
-  const size = new DataView(frame.buffer, frame.byteOffset).getUint16(0);
-  const header = JSON.parse(new TextDecoder().decode(frame.slice(2, 2 + size)));
-  socket.message(JSON.stringify({ type: 'ack', from: 'player-1', id: header.id }));
-  await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(socket.sent.filter((item) => item instanceof Uint8Array).length, 1);
-  client.close();
+  socket.ack('player-1', socket.frames[0].header.id);
+  await tick();
+  assert.equal(socket.frames.length, 1);
+  relay.close();
   await firstRejected;
 });
 
 test('large transfers stay below the Worker byte ceiling with immediate ACKs', async () => {
   const socket = new Socket();
-  const writes: { at: number; bytes: number }[] = [];
   const parts: Buffer[] = [];
-  const originalSend = socket.send.bind(socket);
-  socket.send = (data: unknown) => {
-    originalSend(data);
-    if (!(data instanceof Uint8Array)) {
-      return;
-    }
-    writes.push({ at: Date.now(), bytes: data.byteLength });
-    const size = new DataView(data.buffer, data.byteOffset).getUint16(0);
-    const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + size)));
-    const chunk = JSON.parse(new TextDecoder().decode(data.slice(2 + size))).relayChunk;
+  socket.onFrame = (header, body) => {
+    const chunk = body.relayChunk as { data: string; count: number };
     parts.push(Buffer.from(chunk.data, 'base64'));
-    queueMicrotask(() => {
-      socket.message(JSON.stringify({ type: 'ack', from: 'player-1', id: header.id }));
-      if (parts.length === chunk.count) {
-        const command = JSON.parse(Buffer.concat(parts).toString());
-        const response = encodeRelayFrame(
-          { v: 2, id: 'response', to: 'controller', from: 'player-1' },
-          new TextEncoder().encode(
-            JSON.stringify({ type: 'RPC', messageID: command.messageID, message: { ok: true } })
-          )
-        );
-        socket.message(response.buffer);
-      }
-    });
+    socket.ack('player-1', header.id);
+    if (parts.length === chunk.count) {
+      socket.reply('player-1', JSON.parse(Buffer.concat(parts).toString()).messageID);
+    }
   };
-  const client = new RelayClient(
-    'https://relay.example',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
-  );
-  socket.message(JSON.stringify({ type: 'hello', peers: ['player-1'] }));
+  const relay = client(socket);
+  socket.hello(['player-1']);
   try {
-    await request(client, 'displayPlaylist', { data: 'x'.repeat(2 * 1024 * 1024) });
-    for (const start of writes) {
-      const bytes = writes
+    await request(relay, { data: 'x'.repeat(2 * 1024 * 1024) });
+    for (const start of socket.frames) {
+      const bytes = socket.frames
         .filter((write) => write.at >= start.at && write.at < start.at + 1000)
-        .reduce((sum, write) => sum + write.bytes, 0);
+        .reduce((sum, write) => sum + write.size, 0);
       assert.ok(bytes < 1048576, `one-second window exceeded limit: ${bytes}`);
     }
   } finally {
-    client.close();
+    relay.close();
   }
 });
 
-/** request supplies a test endpoint validator; production uses pinned JOSE verification. */
-function request(
-  client: RelayClient,
-  _command: string,
-  body: Record<string, unknown>,
-  timeout?: number
-) {
-  return client.requestPrepared(
-    async () => ({ command: 'ff1Envelope', request: body, verify: async () => true }),
-    timeout
-  );
-}
-
 test('malformed reconstructed candidate payload is ACKed without closing a valid peer', async () => {
   const socket = new Socket();
-  const client = new RelayClient(
-    'https://relay.test',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
-  );
-  socket.message(JSON.stringify({ type: 'hello', peers: ['attacker', 'ff1'] }));
+  const relay = client(socket);
+  socket.hello(['attacker', 'ff1']);
   for (let index = 0; index < 2; index++) {
     const payload = new TextEncoder().encode(
       JSON.stringify({ relayChunk: { id: 'bad-transfer', index, count: 2, data: btoa('x') } })
     );
     const frame = encodeRelayFrame(
-      { v: 2, id: `bad-${index}`, to: 'cli', from: 'attacker' },
+      { v: 2, id: `bad-${index}`, to: 'cli', from: 'attacker' } as Header,
       payload
     );
     socket.message(frame.buffer);
   }
   assert.equal(socket.closed, false);
   assert.equal(socket.sent.length, 2);
-  client.close();
+  relay.close();
+});
+
+test('unfinished transfers from all candidates share one byte budget', async () => {
+  const socket = new Socket();
+  const relay = client(socket);
+  socket.hello(['a', 'b']);
+  const data = Buffer.alloc(32768, 1).toString('base64');
+  const chunk = (from: string, index: number) => {
+    const payload = new TextEncoder().encode(
+      JSON.stringify({ relayChunk: { id: `t-${from}`, index, count: 128, data } })
+    );
+    socket.message(
+      encodeRelayFrame({ v: 2, id: `${from}-${index}`, to: 'cli', from } as Header, payload).buffer
+    );
+  };
+  for (let index = 0; index < 100; index++) {
+    chunk('a', index);
+  }
+  // a holds 100 chunks; b fits only 28 more before the shared budget is spent.
+  for (let index = 0; index < 40; index++) {
+    chunk('b', index);
+  }
+  const held = (relay as unknown as { assemblies: Map<string, { bytes: number }> }).assemblies;
+  const total = [...held.values()].reduce((sum, assembly) => sum + assembly.bytes, 0);
+  assert.ok(total <= 4 * 1024 * 1024, `held ${total} bytes`);
+  assert.equal(held.get('a')?.bytes, 100 * 32768);
+  assert.equal(socket.closed, false);
+  relay.close();
 });
 
 test('discovers FF1 joining after another controller without resealing or resending', async () => {
   const socket = new Socket();
-  socket.send = (data: unknown) => {
-    socket.sent.push(data);
-    if (!(data instanceof Uint8Array)) {
+  socket.onFrame = (header, body) => {
+    if (header.to === 'peers') {
+      socket.ack('other-controller', header.id);
       return;
     }
-    const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
-    const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length))) as {
-      to: string;
-      id: string;
-    };
-    const body = JSON.parse(new TextDecoder().decode(data.slice(2 + length))) as {
-      messageID: string;
-    };
-    queueMicrotask(() => {
-      socket.message(JSON.stringify({ type: 'ack', from: header.to, id: header.id }));
-      if (header.to === 'ff1') {
-        const frame = encodeRelayFrame(
-          { v: 2, id: 'verified', to: 'cli', from: 'ff1' },
-          new TextEncoder().encode(JSON.stringify({ type: 'RPC', messageID: body.messageID }))
-        );
-        socket.message(frame.buffer);
-      }
-    });
+    socket.ack(header.to, header.id);
+    if (header.to === 'ff1') {
+      socket.reply('ff1', body.messageID);
+    }
   };
-  const client = new RelayClient(
-    'https://relay.test',
-    'FF1-TEST',
-    () => socket as unknown as WebSocket
-  );
-  socket.message(JSON.stringify({ type: 'hello', peers: ['other-controller'] }));
+  const relay = client(socket);
+  socket.hello(['other-controller']);
   let seals = 0;
-  const result = client.requestPrepared(() => {
+  const result = relay.requestPrepared(() => {
     seals++;
     return Promise.resolve({
       command: 'ff1Envelope',
@@ -232,9 +380,12 @@ test('discovers FF1 joining after another controller without resealing or resend
     });
   }, 2000);
   await new Promise((resolve) => setTimeout(resolve, 30));
-  socket.message(JSON.stringify({ type: 'peer_connected', connectionId: 'ff1' }));
+  socket.control({ type: 'peer_connected', connectionId: 'ff1' });
   await result;
   assert.equal(seals, 1);
-  assert.equal(socket.sent.filter((data) => data instanceof Uint8Array).length, 2);
-  client.close();
+  assert.deepEqual(
+    socket.frames.map((frame) => frame.header.to),
+    ['peers', 'ff1']
+  );
+  relay.close();
 });
