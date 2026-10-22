@@ -17,10 +17,12 @@ import {
 } from '../src/utilities/control/codec';
 import {
   createController,
+  deleteController,
   dropStagedController,
   loadController,
   markEnrolled,
   nextCounter,
+  pairingKeys,
   parseControllerRecord,
   promoteStagedController,
   saveController,
@@ -29,6 +31,7 @@ import {
 import {
   chooseControllerKeys,
   prepareRegisteredController,
+  probeControlSupport,
 } from '../src/utilities/control/pairing';
 import {
   type PairingChannel,
@@ -268,7 +271,11 @@ describe('device pair (owner-initiated registration)', () => {
     await pairDevice(device, options, {
       ...world.deps,
       fetchFn: async (input, init) => {
-        requests += 1;
+        // The plaintext status read that picks the pairing path is not a
+        // protected command; count only envelopes.
+        if (JSON.parse(String(init?.body)).command === 'ff1Envelope') {
+          requests += 1;
+        }
         return fetchFn(input, init);
       },
     });
@@ -277,6 +284,34 @@ describe('device pair (owner-initiated registration)', () => {
       world.fake.seen.map((c) => c.op),
       ['enroll']
     );
+  });
+
+  test('an interrupted pairing retries with the same keys; success consumes them', async () => {
+    // §5.6 step 5: the owner may have registered the keys although the result
+    // never arrived; the retry must show the same sig/enc keys.
+    const shown: string[] = [];
+    const silent = ownerWorld((qr, _channel, registered) => {
+      shown.push(controllerQrCtl(qr));
+      registered.add(controllerQrCtl(qr)); // registered, but the result is lost
+    });
+    await assert.rejects(
+      pairDevice(device, { ...options, timeoutMs: 50 }, silent.deps),
+      /not completed/
+    );
+    const keysFile = path.join(storeDir, 'pairing', `${DEVICE_ID}.keys.json`);
+    assert.ok(fs.existsSync(keysFile), 'the shown keys were saved before the QR');
+    assert.equal(fs.statSync(keysFile).mode & 0o777, process.platform === 'win32' ? 0o666 : 0o600);
+
+    const world = ownerWorld((qr, channel, registered) => {
+      shown.push(controllerQrCtl(qr));
+      approve()(qr, channel, registered);
+    });
+    await pairDevice(device, options, world.deps);
+    assert.equal(shown.length, 2);
+    assert.equal(shown[0], shown[1]);
+    assert.notEqual(silent.channels[0].channelId, world.channels[0].channelId);
+    assert.equal(controllerIdOf(loadController(DEVICE_ID, { dir: storeDir })!.keys), shown[0]);
+    assert.equal(fs.existsSync(keysFile), false, 'the record now holds the keys');
   });
 
   test('a declined request fails and saves nothing', async () => {
@@ -508,6 +543,131 @@ describe('device pair (owner-initiated registration)', () => {
     for (const bad of ['9', '601', '1.5', 'x']) {
       assert.throws(() => parseTimeoutMs(bad), CommandFailure);
     }
+  });
+});
+
+describe('pairing path selection', () => {
+  function statusFetch(answer: () => Response): typeof fetch {
+    return async (_input, init) => {
+      assert.equal(JSON.parse(String(init?.body)).command, 'getDeviceStatus');
+      return answer();
+    };
+  }
+
+  test('the LAN status picks the path', async () => {
+    const status = (message: Record<string, unknown>) => statusFetch(() => json(200, { message }));
+    assert.equal(
+      await probeControlSupport(device, status({ installedVersion: '1.0.9' })),
+      'plaintext'
+    );
+    assert.equal(
+      await probeControlSupport(device, status({ control: { v: 1, state: 'legacy' } })),
+      'plaintext'
+    );
+    for (const state of ['enrolled', 'enforced', 'locked']) {
+      assert.equal(
+        await probeControlSupport(device, status({ control: { v: 1, state } })),
+        'secure'
+      );
+    }
+    assert.equal(
+      await probeControlSupport(
+        device,
+        statusFetch(() =>
+          json(403, {
+            error: { code: 'enrollment_required', message: 'this FF1 needs signed requests' },
+          })
+        )
+      ),
+      'secure'
+    );
+    assert.equal(
+      await probeControlSupport(device, async () => {
+        throw new Error('fetch failed');
+      }),
+      'unknown'
+    );
+    assert.equal(
+      await probeControlSupport(
+        device,
+        statusFetch(() => json(500, {}))
+      ),
+      'unknown'
+    );
+  });
+
+  test('an FF1 without secure control gets the topic handoff, and no controller keys', async () => {
+    const world = ownerWorld(approve());
+    const handoffs: number[] = [];
+    await pairDevice(device, options, {
+      ...world.deps,
+      fetchFn: statusFetch(() => json(200, { message: { installedVersion: '1.0.9' } })),
+      receiveTopicHandoff: async (d, timeoutMs) => {
+        handoffs.push(timeoutMs);
+        return {
+          v: 1,
+          type: 'ff1_topic_handoff',
+          channelId: 'ch_test',
+          deviceId: d.id,
+          topicId: 'topic-secret',
+          sentAt: new Date().toISOString(),
+        };
+      },
+    });
+    assert.deepEqual(handoffs, [options.timeoutMs]);
+    assert.deepEqual(world.topics, [[DEVICE_ID, 'topic-secret']]);
+    assert.equal(world.channels.length, 0);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+    assert.equal(fs.existsSync(path.join(storeDir, 'pairing')), false);
+  });
+
+  test('--topic-handoff forces the legacy path without reading the status', async () => {
+    const world = ownerWorld(approve());
+    let handoffs = 0;
+    await pairDevice(
+      device,
+      { ...options, topicHandoff: true },
+      {
+        ...world.deps,
+        fetchFn: async () => {
+          throw new Error('must not be called');
+        },
+        receiveTopicHandoff: async (d) => {
+          handoffs += 1;
+          return {
+            v: 1,
+            type: 'ff1_topic_handoff',
+            channelId: 'ch_test',
+            deviceId: d.id,
+            topicId: 'topic-secret',
+            sentAt: new Date().toISOString(),
+          };
+        },
+      }
+    );
+    assert.equal(handoffs, 1);
+    assert.equal(world.channels.length, 0);
+  });
+
+  test('an unreadable status falls back to the QR flow', async () => {
+    const world = ownerWorld(approve());
+    const fetchFn = world.deps.fetchFn!;
+    let first = true;
+    await pairDevice(device, options, {
+      ...world.deps,
+      fetchFn: async (input, init) => {
+        if (first) {
+          first = false;
+          throw new Error('fetch failed');
+        }
+        return fetchFn(input, init);
+      },
+      receiveTopicHandoff: async () => {
+        throw new Error('must not be called');
+      },
+    });
+    assert.equal(world.channels.length, 1);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, 'controller');
   });
 });
 
@@ -840,6 +1000,23 @@ describe('unpair', () => {
       process.env.XDG_CONFIG_HOME = originalXdg;
     }
     fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  test('also deletes the keys an interrupted pairing showed', async () => {
+    const { deps } = unpairDevice('ok');
+    deleteController(DEVICE_ID);
+    pairingKeys(DEVICE_ID);
+    const file = path.join(
+      home,
+      'xdg',
+      'ff-cli',
+      'controllers',
+      'pairing',
+      `${DEVICE_ID}.keys.json`
+    );
+    assert.ok(fs.existsSync(file));
+    await runUnpair('Office', { yes: true }, async () => true, deps);
+    assert.equal(fs.existsSync(file), false);
   });
 
   test('sends a sealed self-revoke, then deletes the keys', async () => {

@@ -6,7 +6,9 @@
  * 1. chooseControllerKeys: this computer's existing keys for the FF1 when it
  *    has a readable controller file (so a re-pair after revocation, a role
  *    change or a factory reset keeps one controllerId on the device instead
- *    of orphaning a grant), else fresh ones.
+ *    of orphaning a grant), else the pairing keys saved before the QR was
+ *    first shown (so a retry after a timeout or Ctrl-C completes a grant an
+ *    owner already registered), else new pairing keys, saved before use.
  * 2. The caller shows the controller QR (registration.ts) and waits on the
  *    pairing channel for a sealed result that passes every §5.6.3 check.
  * 3. prepareRegisteredController pins the result's profile: on the existing
@@ -15,8 +17,8 @@
  * 4. enrollRegistered sends a protected op:enroll without inv (§5.3) and
  *    stores role, nk and expiry from the verified reply.
  *
- * State is always consistent on interruption: nothing is written before a
- * verified result, the record is written atomically before the first
+ * State is always consistent on interruption: before a verified result only
+ * the pairing keys are written, the record is written atomically before the first
  * request, every counter is persisted before it is sent, and the grant is
  * written only from a verified enroll reply. A record with a verified result
  * that has not enrolled yet is finished by `ff-cli device pair --resume`.
@@ -24,6 +26,7 @@
 
 import os from 'node:os';
 import type { FF1Device } from '../../types';
+import { fetchWithTimeout } from '../http';
 import {
   type ControlRole,
   type ControllerKeys,
@@ -31,7 +34,7 @@ import {
   type EnrollObject,
   stripUnsafeLabelCharacters,
 } from './codec';
-import { generatePrivateJwk, publicOf, sameKey } from './jwk';
+import { publicOf, sameKey } from './jwk';
 import {
   type ControllerRecord,
   type ControllerStoreOptions,
@@ -41,6 +44,7 @@ import {
   dropStagedController,
   loadController,
   markEnrolled,
+  pairingKeys,
   recordRegistration,
   sameIdentity,
   setAsideCorruptController,
@@ -79,20 +83,22 @@ export function defaultControllerLabel(): string {
 }
 
 /**
- * chooseControllerKeys picks the keys the controller QR shows: those of the
- * device's controller file when it is readable (enrolled or not), else fresh
- * ones. A corrupt file yields fresh keys; it is moved aside, never written
+ * chooseControllerKeys picks the keys the controller QR shows, always keys
+ * already on disk: those of the device's controller file when it is readable
+ * (enrolled or not), else the saved pairing keys (created and saved now when
+ * there are none). A corrupt controller file is moved aside, never written
  * over, once a result arrives. An unreadable file throws: its keys may be
  * fine, so nothing may pair past it.
  *
  * @param deviceId - FF1 device ID
  * @param options - Main store options
- * @returns The keys and whether they are the existing record's
+ * @returns The keys, whether they were already saved, and whether they are
+ *   the controller file's (else the pairing keys file's)
  */
 export function chooseControllerKeys(
   deviceId: string,
   options: ControllerStoreOptions = {}
-): { keys: ControllerKeys; reused: boolean } {
+): { keys: ControllerKeys; reused: boolean; fromRecord: boolean } {
   let existing: ControllerRecord | null = null;
   try {
     existing = loadController(deviceId, options);
@@ -102,9 +108,74 @@ export function chooseControllerKeys(
     }
   }
   if (existing) {
-    return { keys: existing.keys, reused: true };
+    return { keys: existing.keys, reused: true, fromRecord: true };
   }
-  return { keys: { sig: generatePrivateJwk(), enc: generatePrivateJwk() }, reused: false };
+  return { ...pairingKeys(deviceId, options), fromRecord: false };
+}
+
+/** CONTROL_PROBE_TIMEOUT_MS bounds the LAN status read that picks the pairing path. */
+export const CONTROL_PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * ControlSupport is what the FF1's LAN status says about pairing: `secure`
+ * (the control protocol with an owner: owner-initiated registration),
+ * `plaintext` (no `control` block, or `control.state` legacy: no owner, so
+ * plaintext is accepted and the legacy topic handoff applies), or `unknown`.
+ */
+export type ControlSupport = 'secure' | 'plaintext' | 'unknown';
+
+/**
+ * probeControlSupport reads `getDeviceStatus` in plaintext over the LAN
+ * (§11: the `control` block is the capability signal). An owned FF1 refuses
+ * plaintext with a public `enrollment_required` (§7.2), which also means
+ * secure. The answer is unauthenticated and only picks the pairing UI; no
+ * profile is ever taken from it.
+ *
+ * @param device - Device with host and optional API key
+ * @param fetchFn - Fetch (tests); defaults to a short deadline
+ * @returns The pairing path the status points to
+ */
+export async function probeControlSupport(
+  device: FF1Device,
+  fetchFn: typeof fetch = (input, init) =>
+    fetchWithTimeout(input, init ?? {}, CONTROL_PROBE_TIMEOUT_MS)
+): Promise<ControlSupport> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (device.apiKey) {
+    headers['API-KEY'] = device.apiKey;
+  }
+  let body: unknown;
+  let ok: boolean;
+  try {
+    const response = await fetchFn(`${device.host}/api/cast`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({ command: 'getDeviceStatus', request: {} }),
+    });
+    ok = response.ok;
+    body = JSON.parse(await response.text());
+  } catch {
+    return 'unknown';
+  }
+  if (!isPlainObject(body)) {
+    return 'unknown';
+  }
+  const error = body.error;
+  if (isPlainObject(error) && typeof error.code === 'string') {
+    return ['enrollment_required', 'envelope_required', 'locked'].includes(error.code)
+      ? 'secure'
+      : 'unknown';
+  }
+  const status = body.message;
+  if (!ok || !isPlainObject(status) || status.ok === false) {
+    return 'unknown';
+  }
+  if (status.control === undefined) {
+    return 'plaintext';
+  }
+  return isPlainObject(status.control) && status.control.state === 'legacy'
+    ? 'plaintext'
+    : 'secure';
 }
 
 /**

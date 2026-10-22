@@ -607,6 +607,102 @@ function sameControl(a: ControllerRecord, b: ControllerRecord): boolean {
 }
 
 /**
+ * pairingKeysPath is where `ff-cli device pair` keeps the keys it shows in
+ * the controller QR before any owner answered: `pairing/<id>.keys.json`.
+ * The QR's keys must survive an interrupted pairing, because an owner may
+ * already have registered them (§5.6 step 5: a later retry with the same
+ * keys completes it), and a controller record cannot exist yet without the
+ * profile the owner's answer carries.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns Absolute file path
+ */
+function pairingKeysPath(deviceId: string, options: ControllerStoreOptions = {}): string {
+  const file = controllerFilePath(deviceId, stagingStore(options));
+  return file.replace(/\.json$/, '.keys.json');
+}
+
+/** parsePairingKeys validates the pairing keys file strictly. */
+function parsePairingKeys(text: string, deviceId: string): ControllerKeys {
+  const obj = strictObject(
+    parseStrictJson(text),
+    ['v', 'deviceId', 'keys', 'createdAt'],
+    [],
+    'pairing keys file'
+  );
+  if (uintMember(obj, 'v') !== 1 || obj.deviceId !== deviceId) {
+    throw new ControlFormatError('pairing keys file is for another device or version');
+  }
+  uintMember(obj, 'createdAt');
+  const keysObj = strictObject(obj.keys, ['sig', 'enc'], [], 'pairing keys');
+  return {
+    sig: parsePrivateJwk(keysObj.sig, 'pairing sig key'),
+    enc: parsePrivateJwk(keysObj.enc, 'pairing enc key'),
+  };
+}
+
+/**
+ * pairingKeys returns the keys an earlier interrupted pairing showed for the
+ * device, or creates and saves new ones (0600, atomic) before they are shown.
+ * A corrupt file is moved aside, never written over; an unreadable one
+ * throws, its keys may be fine.
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns The keys and whether they were already saved
+ */
+export function pairingKeys(
+  deviceId: string,
+  options: ControllerStoreOptions = {}
+): { keys: ControllerKeys; reused: boolean } {
+  const id = normalizeDeviceId(deviceId);
+  const file = pairingKeysPath(id, options);
+  return withControllerLock(file, () => {
+    let text: string | null = null;
+    try {
+      text = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        throw new Error(
+          `Cannot read pairing keys file ${file}: ${(error as Error).message}. Fix its permissions and try again.`
+        );
+      }
+    }
+    if (text !== null) {
+      try {
+        return { keys: parsePairingKeys(text, id), reused: true };
+      } catch {
+        renameCorruptAside(file);
+      }
+    }
+    const keys = { sig: generatePrivateJwk(), enc: generatePrivateJwk() };
+    const body = { v: 1, deviceId: id, keys, createdAt: Math.floor(Date.now() / 1000) };
+    writeAtomic(file, `${JSON.stringify(body, null, 2)}\n`);
+    return { keys, reused: false };
+  });
+}
+
+/**
+ * deletePairingKeys removes the pairing keys file once its keys are in a
+ * controller record (or the controller is unpaired).
+ *
+ * @param deviceId - FF1 device ID
+ * @param options - Main store options
+ * @returns True when a file was removed
+ */
+export function deletePairingKeys(deviceId: string, options: ControllerStoreOptions = {}): boolean {
+  const file = pairingKeysPath(normalizeDeviceId(deviceId), options);
+  return withControllerLock(file, () => {
+    if (!fs.existsSync(file)) {
+      return false;
+    }
+    fs.rmSync(file);
+    return true;
+  });
+}
+
+/**
  * deleteController removes a device's controller file.
  *
  * @param deviceId - FF1 device ID

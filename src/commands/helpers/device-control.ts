@@ -12,6 +12,7 @@ import chalk from 'chalk';
 import qrcodeTerminal from 'qrcode-terminal';
 import * as logger from '../../logger';
 import { resolveConfiguredDevice } from '../../utilities/ff1-compatibility';
+import { HandoffReceiver, type TopicHandoffPayload } from '../../utilities/handoff-client';
 import { fetchWithTimeout } from '../../utilities/http';
 import { storeTopicId } from '../../utilities/topic-store';
 import { createPrompt, promptYesNo } from './prompt';
@@ -24,6 +25,7 @@ import {
   ControllerFileCorruptError,
   controllerFilePath,
   deleteController,
+  deletePairingKeys,
   dropStagedController,
   isEnrolled,
   loadController,
@@ -40,6 +42,7 @@ import {
   defaultControllerLabel,
   enrollRegistered,
   prepareRegisteredController,
+  probeControlSupport,
   registrationRecordOf,
 } from '../../utilities/control/pairing';
 import {
@@ -72,6 +75,7 @@ export interface PairOptions {
   timeout?: string;
   resume?: boolean;
   yes?: boolean;
+  topicHandoff?: boolean;
 }
 
 /** PairDeps are the seams of `device pair`; production uses the defaults. */
@@ -86,6 +90,8 @@ export interface PairDeps extends SecureTransportDeps {
   confirmFn?: (question: string) => Promise<boolean>;
   /** Pause between enroll attempts. */
   enrollRetryMs?: number;
+  /** Receives the legacy short-code topic handoff (default: the handoff broker). */
+  receiveTopicHandoff?: (device: PairDevice, timeoutMs: number) => Promise<TopicHandoffPayload>;
 }
 
 /**
@@ -190,26 +196,76 @@ export async function runPair(
   const device = requirePairableDevice(name);
   const timeoutMs = parseTimeoutMs(options.timeout);
   const label = parseLabel(options.label);
-  await pairDevice(device, { label, timeoutMs, resume: options.resume, yes: options.yes }, deps);
+  await pairDevice(
+    device,
+    {
+      label,
+      timeoutMs,
+      resume: options.resume,
+      yes: options.yes,
+      topicHandoff: options.topicHandoff,
+    },
+    deps
+  );
 }
 
 /**
- * pairDevice is runPair after flag parsing.
+ * pairDevice is runPair after flag parsing. It picks the pairing path from
+ * the FF1's LAN status: an FF1 without the control protocol (no `control`
+ * block), or with it but no owner yet (`legacy`), accepts plaintext and gets
+ * the legacy short-code topic handoff; a secured one gets owner-initiated
+ * registration. An unreadable status falls back to registration, and
+ * --topic-handoff forces the legacy path.
  *
  * @param device - Device with ID
- * @param options - Parsed label and wait, and the resume and yes flags
+ * @param options - Parsed label and wait, and the resume, yes and topicHandoff flags
  * @param deps - Seams (tests)
  */
 export async function pairDevice(
   device: PairDevice,
-  options: { label: string; timeoutMs: number; resume?: boolean; yes?: boolean },
+  options: {
+    label: string;
+    timeoutMs: number;
+    resume?: boolean;
+    yes?: boolean;
+    topicHandoff?: boolean;
+  },
   deps: PairDeps = {}
 ): Promise<void> {
-  const store = deps.controllerStore ?? {};
   if (options.resume) {
     await resumePairing(device, deps);
     return;
   }
+  if (options.topicHandoff) {
+    await pairByTopicHandoff(device, options.timeoutMs, deps);
+    return;
+  }
+  const support = await probeControlSupport(device, deps.fetchFn);
+  if (support === 'plaintext') {
+    await pairByTopicHandoff(device, options.timeoutMs, deps);
+    return;
+  }
+  if (support === 'unknown') {
+    console.log(
+      chalk.yellow(
+        `\nCould not read the status of ${deviceLabel(device)} over the LAN, so ff-cli shows the secure pairing code. ` +
+          `If this FF1 runs FF OS without secure control, run \`${pairCommand(deviceLabel(device))} --topic-handoff\` instead.`
+      )
+    );
+  }
+  await pairByRegistration(device, options, deps);
+}
+
+/**
+ * pairByRegistration is owner-initiated registration (§5.6): show the
+ * controller QR, wait for an owner's sealed result, enroll.
+ */
+async function pairByRegistration(
+  device: PairDevice,
+  options: { label: string; timeoutMs: number; yes?: boolean },
+  deps: PairDeps
+): Promise<void> {
+  const store = deps.controllerStore ?? {};
   // A staged replacement that already enrolled is this computer's confirmed
   // grant; a new pairing would overwrite or drop it. --resume promotes it.
   dropStagedController(device.id, true, store);
@@ -225,16 +281,27 @@ export async function pairDevice(
   if (existing === 'corrupt') {
     await confirmCorruptReplacement(device, options, confirmFn);
   }
-  const { keys, reused } = chooseControllerKeys(device.id, store);
+  const { keys, reused, fromRecord } = chooseControllerKeys(device.id, store);
   const material = generatePairingMaterial(keys, options.label);
   const nowFn = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
   const outcome = await withInterrupt((signal) =>
-    waitForOwner(device, material, options.timeoutMs, signal, deps, reused)
+    waitForOwner(
+      device,
+      material,
+      options.timeoutMs,
+      signal,
+      deps,
+      fromRecord
+        ? 'this computer’s existing keys'
+        : reused
+          ? 'the same keys as the last attempt'
+          : ''
+    )
   );
   if (outcome.status === 'interrupted') {
     console.log(
       chalk.yellow(
-        `\nPairing interrupted; nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+        `\nPairing interrupted. Run \`${pairCommand(deviceLabel(device))}\` to show a new code; it keeps the same controller keys.`
       )
     );
     process.exitCode = 130;
@@ -243,14 +310,14 @@ export async function pairDevice(
   if (outcome.status !== 'result') {
     throw new CommandFailure(
       `Pairing was not completed: no owner answered within ${Math.round(options.timeoutMs / 1000)}s.`,
-      `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+      `Run \`${pairCommand(deviceLabel(device))}\` to show a new code. It keeps the same controller keys, so an owner who already added ff-cli only needs to scan the new code.`
     );
   }
   const result = outcome.result;
   if (result.outcome === 'rejected') {
     throw new CommandFailure(
       `An owner declined to add ff-cli to ${deviceLabel(device)}.`,
-      `Nothing was saved. To try again, run \`${pairCommand(deviceLabel(device))}\`.`
+      `To try again, run \`${pairCommand(deviceLabel(device))}\`.`
     );
   }
   const profile = result.profile!;
@@ -259,6 +326,9 @@ export async function pairDevice(
     { profile, keys, label: options.label, registration: registrationRecordOf(result, nowFn()) },
     store
   );
+  if (!fromRecord) {
+    deletePairingKeys(device.id, store); // the keys now live in the record
+  }
   if (result.topicId) {
     storeRelayerTopic(device.id, result.topicId, deps.storeTopicFn);
   }
@@ -273,6 +343,52 @@ export async function pairDevice(
     )
   );
   await finishEnrollment(device, record, staged, deps);
+}
+
+/**
+ * pairByTopicHandoff is the legacy short-code handoff for an FF1 without
+ * secure control: the owner's app sends the relayer topic end to end
+ * encrypted, and ff-cli stores it in the OS keyring. No controller keys are
+ * created; such an FF1 accepts plaintext commands.
+ */
+async function pairByTopicHandoff(
+  device: PairDevice,
+  timeoutMs: number,
+  deps: PairDeps
+): Promise<void> {
+  const payload = await (deps.receiveTopicHandoff ?? receiveTopicHandoff)(device, timeoutMs);
+  (deps.storeTopicFn ?? storeTopicId)(device.id, payload.topicId);
+  console.log(chalk.green('\n✓ Relayer access stored in the operating system secure storage.\n'));
+}
+
+/** receiveTopicHandoff runs the broker handoff and always closes the channel. */
+async function receiveTopicHandoff(
+  device: PairDevice,
+  timeoutMs: number
+): Promise<TopicHandoffPayload> {
+  let receiver: HandoffReceiver | undefined;
+  try {
+    receiver = await HandoffReceiver.create();
+    console.log(chalk.blue('\nPair ff-cli with Feral File mobile\n'));
+    console.log(`  Device: ${chalk.bold(device.name || device.id)}`);
+    console.log(`  Device ID: ${chalk.dim(device.id)}`);
+    console.log("\nIn the mobile app, open this Art Computer's options and choose");
+    console.log(chalk.bold('“Pair with ff-cli”'), 'then enter:');
+    console.log(`\n  ${chalk.bold(receiver.shortCode)}\n`);
+    console.log('Before sharing, confirm the mobile security check matches:');
+    console.log(`\n  ${chalk.bold(receiver.verificationCode)}\n`);
+    console.log(chalk.dim(`This one-time code expires at ${receiver.expiresAt}. Waiting...`));
+    return await receiver.receiveHandoff({ expectedDeviceId: device.id, maxWaitMs: timeoutMs });
+  } finally {
+    if (receiver) {
+      try {
+        await receiver.close();
+      } catch {
+        // The channel is short-lived and expires automatically. A close
+        // failure must not erase or misreport an already received handoff.
+      }
+    }
+  }
 }
 
 /**
@@ -311,7 +427,7 @@ async function waitForOwner(
   timeoutMs: number,
   interrupt: AbortSignal,
   deps: PairDeps,
-  reused: boolean
+  keysNote: string
 ): Promise<
   { status: 'result'; result: RegistrationResult } | { status: 'timeout' | 'interrupted' }
 > {
@@ -335,7 +451,7 @@ async function waitForOwner(
         'Pairing needs an internet connection to the Feral File relay. Check the connection and try again.'
       );
     }
-    showPairingCode(device, material, timeoutMs, reused, deps.showQr);
+    showPairingCode(device, material, timeoutMs, keysNote, deps.showQr);
     const wantDev = normalizeDeviceId(device.id);
     const now = deps.nowFn ?? (() => Math.floor(Date.now() / 1000));
     const messages = channel.messages()[Symbol.asyncIterator]();
@@ -349,7 +465,7 @@ async function waitForOwner(
         }
         throw new CommandFailure(
           `The pairing channel failed: ${(error as Error).message}`,
-          `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+          `Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
         );
       }
       if (next === null) {
@@ -358,7 +474,7 @@ async function waitForOwner(
       if (next.done) {
         throw new CommandFailure(
           'The pairing channel closed before an owner answered.',
-          `Nothing was saved. Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
+          `Run \`${pairCommand(deviceLabel(device))}\` to show a new code.`
         );
       }
       try {
@@ -418,7 +534,7 @@ function showPairingCode(
   device: PairDevice,
   material: PairingMaterial,
   timeoutMs: number,
-  reused: boolean,
+  keysNote: string,
   showQr: (payload: string) => void = (payload) => console.log(renderQr(payload))
 ): void {
   const payload = controllerQrString(material.qr);
@@ -431,9 +547,7 @@ function showPairingCode(
   console.log(`  ${payload}\n`);
   console.log(chalk.dim(`Name the owner sees: ${material.qr.label}`));
   console.log(
-    chalk.dim(
-      `Controller ID: ${controllerQrCtl(material.qr)}${reused ? ' (this computer’s existing keys)' : ''}`
-    )
+    chalk.dim(`Controller ID: ${controllerQrCtl(material.qr)}${keysNote ? ` (${keysNote})` : ''}`)
   );
   console.log(
     chalk.dim(
@@ -1003,6 +1117,7 @@ export async function runUnpair(
   }
   const revoked = record !== null && isEnrolled(record) && (await selfRevoke(device, record, deps));
   deleteController(device.id, stagingStore(store)); // an unfinished replacement pairing
+  deletePairingKeys(device.id, store); // keys an interrupted pairing showed
   if (!deleteController(device.id, store)) {
     console.log(chalk.dim(`\nff-cli has no controller keys for ${deviceLabel(device)}.\n`));
     return;
