@@ -75,9 +75,10 @@ Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{sl
 
 **Known limitations**
 
-- **CryptoPunks (original)** don't index — the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)).
+- **CryptoPunks (original)** don't index — the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)). The opt-in Raster token source resolves them.
 - **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series — Raster's curation is effectively the series allowlist.
 - **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)) — retry clears or use `--limit N`.
+- **The Raster token source is opt-in and under evaluation** (`tokenSource: "raster"`). It cannot list a contract, its Feral File metadata is a snapshot (an evolving work plays the version Raster recorded), and some Feral File works point at a retired image host and play black. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#tokensource).
 
 ## Use with Claude Code
 
@@ -111,6 +112,7 @@ npm run dev -- setup
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
 npm run dev -- play "https://example.com/video.mp4" --skip-verify
 ```
+
 ## Documentation
 
 - Getting started and usage: `./docs/README.md`

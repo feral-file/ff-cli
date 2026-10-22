@@ -2,12 +2,12 @@
  * Raster API client (api.raster.art — public GraphQL API).
  *
  * Resolves on-chain coordinates and artist addresses into Raster artworks
- * (series) and artists (catalog) — the inputs the `ff-cli find` flow needs
- * before handing tokens to the FF GraphQL indexer for DP-1 conversion.
+ * (series) and artists (catalog) for `ff-cli find`, and fetches the full token
+ * rows the Raster token source (token-source-raster.ts) turns into DP-1 items.
  *
  * This module is pure data: it does not construct DP-1 items, send anything
- * to devices, or build playlists. The fulfiller layer (FF indexer) consumes
- * the `{ chain, contractAddress, tokenId }` shapes this module emits.
+ * to devices, or build playlists. Mapping a RasterToken to the vendor-neutral
+ * token shape happens in token-source-raster.ts.
  *
  * Chain filter: the FF indexer only supports Ethereum mainnet and Tezos
  * mainnet. Token lists are filtered here at the CAIP level and a
@@ -87,29 +87,8 @@ export interface RasterTokenCoords {
   chain: IndexerChain;
   contractAddress: string;
   tokenId: string;
-  /**
-   * Raster's own playable asset URL for this token, when present. The find
-   * flow uses it to build a DP-1 item directly (off-chain `provenance`),
-   * bypassing the FF indexer for Raster-minted tokens it cannot resolve.
-   */
-  mediaUrl: string | null;
-  /**
-   * Media type hint for DP-1 timing. Prefer Raster's real `contentType`; we
-   * currently fall back to `previewType` when it is empty, because Raster's
-   * `contentUrl` is often an extensionless IPFS URL and without any hint the
-   * builder can't tell a video from a still and would stamp it a fixed
-   * duration.
-   *
-   * CAUTION: `previewType` is NOT a reliable content-type signal. Per Raster
-   * (Michael, June 2026) it describes only how the *preview* is encoded, not
-   * the underlying work — e.g. a webapp's previewType is still `image`. So the
-   * fallback can misclassify: an interactive piece (empty contentType) gets
-   * stamped a fixed duration instead of playing open-ended, and a video whose
-   * preview is an image thumbnail would be timed as a still. Revisit this
-   * tradeoff once we know how reliably Raster populates `contentType` and what
-   * `previewType` returns for video — see the open Raster follow-up ticket.
-   */
-  mediaType: string | null;
+  /** The full Raster row, so a series build needs no second round trip. */
+  token: RasterToken;
 }
 
 export interface PaginatedTokens {
@@ -129,7 +108,10 @@ function caipToIndexerChain(caip: string): IndexerChain | null {
  * lands here — Raster models it as a null query field with no error, so
  * callers check their own field for null.
  */
-async function rasterQuery<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+export async function rasterQuery<T>(
+  query: string,
+  variables: Record<string, unknown>
+): Promise<T> {
   const endpoint = process.env.RASTER_API_URL ?? DEFAULT_RASTER_GRAPHQL_URL;
   logger.debug(`[Raster] POST ${endpoint} ${JSON.stringify(variables)}`);
   const headers: Record<string, string> = {
@@ -189,7 +171,7 @@ async function rasterQuery<T>(query: string, variables: Record<string, unknown>)
   return payload.data;
 }
 
-interface ArtistFields {
+export interface ArtistFields {
   id: string;
   name: string | null;
   slug: string | null;
@@ -303,6 +285,167 @@ export async function resolveAddressToArtist(address: string): Promise<RasterArt
   return artist ? toRasterArtist(artist) : null;
 }
 
+/** RasterMedia is Raster's media block. `contentType` and `previewType` are not MIME types. */
+export interface RasterMedia {
+  previewHash: string | null;
+  previewType: string | null;
+  contentUrl: string | null;
+  normalizedContentUrl: string | null;
+  contentType: string | null;
+}
+
+/** RasterArtworkRef is the artwork (series) a token belongs to, as embedded on a token. */
+export interface RasterArtworkRef {
+  id: string;
+  slug: string | null;
+  title: string;
+  description: string | null;
+  platform: { id: string; name: string } | null;
+  artists: ArtistFields[];
+}
+
+/**
+ * RasterToken is one token row selected through TOKEN_FIELDS.
+ *
+ * Raster lowercases EVM contract addresses and keeps Tezos addresses as
+ * written (verified 2026-10-21). `name` is empty for Art Blocks tokens, a
+ * known Raster bug the token source works around.
+ */
+export interface RasterToken {
+  chainId: string;
+  contractAddress: string | null;
+  tokenId: string;
+  tokenStandard: string | null;
+  name: string | null;
+  description: string | null;
+  media: RasterMedia | null;
+  artworks: RasterArtworkRef[];
+  artists: ArtistFields[];
+}
+
+/**
+ * TOKEN_FIELDS is the one selection every token-reading query shares, so the
+ * three entry points (by reference, by owner, by artwork) feed the same mapper.
+ */
+export const TOKEN_FIELDS = `fragment TokenFields on Token {
+  chainId contractAddress tokenId tokenStandard name description
+  media { previewHash previewType contentUrl normalizedContentUrl contentType }
+  artworks { id slug title description platform { id name } artists { id name slug } }
+  artists { id name slug }
+}`;
+
+/**
+ * RASTER_TOKEN_BATCH_SIZE caps aliased `tokenByRef` lookups per request.
+ * 40 is the size probed on feral-file#3546 (one request, 2.9 s); larger
+ * batches are unmeasured, so raise it only with a new measurement.
+ */
+export const RASTER_TOKEN_BATCH_SIZE = 40;
+
+/** RasterTokenRef is a coordinate to look up, in the client chain vocabulary. */
+export interface RasterTokenRef {
+  chain: IndexerChain;
+  contractAddress: string;
+  tokenId: string;
+}
+
+/**
+ * buildTokenByRefBatchQuery builds one query with `count` aliased lookups.
+ *
+ * Refs travel as numbered variables (`$r0`…), never interpolated into the
+ * text, so token ids above 2^53 (every Feral File id) arrive as strings and
+ * no caller-supplied value can alter the document.
+ */
+export function buildTokenByRefBatchQuery(count: number): string {
+  const indices = Array.from({ length: count }, (_, i) => i);
+  const params = indices.map((i) => `$r${i}: TokenRefInput!`).join(', ');
+  const fields = indices.map((i) => `  t${i}: tokenByRef(ref: $r${i}) { ...TokenFields }`);
+  return `query TokensByRef(${params}) {\n${fields.join('\n')}\n}\n${TOKEN_FIELDS}`;
+}
+
+/**
+ * fetchTokensByRef looks up one batch of coordinates in a single request.
+ *
+ * The result is aligned with the input; a token Raster does not cover, or one
+ * that was burned, is `null` (Raster answers null rather than an error).
+ * Batching across requests, progress, and per-batch failure handling belong to
+ * the caller, which is why more than RASTER_TOKEN_BATCH_SIZE refs is refused
+ * instead of split here.
+ *
+ * @throws RasterUnreachableError on network failure; Error on API failure
+ */
+export async function fetchTokensByRef(refs: RasterTokenRef[]): Promise<(RasterToken | null)[]> {
+  if (refs.length > RASTER_TOKEN_BATCH_SIZE) {
+    throw new Error(`fetchTokensByRef takes at most ${RASTER_TOKEN_BATCH_SIZE} refs per call.`);
+  }
+  if (refs.length === 0) {
+    return [];
+  }
+  const variables: Record<string, unknown> = {};
+  refs.forEach((ref, i) => {
+    variables[`r${i}`] = {
+      chainId: INDEXER_CHAIN_TO_CAIP[ref.chain],
+      contractAddress: ref.contractAddress,
+      tokenId: ref.tokenId,
+    };
+  });
+  const data = await rasterQuery<Record<string, RasterToken | null>>(
+    buildTokenByRefBatchQuery(refs.length),
+    variables
+  );
+  return refs.map((_, i) => data[`t${i}`] ?? null);
+}
+
+/** OwnedTokensPage is one page of an address's holdings. */
+export interface OwnedTokensPage {
+  tokens: RasterToken[];
+  nextCursor: string | null;
+  totalCount: number;
+}
+
+/**
+ * fetchTokensOwned reads one page of `address.tokensOwned`, the wallet walk.
+ *
+ * Raster resolves any well-formed address and returns an empty connection when
+ * it knows no holdings, so an empty page is an answer, not an error. Chain
+ * filtering is left to the caller, which owns the skipped-chain report.
+ */
+export async function fetchTokensOwned(
+  address: string,
+  options: { first: number; after?: string }
+): Promise<OwnedTokensPage> {
+  const data = await rasterQuery<{
+    address: {
+      tokensOwned: {
+        totalCount: number;
+        nodes: Array<{ token: RasterToken }>;
+        pageInfo: { hasNextPage: boolean; endCursor: string | null };
+      };
+    } | null;
+  }>(
+    `query TokensOwned($address: String!, $first: Int, $after: String) {
+      address(address: $address) {
+        tokensOwned(first: $first, after: $after) {
+          totalCount
+          nodes { token { ...TokenFields } }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    }
+    ${TOKEN_FIELDS}`,
+    { address: address.trim(), first: options.first, after: options.after ?? null }
+  );
+  const owned = data.address?.tokensOwned;
+  if (!owned) {
+    return { tokens: [], nextCursor: null, totalCount: 0 };
+  }
+  const { hasNextPage, endCursor } = owned.pageInfo;
+  return {
+    tokens: owned.nodes.map((node) => node.token),
+    nextCursor: hasNextPage && endCursor ? endCursor : null,
+    totalCount: owned.totalCount,
+  };
+}
+
 /**
  * List tokens in a Raster artwork (series), one page at a time.
  *
@@ -322,16 +465,7 @@ export async function listArtworkTokens(
   const data = await rasterQuery<{
     artwork: {
       tokens: {
-        nodes: Array<{
-          chainId: string;
-          contractAddress: string | null;
-          tokenId: string;
-          media: {
-            contentUrl: string | null;
-            contentType: string | null;
-            previewType: string | null;
-          } | null;
-        }>;
+        nodes: RasterToken[];
         pageInfo: { hasNextPage: boolean; endCursor: string | null };
       };
     } | null;
@@ -339,11 +473,12 @@ export async function listArtworkTokens(
     `query ArtworkTokens($id: ID!, $first: Int, $after: String) {
       artwork(id: $id) {
         tokens(first: $first, after: $after) {
-          nodes { chainId contractAddress tokenId media { contentUrl contentType previewType } }
+          nodes { ...TokenFields }
           pageInfo { hasNextPage endCursor }
         }
       }
-    }`,
+    }
+    ${TOKEN_FIELDS}`,
     { id: artworkId, first: options.pageSize ?? null, after: options.cursor ?? null }
   );
 
@@ -363,12 +498,7 @@ export async function listArtworkTokens(
       chain,
       contractAddress: raw.contractAddress,
       tokenId: raw.tokenId,
-      mediaUrl: raw.media?.contentUrl ?? null,
-      // Prefer the real MIME (`contentType`); today it is usually empty, so we
-      // fall back to `previewType` as a last resort. NOTE: previewType only
-      // describes the preview encoding, not the work, so this fallback can
-      // misclassify (see the mediaType doc comment above). Tracked for revisit.
-      mediaType: raw.media?.contentType || raw.media?.previewType || null,
+      token: raw,
     });
   }
 

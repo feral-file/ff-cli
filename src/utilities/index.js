@@ -1,59 +1,38 @@
 /**
  * Utilities - Actual function implementations
- * Contains the real logic for querying NFTs and building playlists
+ * Contains the real logic for querying NFTs and building playlists.
+ *
+ * Token data comes from the configured token source (token-source.ts):
+ * the Feral File indexer by default, Raster when `tokenSource: "raster"` is
+ * set. This module never names a vendor except to
+ * phrase guidance that only makes sense for one of them.
  */
 
 const chalk = require('chalk');
-const nftIndexer = require('./nft-indexer');
 const feedFetcher = require('./feed-fetcher');
 const playlistBuilder = require('./playlist-builder');
 const functions = require('./functions');
 const domainResolver = require('./domain-resolver');
 const logger = require('../logger');
+const {
+  getTokenSource,
+  itemsOf,
+  failureMessages,
+  TokenSourceCapabilityError,
+} = require('./token-source');
 
 const printedTokenCountKeys = new Set();
 
-/**
- * Detect blockchain from contract address format.
- *
- * @param {string} contractAddress - Contract address
- * @returns {string} Chain name
- */
-function detectChainFromContractAddress(contractAddress) {
-  if (String(contractAddress || '').startsWith('KT')) {
-    return 'tezos';
-  }
-  return 'ethereum';
-}
+/** Per-request cap every bounded listing has always applied. */
+const MAX_LISTING = 100;
 
 /**
- * Convert indexer token rows to DP1 items.
- *
- * @param {Array<Object>} tokens - Raw indexer token rows
- * @param {number} duration - Duration per item in seconds
- * @returns {{ items: Array<Object>, skippedCount: number }} Converted items and skipped count
+ * The indexer only knows wallets someone added in the Feral File app, so an
+ * empty answer there means "not added yet". Raster is pre-indexed, so the
+ * same advice would be wrong for it.
  */
-function convertIndexerTokensToDP1Items(tokens, duration) {
-  const items = [];
-  let skippedCount = 0;
-
-  for (const token of tokens) {
-    const contractAddr = token.contract_address || token.contractAddress || '';
-    const chain = detectChainFromContractAddress(contractAddr);
-    const tokenData = nftIndexer.mapIndexerDataToStandardFormat(token, chain);
-
-    if (tokenData.success) {
-      const dp1Result = nftIndexer.convertToDP1Item(tokenData, duration);
-      if (dp1Result.success && dp1Result.item) {
-        items.push(dp1Result.item);
-      } else if (!dp1Result.success) {
-        skippedCount++;
-      }
-    }
-  }
-
-  return { items, skippedCount };
-}
+const ADD_ADDRESS_GUIDANCE =
+  '   → Add this address in the Feral File mobile app, then try again with the CLI.';
 
 /**
  * Check if an address looks like an EVM address.
@@ -66,294 +45,322 @@ function isLikelyEvmAddress(address) {
 }
 
 /**
- * Query random tokens from a contract and convert to DP1 items.
+ * printAddressGuidance prints the add-in-app hint, only where it applies.
+ *
+ * @param {Object} source - Active token source
+ * @param {boolean} suppress - Caller will try another lookup first
+ */
+function printAddressGuidance(source, suppress) {
+  if (!suppress && source.name === 'indexer') {
+    console.log(chalk.cyan(ADD_ADDRESS_GUIDANCE));
+  }
+}
+
+/**
+ * pickResults applies a numeric quantity as a random selection.
+ *
+ * @param {Array<Object>} results - Listing results
+ * @param {number|string} [quantity] - Count, or "all"/undefined for everything
+ * @returns {Array<Object>} Selected results
+ */
+function pickResults(results, quantity) {
+  if (typeof quantity === 'number' && results.length > quantity) {
+    return shuffleArray([...results]).slice(0, quantity);
+  }
+  return results;
+}
+
+/**
+ * reportSkips prints how many listed tokens produced no item, and why.
+ *
+ * @param {Array<Object>} results - Results that were converted
+ * @param {number} skippedUnsupported - Tokens dropped for an unsupported chain
+ */
+function reportSkips(results, skippedUnsupported) {
+  const failed = results.filter((result) => !result.success).length;
+  if (failed > 0) {
+    console.log(chalk.yellow(`   Skipped ${failed} token(s) that could not be built into items`));
+    for (const message of failureMessages(results)) {
+      console.log(chalk.dim(`     ${message}`));
+    }
+  }
+  if (skippedUnsupported > 0) {
+    console.log(
+      chalk.yellow(
+        `   Skipped ${skippedUnsupported} token(s) on chains other than Ethereum and Tezos mainnet`
+      )
+    );
+  }
+}
+
+/**
+ * Query random tokens from a contract and convert to DP-1 items.
+ *
+ * A source that cannot list contracts (Raster) throws
+ * TokenSourceCapabilityError, which is deliberately not caught here: the
+ * requirement fails with that message instead of quietly building nothing.
  *
  * @param {string} contractAddress - Contract address
  * @param {number|string} [quantity] - Number of random tokens to select
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
- * @returns {Promise<Array<Object>>} Array of DP1 items
+ * @param {Object} source - Active token source
+ * @returns {Promise<Array<Object>>} Array of DP-1 items
  */
-async function queryTokensByContractAddress(contractAddress, quantity, duration) {
+async function queryTokensByContractAddress(contractAddress, quantity, duration, source) {
   console.log(
     chalk.cyan(
-      `   Fetching ${quantity || 100} random token(s) from contract ${contractAddress.substring(0, 10)}...`
+      `   Fetching ${quantity || MAX_LISTING} random token(s) from contract ${contractAddress.substring(0, 10)}...`
     )
   );
-
-  const limit = Math.min(quantity || 100, 100);
-  const result = await nftIndexer.queryTokensByContract(contractAddress, limit);
-
-  if (!result.success) {
-    console.log(chalk.yellow(`   Could not fetch tokens from contract`));
+  const limit = Math.min(typeof quantity === 'number' ? quantity : MAX_LISTING, MAX_LISTING);
+  let listing;
+  try {
+    listing = await source.listTokensByContract(contractAddress, { limit, duration });
+  } catch (error) {
+    if (error instanceof TokenSourceCapabilityError) {
+      throw error;
+    }
+    console.log(chalk.yellow(`   Could not fetch tokens from contract: ${error.message}`));
     return [];
   }
-
-  if (result.tokens.length === 0) {
+  if (listing.results.length === 0) {
     console.log(chalk.yellow(`   No tokens found in contract ${contractAddress}`));
     return [];
   }
+  const selected = pickResults(listing.results, quantity);
+  console.log(chalk.dim(`   Got ${selected.length} token(s)`));
+  reportSkips(selected, listing.skippedUnsupported);
+  return itemsOf(selected);
+}
 
-  let selectedTokens = result.tokens;
-  if (typeof quantity === 'number' && selectedTokens.length > quantity) {
-    selectedTokens = shuffleArray([...selectedTokens]).slice(0, quantity);
+/**
+ * Query tokens from an owner address.
+ *
+ * Fetches the tokens an address holds through the active token source, with
+ * optional random selection. `quantity` of "all" (or none) walks the whole
+ * wallet; a number stops early and samples from what was fetched.
+ *
+ * @param {string} ownerAddress - Owner wallet address
+ * @param {number|string} [quantity] - Number of random tokens to select, or "all"
+ * @param {number} [duration] - Explicit display seconds; omit for auto timing
+ * @param {Object} [options]
+ * @param {boolean} [options.suppressNotFoundGuidance] - Caller will try another lookup
+ * @param {Object} [source] - Token source; defaults to the configured one
+ * @returns {Promise<Array>} Array of DP-1 playlist items
+ */
+async function queryTokensByAddress(
+  ownerAddress,
+  quantity,
+  duration,
+  options = {},
+  source = getTokenSource()
+) {
+  const { suppressNotFoundGuidance = false } = options;
+  const fetchAll = quantity === 'all' || quantity === undefined || quantity === null;
+  const limit = fetchAll ? 'all' : Math.min(quantity, MAX_LISTING);
+  if (fetchAll) {
+    console.log(chalk.cyan(`   Fetching all tokens from ${ownerAddress}...`));
   }
 
-  console.log(chalk.dim(`   Got ${selectedTokens.length} token(s)`));
+  let listing;
+  try {
+    listing = await source.listTokensByOwner(ownerAddress, { limit, duration });
+  } catch (error) {
+    console.log(chalk.yellow(`   Could not fetch tokens for ${ownerAddress}: ${error.message}`));
+    printAddressGuidance(source, suppressNotFoundGuidance);
+    return [];
+  }
+  if (listing.results.length === 0) {
+    console.log(chalk.yellow(`   No tokens found for ${ownerAddress}`));
+    reportSkips([], listing.skippedUnsupported);
+    printAddressGuidance(source, suppressNotFoundGuidance);
+    return [];
+  }
 
-  const { items, skippedCount } = convertIndexerTokensToDP1Items(selectedTokens, duration);
-  if (skippedCount > 0) {
+  const selected = pickResults(listing.results, quantity);
+  const tokenCountKey = `${ownerAddress}|${quantity ?? 'all'}|${duration ?? 'auto'}`;
+  if (!printedTokenCountKeys.has(tokenCountKey)) {
+    console.log(chalk.dim(`Got ${selected.length} token(s)`));
+    printedTokenCountKeys.add(tokenCountKey);
+  }
+  reportSkips(selected, listing.skippedUnsupported);
+  return itemsOf(selected);
+}
+
+/**
+ * resolveCoordinates builds items for explicit coordinates and reports misses.
+ *
+ * @param {Array<Object>} coords - Token coordinates
+ * @param {number} [duration] - Explicit display seconds
+ * @param {Object} source - Active token source
+ * @returns {Promise<Array<Object>>} DP-1 items for the resolved coordinates
+ */
+async function resolveCoordinates(coords, duration, source) {
+  const results = await source.resolveTokens(coords, { duration });
+  for (const message of failureMessages(results)) {
+    console.log(chalk.dim(`   ${message}`));
+  }
+  return itemsOf(results);
+}
+
+/**
+ * queryOwnerRequirement handles a query_address requirement.
+ *
+ * An EVM address that holds nothing may be a contract, so the contract
+ * listing is tried next. On a source that cannot list contracts the user is
+ * told so, rather than shown an unexplained empty result.
+ *
+ * @param {string} ownerAddress - Address or .eth/.tez domain
+ * @param {number|string} [quantity] - Count or "all"
+ * @param {number} [duration] - Explicit display seconds
+ * @param {Object} source - Active token source
+ * @returns {Promise<Array<Object>>} DP-1 items
+ */
+async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
+  if (ownerAddress && (ownerAddress.endsWith('.eth') || ownerAddress.endsWith('.tez'))) {
+    logger.verbose(chalk.cyan(`\nResolving domain ${ownerAddress}...`));
+    const resolution = await domainResolver.resolveDomain(ownerAddress);
+    if (!resolution.resolved || !resolution.address) {
+      console.log(
+        chalk.red(
+          `  Could not resolve domain ${ownerAddress}: ${resolution.error || 'Unknown error'}`
+        )
+      );
+      return [];
+    }
+    console.log(chalk.green(`${resolution.domain} → ${resolution.address}`));
+    return await queryTokensByAddress(resolution.address, quantity, duration, {}, source);
+  }
+
+  const isEvmAddress = isLikelyEvmAddress(ownerAddress);
+  const ownerItems = await queryTokensByAddress(
+    ownerAddress,
+    quantity,
+    duration,
+    { suppressNotFoundGuidance: isEvmAddress },
+    source
+  );
+  if (ownerItems.length > 0 || !isEvmAddress) {
+    return ownerItems;
+  }
+
+  console.log(chalk.cyan(`   No owned tokens found. Trying this address as a contract...`));
+  try {
+    const contractItems = await queryTokensByContractAddress(
+      ownerAddress,
+      quantity,
+      duration,
+      source
+    );
+    if (contractItems.length > 0) {
+      return contractItems;
+    }
+  } catch (error) {
+    if (!(error instanceof TokenSourceCapabilityError)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`   ${error.message}`));
+    return [];
+  }
+  printAddressGuidance(source, false);
+  return [];
+}
+
+/**
+ * queryTokenIdsRequirement handles a build_playlist requirement.
+ *
+ * With token ids, the coordinates are resolved directly. Without them the
+ * contract is listed; a source that cannot list contracts fails the
+ * requirement with its reason (no owner-address guess on that path).
+ *
+ * @param {Object} requirement - build_playlist requirement
+ * @param {number} [duration] - Explicit display seconds
+ * @param {Object} source - Active token source
+ * @returns {Promise<Array<Object>>} DP-1 items
+ */
+async function queryTokenIdsRequirement(requirement, duration, source) {
+  const { blockchain, contractAddress, tokenIds, quantity } = requirement;
+  console.log(
+    chalk.cyan(
+      `Querying ${blockchain}${contractAddress ? ' (' + contractAddress.substring(0, 10) + '...)' : ''}...`
+    )
+  );
+
+  if (contractAddress && (!tokenIds || tokenIds.length === 0)) {
+    const contractItems = await queryTokensByContractAddress(
+      contractAddress,
+      quantity,
+      duration,
+      source
+    );
+    if (contractItems.length > 0) {
+      return contractItems;
+    }
+    console.log(chalk.cyan(`   → Trying as owner address instead...`));
+    return await queryTokensByAddress(contractAddress, quantity, duration, {}, source);
+  }
+
+  const chain = String(blockchain || '').toLowerCase();
+  const knownChain =
+    chain === 'tezos' ? 'tezos' : chain === 'ethereum' || chain === 'eth' ? 'ethereum' : '';
+  if (!knownChain) {
+    console.log(chalk.yellow(`   Unsupported blockchain: ${blockchain}`));
+    return [];
+  }
+  if (!contractAddress || !tokenIds || tokenIds.length === 0) {
+    console.log(chalk.yellow('   Contract address and token IDs required'));
+    return [];
+  }
+
+  const coords = tokenIds.map((tokenId) => ({ chain: knownChain, contractAddress, tokenId }));
+  let items = await resolveCoordinates(coords, duration, source);
+  if (items.length > 0) {
+    console.log(chalk.green(`✓ Got ${items.length} item(s)`));
+  } else {
     console.log(
       chalk.yellow(
-        `   Skipped ${skippedCount} token(s) with invalid data (data URIs or URLs too long)`
+        `   No items found. Check token IDs, contract address, or try querying by owner address.`
       )
     );
   }
-
+  if (quantity && items.length > quantity) {
+    items = items.slice(0, quantity);
+  }
   return items;
 }
 
 /**
- * Initialize utilities with configuration
- *
- * The indexer now uses a hardcoded production endpoint, so no configuration is needed.
- * This function is kept for backwards compatibility.
- *
- * @param {Object} _config - Unused config parameter
- */
-function initializeUtilities(_config) {
-  nftIndexer.initializeIndexer();
-}
-
-/**
- * Query tokens from an owner address
- *
- * Fetches all tokens owned by an address, with optional random selection.
- * If no tokens found, instructs user to add address via Feral File mobile app.
- * Supports pagination to fetch all tokens when quantity is "all".
- *
- * @param {string} ownerAddress - Owner wallet address
- * @param {number|string} [quantity] - Number of random tokens to select, or "all" to fetch all tokens
- * @param {number} [duration] - Explicit display seconds; omit for auto timing
- * @returns {Promise<Array>} Array of DP1 playlist items
- */
-async function queryTokensByAddress(ownerAddress, quantity, duration, options = {}) {
-  try {
-    const { suppressNotFoundGuidance = false } = options;
-    const shouldFetchAll = quantity === 'all' || quantity === undefined || quantity === null;
-    const batchSize = 50; // Fetch 50 tokens per page
-    let allTokens = [];
-    let offset = 0;
-    let hasMore = true;
-
-    // Fetch tokens with pagination if "all" is requested
-    if (shouldFetchAll) {
-      console.log(chalk.cyan(`   Fetching all tokens from ${ownerAddress}...`));
-
-      while (hasMore) {
-        const result = await nftIndexer.queryTokensByOwner(ownerAddress, batchSize, offset);
-
-        if (!result.success) {
-          if (offset === 0) {
-            // First page failed
-            console.log(chalk.yellow(`   Could not fetch tokens for ${ownerAddress}`));
-            if (!suppressNotFoundGuidance) {
-              console.log(
-                chalk.cyan(
-                  `   → Add this address in the Feral File mobile app, then try again with the CLI.`
-                )
-              );
-            }
-            return [];
-          }
-          // Subsequent pages failed - stop pagination but keep what we have
-          hasMore = false;
-          break;
-        }
-
-        if (result.tokens.length === 0) {
-          // No more tokens
-          hasMore = false;
-          break;
-        }
-
-        allTokens = allTokens.concat(result.tokens);
-        offset += batchSize;
-
-        console.log(chalk.dim(`   → Fetched ${allTokens.length} tokens so far...`));
-
-        // If we got fewer tokens than the batch size, we've reached the end
-        if (result.tokens.length < batchSize) {
-          hasMore = false;
-        }
-      }
-
-      if (allTokens.length === 0 && offset === 0) {
-        console.log(chalk.yellow(`   No tokens found for ${ownerAddress}`));
-        if (!suppressNotFoundGuidance) {
-          console.log(
-            chalk.cyan(
-              `   → Add this address in the Feral File mobile app, then try again with the CLI.`
-            )
-          );
-        }
-        return [];
-      }
-    } else {
-      // Fetch specific quantity with single request
-      const limit = Math.min(quantity, 100); // Cap at 100 per request
-      const result = await nftIndexer.queryTokensByOwner(ownerAddress, limit);
-
-      if (!result.success) {
-        console.log(chalk.yellow(`   Could not fetch tokens for ${ownerAddress}`));
-        if (!suppressNotFoundGuidance) {
-          console.log(
-            chalk.cyan(
-              `   → Add this address in the Feral File mobile app, then try again with the CLI.`
-            )
-          );
-        }
-        return [];
-      }
-
-      if (result.tokens.length === 0) {
-        console.log(chalk.yellow(`   No tokens found for ${ownerAddress}`));
-        if (!suppressNotFoundGuidance) {
-          console.log(
-            chalk.cyan(
-              `   → Add this address in the Feral File mobile app, then try again with the CLI.`
-            )
-          );
-        }
-        return [];
-      }
-
-      allTokens = result.tokens;
-    }
-
-    let selectedTokens = allTokens;
-
-    // Apply quantity limit with random selection (only if numeric quantity specified)
-    if (typeof quantity === 'number' && selectedTokens.length > quantity) {
-      selectedTokens = shuffleArray([...selectedTokens]).slice(0, quantity);
-    }
-
-    const tokenCountKey = `${ownerAddress}|${quantity ?? 'all'}|${duration ?? 'auto'}`;
-    if (!printedTokenCountKeys.has(tokenCountKey)) {
-      console.log(chalk.dim(`Got ${selectedTokens.length} token(s)`));
-      printedTokenCountKeys.add(tokenCountKey);
-    }
-
-    const { items, skippedCount } = convertIndexerTokensToDP1Items(selectedTokens, duration);
-
-    if (skippedCount > 0) {
-      console.log(
-        chalk.yellow(
-          `   Skipped ${skippedCount} token(s) with invalid data (data URIs or URLs too long)`
-        )
-      );
-    }
-
-    return items;
-  } catch (error) {
-    console.error(chalk.red(`   Error: ${error.message}\n`));
-    throw error;
-  }
-}
-
-/**
- * Query data for a single requirement (handles build_playlist, fetch_feed, and query_address)
+ * Query data for a single requirement (build_playlist, fetch_feed,
+ * query_address, or feral_file_artwork).
  *
  * @param {Object} requirement - Requirement object
- * @param {string} requirement.type - Requirement type (build_playlist, fetch_feed, or query_address)
- * @param {string} [requirement.blockchain] - Blockchain network (for build_playlist)
- * @param {string} [requirement.contractAddress] - Contract address (for build_playlist)
- * @param {Array<string>} [requirement.tokenIds] - Token IDs (for build_playlist)
- * @param {string} [requirement.ownerAddress] - Owner address (for query_address)
- * @param {string} [requirement.playlistName] - Feed playlist name (for fetch_feed)
- * @param {number} [requirement.quantity] - Number of items
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
- * @returns {Promise<Array>} Array of DP1 playlist items
+ * @param {Object} [source] - Token source; defaults to the configured one.
+ *   buildPlaylistDirect passes one so a whole build uses one vendor.
+ * @returns {Promise<Array>} Array of DP-1 playlist items
  */
-async function queryRequirement(requirement, duration) {
-  const {
-    type,
-    blockchain,
-    contractAddress,
-    tokenIds,
-    ownerAddress,
-    playlistName,
-    quantity,
-    artworkId,
-  } = requirement;
+async function queryRequirement(requirement, duration, source = getTokenSource()) {
+  const { type, ownerAddress, playlistName, quantity, artworkId } = requirement;
 
-  // Handle query_address type
   if (type === 'query_address') {
-    // Check if ownerAddress is a domain name (.eth or .tez)
-    if (ownerAddress && (ownerAddress.endsWith('.eth') || ownerAddress.endsWith('.tez'))) {
-      logger.verbose(chalk.cyan(`\nResolving domain ${ownerAddress}...`));
-
-      const resolution = await domainResolver.resolveDomain(ownerAddress);
-
-      if (resolution.resolved && resolution.address) {
-        console.log(chalk.green(`${resolution.domain} → ${resolution.address}`));
-        // Use resolved address instead of domain
-        return await queryTokensByAddress(resolution.address, quantity, duration);
-      } else {
-        console.log(
-          chalk.red(
-            `  Could not resolve domain ${ownerAddress}: ${resolution.error || 'Unknown error'}`
-          )
-        );
-        return [];
-      }
-    } else {
-      const isEvmAddress = isLikelyEvmAddress(ownerAddress);
-      const ownerItems = await queryTokensByAddress(ownerAddress, quantity, duration, {
-        suppressNotFoundGuidance: isEvmAddress,
-      });
-
-      if (ownerItems.length > 0) {
-        return ownerItems;
-      }
-
-      if (isEvmAddress) {
-        console.log(chalk.cyan(`   No owned tokens found. Trying this address as a contract...`));
-        const contractItems = await queryTokensByContractAddress(ownerAddress, quantity, duration);
-        if (contractItems.length > 0) {
-          return contractItems;
-        }
-        console.log(
-          chalk.cyan(
-            `   → Add this address in the Feral File mobile app, then try again with the CLI.`
-          )
-        );
-      }
-
-      return [];
-    }
+    return await queryOwnerRequirement(ownerAddress, quantity, duration, source);
   }
 
-  // Handle fetch_feed type
   if (type === 'fetch_feed') {
     console.log(chalk.cyan(`Getting items from "${playlistName}"...`));
-
     const result = await feedFetcher.fetchFeedPlaylistDirect(playlistName, quantity, duration);
-
     if (result.success && result.items) {
       return result.items;
-    } else {
-      console.log(
-        chalk.yellow(`   Could not fetch playlist: ${result.error || 'No items found'}\n`)
-      );
-      return [];
     }
+    console.log(chalk.yellow(`   Could not fetch playlist: ${result.error || 'No items found'}\n`));
+    return [];
   }
 
   if (type === 'feral_file_artwork') {
     console.log(chalk.cyan(`Resolving Feral File artwork ${artworkId}...`));
     const { parseFeralFileArtworkId, resolveFeralFileArtwork } = require('./feral-file-artwork');
     const coords = await resolveFeralFileArtwork(parseFeralFileArtworkId(artworkId));
-    const items = await nftIndexer.getNFTTokenInfoBatch([coords], duration);
+    const items = await resolveCoordinates([coords], duration, source);
     if (items.length > 0) {
       console.log(chalk.green(`✓ Got ${items.length} item(s)`));
     } else {
@@ -362,78 +369,16 @@ async function queryRequirement(requirement, duration) {
     return items;
   }
 
-  // Handle build_playlist type (original NFT querying logic)
-
-  console.log(
-    chalk.cyan(
-      `Querying ${blockchain}${contractAddress ? ' (' + contractAddress.substring(0, 10) + '...)' : ''}...`
-    )
-  );
-
-  let items = [];
-
   try {
-    // Check if we're querying by contract (no specific token IDs) or by specific token IDs
-    const isContractQuery = contractAddress && (!tokenIds || tokenIds.length === 0);
-
-    if (isContractQuery) {
-      const contractItems = await queryTokensByContractAddress(contractAddress, quantity, duration);
-      if (contractItems.length > 0) {
-        return contractItems;
-      }
-      console.log(chalk.cyan(`   → Trying as owner address instead...`));
-      return await queryTokensByAddress(contractAddress, quantity, duration);
-    }
-
-    // Handle specific token IDs (original logic)
-    if (blockchain.toLowerCase() === 'tezos') {
-      // Tezos NFTs
-      if (tokenIds && tokenIds.length > 0) {
-        const tokens = tokenIds.map((tokenId) => ({
-          chain: 'tezos',
-          contractAddress,
-          tokenId,
-        }));
-        items = await nftIndexer.getNFTTokenInfoBatch(tokens, duration);
-      } else {
-        console.log(chalk.yellow('   No token IDs specified'));
-      }
-    } else if (blockchain.toLowerCase() === 'ethereum' || blockchain.toLowerCase() === 'eth') {
-      // Ethereum NFTs (including Art Blocks, Feral File, etc.)
-      if (contractAddress && tokenIds && tokenIds.length > 0) {
-        const tokens = tokenIds.map((tokenId) => ({
-          chain: 'ethereum',
-          contractAddress,
-          tokenId,
-        }));
-        items = await nftIndexer.getNFTTokenInfoBatch(tokens, duration);
-      } else {
-        console.log(chalk.yellow('   Contract address and token IDs required'));
-      }
-    } else {
-      console.log(chalk.yellow(`   Unsupported blockchain: ${blockchain}`));
-    }
-
-    if (items.length > 0) {
-      console.log(chalk.green(`✓ Got ${items.length} item(s)`));
-    } else {
-      console.log(
-        chalk.yellow(
-          `   No items found. Check token IDs, contract address, or try querying by owner address.`
-        )
-      );
-    }
-
-    // Apply quantity limit
-    if (quantity && items.length > quantity) {
-      items = items.slice(0, quantity);
-    }
+    return await queryTokenIdsRequirement(requirement, duration, source);
   } catch (error) {
-    console.error(chalk.red(`   Error: ${error.message}\n`));
+    // A capability error is already a complete sentence that the build loop
+    // prints as the requirement's failure; printing it here too doubles it.
+    if (!(error instanceof TokenSourceCapabilityError)) {
+      console.error(chalk.red(`   Error: ${error.message}\n`));
+    }
     throw error;
   }
-
-  return items;
 }
 
 /**
@@ -538,6 +483,10 @@ async function buildPlaylistDirect(params, options = {}) {
 
   console.log(chalk.cyan('\nBuilding playlist from your requirements...\n'));
 
+  // One provider for the whole build, so every requirement comes from the
+  // same vendor.
+  const source = getTokenSource();
+
   // Process each requirement
   for (let i = 0; i < requirements.length; i++) {
     const requirement = requirements[i];
@@ -548,7 +497,7 @@ async function buildPlaylistDirect(params, options = {}) {
     );
 
     try {
-      const items = await queryRequirement(requirement, duration);
+      const items = await queryRequirement(requirement, duration, source);
       allItems.push(...items);
     } catch (error) {
       console.error(chalk.red(`  Failed: ${error.message}`));
@@ -631,7 +580,6 @@ async function buildPlaylistDirect(params, options = {}) {
 }
 
 module.exports = {
-  initializeUtilities,
   queryRequirement,
   queryTokensByAddress,
   buildDP1Playlist,

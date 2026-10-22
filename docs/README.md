@@ -123,7 +123,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
   - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `--no-play` (never cast; combine with `-y` to build and save without playing), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it plays the playlist on a device, so add `--no-play` to skip casting), `--skip-verify`
-- `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards
+- `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards. With the opt-in Raster token source no still image is supplied, so `enrich` adds artist and description but no thumbnail; thumbnails come from the default indexer source
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
   - Options: `-o, --output <file>`, `--force` (replace existing manifests), `--assume-ethereum`, `-v, --verbose`
 - `publish <file>` – Publish a playlist to a feed server (runs `verify` before upload and rejects unsigned or broken playlists)
@@ -178,7 +178,7 @@ cat params.json | ff-cli build -o playlist.json
 
 `params.json` should include `requirements` and optional `playlistSettings`. See `examples/params-example.json`. Each requirement has a `type`:
 
-- `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
+- `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`. Omitting `tokenIds` asks for random tokens from the contract, which only the default indexer token source supports.
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
 - `query_address` — `ownerAddress`, optional `quantity` (random selection)
 - `fetch_feed` — `playlistName`, `quantity`
@@ -211,8 +211,8 @@ copied from another document, or written before inline manifests existed has no
 and an empty tile in the app's grid — the app can draw a thumbnail from an
 image, video, or SVG source, but not from a live HTML work.
 
-`ff-cli enrich` fills that in from the indexer, keyed on each item's
-`provenance.contract`:
+`ff-cli enrich` fills that in from the configured token source (the Feral
+File indexer by default), keyed on each item's `provenance.contract`:
 
 ```bash
 ff-cli enrich playlist.json --assume-ethereum
@@ -222,8 +222,8 @@ ff-cli enrich playlist.json --assume-ethereum --force   # replace existing manif
 
 `--assume-ethereum` is needed for most playlists. DP-1 records an EVM
 coordinate as `chain: "evm"`, which names Ethereum, Polygon, Arbitrum,
-Optimism, Base and Zora alike, and the indexer's answer collapses back to the
-same word. Enrichment will not pick one for you, because the wrong member
+Optimism, Base and Zora alike, and the token source's answer collapses back to
+the same word. Enrichment will not pick one for you, because the wrong member
 returns a different artwork's artist and still — into a document you then sign.
 
 It writes `inlineManifest` and nothing else. Items with no
