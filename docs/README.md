@@ -110,7 +110,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 
 - `build [params.json]` – Deterministic build from JSON or stdin. `ff-cli build --help` lists the requirement types and settings
   - Options: `-o, --output <file>`, `-v, --verbose`
-  - Exits 1 when any requirement finds nothing or fails, or when the send to `playlistSettings.deviceName` fails. The playlist file is still saved with what was collected
+  - Exits 1 when any requirement finds nothing or fails, when named `tokenIds` do not all resolve, or when the send to `playlistSettings.deviceName` fails. The playlist is still saved when anything was collected; when nothing was, no file is written
 - `validate <file-or-url>` – Validate playlist structure only
 - `verify <file-or-url>` – Validate structure and verify signatures. On failure, the CLI labels structure issues separately from signature verification. dp1-js uses `--public-key` (or a key derived from `playlist.privateKey` / `PLAYLIST_PRIVATE_KEY` when omitted) **only** for legacy flat `signature` verification; DP-1 v1.1.0 `signatures[]` envelopes are verified without relying on that argument. If deriving or normalizing key material fails, the CLI prints a warning on stderr and continues without it (legacy verification still requires a usable key when the playlist uses a flat `signature`). The derived key is emitted as PEM. Supported key forms: hex with optional `0x`, PEM, or 32-byte raw public key as hex or base64
 - `sign <file>` – Sign playlist with a DP-1 v1.1.0 multi-signature envelope (private key string is forwarded to **`dp1-js`**; same hex or base64 PKCS#8 DER forms as `playlist.privateKey` in `./CONFIGURATION.md`). The command verifies the final envelope before writing output and refuses to persist tampered or otherwise unverifiable `signatures[]`.
@@ -312,8 +312,8 @@ ff-cli ssh disable -d "Living Room Display"
 ### Publish to feed server
 
 ```bash
-# Publish to first configured feed server
-npm run dev -- publish playlist.json
+# Publish to the first configured feed server (-s is required when more than one is configured)
+npm run dev -- publish playlist.json -s 0
 
 # Publish to specific server (if multiple configured)
 npm run dev -- publish playlist.json -s 0
@@ -467,7 +467,7 @@ Setup preserves existing devices when adding new ones. See selection rules and e
 
 ## Constraints
 
-- Max 20 items total across all requirements
+- Per-requirement caps: `build_playlist` up to 20 with `tokenIds` (100 without), `query_address` up to 100, `fetch_feed` up to 20. Requirements add up; there is no total cap beyond DP-1's 1024 items
 - Per-source caps enforced in utilities
 - Per-item timing: when no duration is given, video/audio items carry **no** `duration` and `display.loop: false`, so the player advances at end-of-stream (DP-1 §4.1) — the media plays its natural length. Static items use `defaultDuration` (10s unless configured). An explicit duration always wins.
 

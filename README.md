@@ -42,9 +42,9 @@ ff-cli config validate
 `ff-cli setup` is fully scriptable — no TTY required. It runs non-interactively when stdin is not a terminal, or when you pass `-y/--non-interactive`, and takes flags for every step:
 
 ```bash
-# Generate a signing key and register a device in one shot, no prompts
+# Register a device, no prompts. Generates a signing key only when none is configured,
+# and keeps one that is.
 ff-cli setup --non-interactive \
-  --generate-key \
   --device-host http://192.168.1.50:1111 \
   --device-name "Living Room"
 
@@ -90,9 +90,8 @@ Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{sl
 ff-cli ships a [Claude Code](https://docs.claude.com/en/docs/claude-code) skill at `skills/ff-control/SKILL.md`. Install it once:
 
 ```bash
-git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
-  && mkdir -p ~/.claude/skills \
-  && cp -r /tmp/ff-cli/skills/ff-control ~/.claude/skills/
+d="$(mktemp -d)" && git clone --depth=1 https://github.com/feral-file/ff-cli "$d" \
+  && mkdir -p ~/.claude/skills && cp -r "$d/skills/ff-control" ~/.claude/skills/
 ```
 
 Claude Code will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The skill validates config, builds, validates the playlist, and sends or publishes — reporting the failing command + exit code if anything breaks. Full prompt and exact flow: [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
@@ -102,9 +101,8 @@ Claude Code will surface it when you ask to build a playlist, play an artwork or
 ff-cli ships the same `ff-control` skill in Codex's native skill format. Install it once:
 
 ```bash
-git clone --depth=1 https://github.com/feral-file/ff-cli /tmp/ff-cli \
-  && mkdir -p ~/.codex/skills \
-  && cp -r /tmp/ff-cli/skills/ff-control ~/.codex/skills/
+d="$(mktemp -d)" && git clone --depth=1 https://github.com/feral-file/ff-cli "$d" \
+  && mkdir -p ~/.codex/skills && cp -r "$d/skills/ff-control" ~/.codex/skills/
 ```
 
 Codex will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The installed skill is `skills/ff-control/SKILL.md`, so the execution flow stays defined in one place. Codex metadata and exact flow: [`skills/ff-control/agents/openai.yaml`](./skills/ff-control/agents/openai.yaml), [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).

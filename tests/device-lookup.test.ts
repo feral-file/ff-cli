@@ -74,6 +74,14 @@ describe('findExistingDeviceEntry', () => {
     assert.equal(findExistingDeviceEntry(devices, 'http://192.168.1.10:18132', ''), undefined);
   });
 
+  test('discovery: a device found at a stored address but another port is a different device', () => {
+    const devices = [{ host: 'http://192.168.1.20:18131', name: 'first' }];
+    const result = findExistingDeviceEntry(devices, 'http://ff1-other.local:18132', '', undefined, [
+      '192.168.1.20',
+    ]);
+    assert.equal(result, undefined);
+  });
+
   test('IP host: a remembered address on the same port still matches a .local entry', () => {
     const devices = [
       { host: 'http://ff1-abcd1234.local:1111', name: 'office', addresses: ['192.168.1.20'] },

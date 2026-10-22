@@ -96,8 +96,12 @@ export function findExistingDeviceEntry(
         return false; // different physical devices — do not conflate
       }
       try {
-        const storedIp = stripBrackets(new URL(d.host || '').hostname);
-        return discoveredAddresses.includes(storedIp);
+        const stored = new URL(d.host || '');
+        const storedIp = stripBrackets(stored.hostname);
+        // Same port rule as steps 3 and 4b: an address match on another port is
+        // another device. (A matching stable id already returned in step 1.)
+        const samePort = stored.port === (newUrl?.port ?? stored.port);
+        return discoveredAddresses.includes(storedIp) && samePort;
       } catch {
         return false;
       }

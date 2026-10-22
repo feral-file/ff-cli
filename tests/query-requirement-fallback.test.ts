@@ -198,3 +198,33 @@ describe('queryRequirement Feral File artwork', () => {
     );
   });
 });
+
+describe('queryRequirement named token ids', () => {
+  test('reports how many named tokens did not resolve', async () => {
+    // A source that resolves only token 1 of the two named.
+    const source = {
+      name: 'indexer',
+      async resolveTokens(coords: TokenCoordinate[]) {
+        return coords.map((coordinate) =>
+          coordinate.tokenId === '1'
+            ? resolved(coordinate)
+            : { success: false, coordinate, error: 'not found' }
+        );
+      },
+    } as unknown as TokenSource;
+    const report: { missing?: number; wanted?: number } = {};
+    const items = await utilities.queryRequirement(
+      {
+        type: 'build_playlist',
+        blockchain: 'ethereum',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        tokenIds: ['1', '2'],
+      },
+      undefined,
+      source,
+      report
+    );
+    assert.equal(items.length, 1);
+    assert.deepEqual(report, { missing: 1, wanted: 2 });
+  });
+});

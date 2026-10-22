@@ -27,8 +27,9 @@ playlistSettings (all optional):
   title, durationPerItem (seconds), preserveOrder (default true; false shuffles),
   deviceName (play on that FF1 after building)
 
-Exit status: 1 when any requirement, or the send to deviceName, fails. The
-playlist file is still saved with whatever was collected.
+Exit status: 1 when a requirement finds nothing or fails, when named tokenIds
+do not all resolve, or when the send to deviceName fails. The playlist is still
+saved when anything was collected.
 
 Example:
   echo '{"requirements":[{"type":"query_address","ownerAddress":"0x…","quantity":5}],"playlistSettings":{"title":"My collection"}}' | ff-cli build -o wallet.json

@@ -276,9 +276,11 @@ async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
  * @param {Object} requirement - build_playlist requirement
  * @param {number} [duration] - Explicit display seconds
  * @param {Object} source - Active token source
+ * @param {Object} [report] - Filled with `missing` and `wanted` when named
+ *   token ids do not all resolve
  * @returns {Promise<Array<Object>>} DP-1 items
  */
-async function queryTokenIdsRequirement(requirement, duration, source) {
+async function queryTokenIdsRequirement(requirement, duration, source, report = {}) {
   const { blockchain, contractAddress, tokenIds, quantity } = requirement;
   console.log(
     chalk.cyan(
@@ -314,6 +316,14 @@ async function queryTokenIdsRequirement(requirement, duration, source) {
 
   const coords = tokenIds.map((tokenId) => ({ chain: knownChain, contractAddress, tokenId }));
   let items = await resolveCoordinates(coords, duration, source);
+  // Named token ids are an exact request: each one that does not resolve is
+  // something the caller asked for and did not get. The build loop turns this
+  // into a failure, so a playlist missing a named work never exits 0.
+  const wanted = quantity ? Math.min(coords.length, Number(quantity)) : coords.length;
+  if (items.length < wanted) {
+    report.missing = wanted - items.length;
+    report.wanted = wanted;
+  }
   if (items.length > 0) {
     console.log(chalk.green(`✓ Got ${items.length} item(s)`));
   } else {
@@ -337,9 +347,11 @@ async function queryTokenIdsRequirement(requirement, duration, source) {
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @param {Object} [source] - Token source; defaults to the configured one.
  *   buildPlaylistDirect passes one so a whole build uses one vendor.
+ * @param {Object} [report] - Collects partial misses for named token ids
+ *   (see queryTokenIdsRequirement)
  * @returns {Promise<Array>} Array of DP-1 playlist items
  */
-async function queryRequirement(requirement, duration, source = getTokenSource()) {
+async function queryRequirement(requirement, duration, source = getTokenSource(), report = {}) {
   const { type, ownerAddress, playlistName, quantity, artworkId } = requirement;
 
   if (type === 'query_address') {
@@ -370,7 +382,7 @@ async function queryRequirement(requirement, duration, source = getTokenSource()
   }
 
   try {
-    return await queryTokenIdsRequirement(requirement, duration, source);
+    return await queryTokenIdsRequirement(requirement, duration, source, report);
   } catch (error) {
     // A capability error is already a complete sentence that the build loop
     // prints as the requirement's failure; printing it here too doubles it.
@@ -504,12 +516,17 @@ async function buildPlaylistDirect(params, options = {}) {
     );
 
     try {
-      const items = await queryRequirement(requirement, duration, source);
+      const report = {};
+      const items = await queryRequirement(requirement, duration, source, report);
       allItems.push(...items);
       // Some requirement types report "nothing found" by returning no items
       // rather than throwing (fetch_feed does). It is the same miss.
       if (items.length === 0) {
         failures.push(`Requirement ${reqNum}: no items found`);
+      } else if (report.missing) {
+        failures.push(
+          `Requirement ${reqNum}: ${report.missing} of ${report.wanted} named tokens could not be resolved`
+        );
       }
     } catch (error) {
       console.error(chalk.red(`  Failed: ${error.message}`));
