@@ -24,7 +24,7 @@ export class TemporaryChannel {
   /** Create an endpoint-timed attempt. Await ready before displaying its QR. */
   constructor(
     endpoint: string,
-    channelId = crypto.randomUUID(),
+    channelId: string = crypto.randomUUID(),
     timeoutMs = 120000,
     socketFactory = (url: string) => new WebSocket(url, 'ff-relay.v2')
   ) {

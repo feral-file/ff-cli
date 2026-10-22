@@ -35,6 +35,7 @@ import { enrichCommand } from './src/commands/enrich';
 import { configCommand } from './src/commands/config';
 import { sshCommand } from './src/commands/ssh';
 import { deviceCommand } from './src/commands/device';
+import { installRelayPairingChannel } from './src/utilities/control/relay-pairing-channel';
 
 // Load version from package.json. Try the built location first
 // (dist/index.js -> ../package.json) and fall back to dev (./package.json).
@@ -74,5 +75,8 @@ program.addCommand(buildCommand);
 program.addCommand(configCommand);
 program.addCommand(sshCommand);
 program.addCommand(deviceCommand);
+
+// `device pair` joins its pairing channel on relay v2 when an endpoint is set.
+installRelayPairingChannel();
 
 program.parse();

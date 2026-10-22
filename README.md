@@ -113,6 +113,7 @@ npm run dev -- setup
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
 npm run dev -- play "https://example.com/video.mp4" --skip-verify
 ```
+
 ## Documentation
 
 - Getting started and usage: `./docs/README.md`
@@ -150,7 +151,3 @@ npm run lint:fix       # Optional mutating lint fix; review changes before commi
 ## License
 
 MIT
-
-Transport integration status and the separate optional v2 endpoint are documented
-in [Configuration](docs/CONFIGURATION.md#optional-generic-v2-transport-integration-branch).
-The ps-bound temporary pairing workflow remains blocked on shared endpoint fixtures.

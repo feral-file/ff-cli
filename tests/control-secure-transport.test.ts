@@ -111,7 +111,8 @@ beforeEach(() => {
   fs.writeFileSync(
     path.join(tmp, 'config.json'),
     JSON.stringify({
-      ff1Relayer: { baseUrl: 'https://relayer.example' },
+      // v2 off: these tests pin the legacy topic route; the carrier tests below set it.
+      ff1Relayer: { baseUrl: 'https://relayer.example', v2Endpoint: '' },
       ff1Devices: { devices: [{ name: 'Office', id: DEVICE_ID, host: HOST }] },
     })
   );

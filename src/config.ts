@@ -302,37 +302,66 @@ function resolveFF1RelayerConfig(config: Config): {
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('ff1Relayer.baseUrl must be a valid HTTP(S) URL');
   }
-  const v2Endpoint = fields.v2Endpoint ?? process.env.FF1_RELAY_V2_ENDPOINT;
-  if (v2Endpoint !== undefined) {
-    if (typeof v2Endpoint !== 'string') {
-      throw new Error('ff1Relayer.v2Endpoint must be a string');
-    }
-    const endpoint = new URL(v2Endpoint);
-    if (
-      !['https:', 'wss:'].includes(endpoint.protocol) &&
-      !(
-        ['http:', 'ws:'].includes(endpoint.protocol) &&
-        ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)
-      )
-    ) {
-      throw new Error('ff1Relayer.v2Endpoint requires WSS/HTTPS outside loopback');
-    }
-    if (
-      endpoint.username ||
-      endpoint.password ||
-      endpoint.search ||
-      endpoint.hash ||
-      !['', '/'].includes(endpoint.pathname)
-    ) {
-      throw new Error('Invalid ff1Relayer.v2Endpoint');
-    }
-  }
+  const v2Endpoint = resolveV2Endpoint(fields.v2Endpoint, parsed);
   const apiKey = ((fields.apiKey as string | undefined) || process.env.FF1_RELAYER_API_KEY)?.trim();
   return {
     baseUrl,
     apiKey: apiKey || undefined,
-    ...(v2Endpoint ? { v2Endpoint: v2Endpoint as string } : {}),
+    ...(v2Endpoint ? { v2Endpoint } : {}),
   };
+}
+
+/**
+ * resolveV2Endpoint picks the relay v2 origin (ffos-user docs/ff1-control-v1.md
+ * §10). An explicit `ff1Relayer.v2Endpoint` or FF1_RELAY_V2_ENDPOINT wins; an
+ * empty string turns v2 off. Otherwise v2 uses the legacy relayer's own
+ * origin when that is an HTTPS origin: the same relay Worker serves the
+ * legacy `/api` routes and `/v2/channels/…`, so the production default needs
+ * no second constant. A custom plain-HTTP or path-bearing legacy relayer gets
+ * no v2 unless one is configured.
+ *
+ * @param configured - The `ff1Relayer.v2Endpoint` value, if any
+ * @param baseUrl - The validated legacy relayer URL
+ * @returns The v2 origin, or undefined when v2 is off
+ * @throws {Error} When a configured endpoint is not an acceptable origin
+ */
+function resolveV2Endpoint(configured: unknown, baseUrl: URL): string | undefined {
+  const value = configured ?? process.env.FF1_RELAY_V2_ENDPOINT;
+  if (value === undefined) {
+    const bare = !baseUrl.username && !baseUrl.password && !baseUrl.search && !baseUrl.hash;
+    return baseUrl.protocol === 'https:' && bare && ['', '/'].includes(baseUrl.pathname)
+      ? baseUrl.origin
+      : undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new Error('ff1Relayer.v2Endpoint must be a string');
+  }
+  if (value.trim() === '') {
+    return undefined;
+  }
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error('Invalid ff1Relayer.v2Endpoint');
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
+  if (
+    !['https:', 'wss:'].includes(endpoint.protocol) &&
+    !(['http:', 'ws:'].includes(endpoint.protocol) && loopback)
+  ) {
+    throw new Error('ff1Relayer.v2Endpoint requires WSS/HTTPS outside loopback');
+  }
+  if (
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash ||
+    !['', '/'].includes(endpoint.pathname)
+  ) {
+    throw new Error('Invalid ff1Relayer.v2Endpoint');
+  }
+  return value;
 }
 
 /**
