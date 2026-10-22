@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
+import { encodeRelayFrame } from '../src/utilities/relay-client';
+import { sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { parseProfile } from '../src/utilities/control/codec';
 import { parsePrivateJwk } from '../src/utilities/control/jwk';
 import {
@@ -809,4 +811,128 @@ describe('secure sshAccess', () => {
     assert.equal(result.success, false);
     assert.ok(urls.every((u) => u.startsWith(HOST)));
   });
+});
+
+// These exercise the existing endpoint fixture through the new carrier; no
+// registration contract or crypto is implemented by the transport tests.
+describe('secure generic carrier integration', () => {
+  for (const mode of ['verified', 'binding-unavailable', 'lost-command-reply'] as const) {
+    test(mode, async () => {
+      const record = enrolledRecord('owner');
+      const device = fakeDevice();
+      const previous = globalThis.WebSocket;
+      let legacyCalls = 0;
+      let bindings = 0;
+      let originalCommands = 0;
+      class Socket extends EventTarget {
+        binaryType = '';
+        constructor(url: string, protocol: string) {
+          super();
+          assert.equal(protocol, 'ff-relay.v2');
+          assert.match(url, /\/v2\/channels\//);
+          queueMicrotask(() => {
+            if (mode === 'binding-unavailable') {
+              this.dispatchEvent(new Event('error'));
+            } else {
+              this.message(
+                JSON.stringify({ type: 'hello', connectionId: 'cli', peers: ['attacker', 'ff1'] })
+              );
+            }
+          });
+        }
+        message(data: unknown) {
+          this.dispatchEvent(new MessageEvent('message', { data }));
+        }
+        close() {
+          /* No actual network socket. */
+        }
+        send(data: unknown) {
+          if (!(data instanceof Uint8Array)) {
+            return;
+          }
+          const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
+          const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
+          const body = JSON.parse(new TextDecoder().decode(data.slice(2 + length)));
+          queueMicrotask(() => {
+            this.message(JSON.stringify({ type: 'ack', from: header.to, id: header.id }));
+            let answer: unknown = { v: 1, jwe: 'forged-candidate' };
+            if (header.to === 'ff1') {
+              answer = device.handle(body.message).json;
+              if (device.seen.at(-1)?.cmd === 'getDeviceStatus') {
+                bindings++;
+              } else {
+                assert.equal(bindings, 1, 'command sent before verified binding');
+                originalCommands++;
+                if (mode === 'lost-command-reply') {
+                  this.dispatchEvent(new Event('close'));
+                  return;
+                }
+              }
+            }
+            const reply = encodeRelayFrame(
+              { v: 2, id: crypto.randomUUID(), from: header.to, to: 'cli' },
+              new TextEncoder().encode(
+                JSON.stringify({ type: 'RPC', messageID: body.messageID, message: answer })
+              )
+            );
+            this.message(reply.buffer);
+          });
+        }
+      }
+      globalThis.WebSocket = Socket as unknown as typeof WebSocket;
+      try {
+        const outcome = await sendSecureRequest(
+          {
+            device: { id: DEVICE_ID, host: HOST },
+            op: 'cmd',
+            cmd: 'next',
+            req: {},
+            retry: false,
+            relayerFallback: true,
+          },
+          record,
+          {
+            controllerStore: { dir: storeDir },
+            nowFn: () => NOW,
+            getRelayerConfigFn: () => ({
+              baseUrl: 'https://legacy.test',
+              v2Endpoint: 'wss://v2.test',
+            }),
+            getTopicIdFn: () => 'optional-topic',
+            noticeFn: () => undefined,
+            fetchFn: async (input, init) => {
+              if (new URL(input.toString()).origin === HOST) {
+                throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+              }
+              legacyCalls++;
+              return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
+            },
+          }
+        );
+        if (mode === 'verified') {
+          assert.equal(outcome.kind, 'reply');
+          assert.equal(originalCommands, 1);
+          assert.equal(legacyCalls, 0);
+          assert.deepEqual(
+            device.seen.map((c) => c.cmd),
+            ['getDeviceStatus', 'next']
+          );
+        } else if (mode === 'binding-unavailable') {
+          assert.equal(outcome.kind, 'reply');
+          assert.equal(originalCommands, 0);
+          assert.equal(legacyCalls, 1);
+          assert.deepEqual(
+            device.seen.map((c) => c.cmd),
+            ['next']
+          );
+        } else {
+          assert.equal(outcome.kind, 'failed');
+          assert.equal(originalCommands, 1);
+          assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
+        }
+      } finally {
+        globalThis.WebSocket = previous;
+      }
+    });
+  }
 });

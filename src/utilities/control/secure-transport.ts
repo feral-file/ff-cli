@@ -21,6 +21,7 @@
  *   only, and retrying would hand an attacker a free oracle.
  */
 
+import { RelayClient } from '../relay-client';
 import { defaultDeadlineFetch } from '../http';
 import * as logger from '../../logger';
 import { getFF1RelayerConfig } from '../../config';
@@ -70,7 +71,7 @@ export type Transport = 'lan' | 'relayer';
 export interface SecureTransportDeps {
   fetchFn?: typeof fetch;
   getTopicIdFn?: (deviceId: string) => string | null;
-  getRelayerConfigFn?: () => { baseUrl: string; apiKey?: string };
+  getRelayerConfigFn?: () => { baseUrl: string; apiKey?: string; v2Endpoint?: string };
   waitFn?: (delayMs: number) => Promise<void>;
   noticeFn?: (message: string) => void;
   controllerStore?: ControllerStoreOptions;
@@ -432,6 +433,23 @@ async function fallbackOrUnreachable(
   if (!request.relayerFallback) {
     return unreachable;
   }
+  try {
+    const relay = deps.getRelayerConfigFn();
+    if (relay.v2Endpoint && request.op === 'cmd') {
+      const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
+      if (outcome.kind !== 'failed' || !outcome.unreachable) {
+        return outcome;
+      }
+      // Only the binding probe ran. The user's command was never sent, so an
+      // optional legacy topic can carry a fresh sealed request to older firmware.
+    }
+  } catch (error) {
+    return {
+      kind: 'failed',
+      error: 'Invalid FF1 relayer configuration',
+      details: (error as Error).message,
+    };
+  }
   let topicId: string | null;
   try {
     topicId = deps.getTopicIdFn(request.device.id);
@@ -450,6 +468,74 @@ async function fallbackOrUnreachable(
   return sendViaRelayer(request, record, deps, topicId);
 }
 
+/** sendViaV2 binds this connection with a fresh sealed status request before
+ * sending the caller's command. Neither a rejected candidate nor a receipt can
+ * select the device. A lost result is reported without LAN/legacy resubmission.
+ */
+async function sendViaV2(
+  request: SecureRequest,
+  record: ControllerRecord,
+  deps: ResolvedDeps,
+  endpoint: string
+): Promise<SecureOutcome> {
+  let client: RelayClient;
+  try {
+    client = new RelayClient(endpoint, record.profile.dev);
+  } catch (error) {
+    return { kind: 'failed', unreachable: true, error: (error as Error).message };
+  }
+  let commandStarted = false;
+  const exchange = async (next: SecureRequest): Promise<SecureOutcome> => {
+    let accepted: SecureOutcome | undefined;
+    const size = JSON.stringify(next.req ?? {}).length;
+    await client.requestPrepared(
+      async () => {
+        const sealed = await sealNext(next, deps);
+        return {
+          command: 'ff1Envelope',
+          request: { v: 1, jwe: sealed.compact },
+          verify: async (body) => {
+            const answer = findEnvelopeAnswer(body);
+            if (!answer?.jwe) {
+              return false;
+            }
+            const outcome = await openAnswer(answer, sealed, record, 'relayer');
+            if (outcome.kind !== 'reply') {
+              return false;
+            }
+            accepted = outcome;
+            return true;
+          },
+        };
+      },
+      30000 + (size > 32768 ? Math.ceil(size / 24000) * 1000 : 0)
+    );
+    return accepted!;
+  };
+  try {
+    if (request.op === 'cmd') {
+      const bound = await exchange({ ...request, cmd: 'getDeviceStatus', req: {}, retry: false });
+      if (bound.kind !== 'reply' || !bound.reply.ok) {
+        return bound;
+      }
+    }
+    commandStarted = true;
+    return await exchange(request);
+  } catch (error) {
+    return {
+      kind: 'failed',
+      error: commandStarted
+        ? 'Secure relay result unavailable; execution outcome may be unknown'
+        : 'Secure relay binding unavailable; command not sent',
+      unreachable: !commandStarted,
+      details: (error as Error).message,
+      transport: 'relayer',
+    };
+  } finally {
+    client.close();
+  }
+}
+
 /** sendViaRelayer seals a NEW request (new ctr) and casts it on the topic. */
 async function sendViaRelayer(
   request: SecureRequest,
@@ -460,7 +546,7 @@ async function sendViaRelayer(
   deps.noticeFn(
     `Notice: LAN device is unreachable; falling back to the FF1 relayer for ${request.device.name ?? request.device.id}.`
   );
-  let relayer: { baseUrl: string; apiKey?: string };
+  let relayer: { baseUrl: string; apiKey?: string; v2Endpoint?: string };
   try {
     relayer = deps.getRelayerConfigFn();
   } catch (error) {

@@ -51,6 +51,8 @@ export interface FF1DeviceConfig {
 }
 
 export interface FF1RelayerConfig {
+  /** Optional generic carrier; absent retains protected legacy transport. */
+  v2Endpoint?: string;
   baseUrl?: string;
   /** Optional deployment compatibility gate; never required by the topic credential model. */
   apiKey?: string;

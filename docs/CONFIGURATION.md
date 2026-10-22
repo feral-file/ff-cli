@@ -479,3 +479,48 @@ npm run dev -- config validate
 ```
 
 If configuration is invalid, the CLI prints actionable errors and a non‑zero exit code.
+
+### Optional generic v2 transport (integration branch)
+
+`ff1Relayer.v2Endpoint` (or `FF1_RELAY_V2_ENDPOINT`) selects a separate generic
+carrier origin. It has no default. HTTPS/WSS is required except for loopback
+local tests; credentials, paths and query parameters are rejected. Existing
+`ff1Relayer.baseUrl` and `apiKey` retain their legacy meanings.
+
+```json
+{
+  "ff1Relayer": {
+    "baseUrl": "https://tv-cast-coordination.autonomy-system.workers.dev",
+    "v2Endpoint": "https://ff-relayer-device-test.bitmark-development.workers.dev"
+  }
+}
+```
+
+V2 commands use the existing enrolled controller, pinned profile and codecs.
+The carrier waits for connection/send readiness before sealing, discovers peers
+through generic presence, and selects FF1 only from a verified reply. Each socket
+first sends a fresh sealed getDeviceStatus to establish notification binding.
+One command invocation shares that socket for binding and command; it closes when
+the invocation finishes. No command is automatically replayed after v2 delivery.
+If binding fails before the original command is sent, the optional legacy topic
+can carry a fresh sealed request for secure firmware without v2. A verified
+refusal does not change the grant or trigger fallback. Enrollment retains
+Brandon's LAN/legacy workflow; this change does not route invitation enrollment
+or device requestAccess onto v2.
+
+Security dependency: #135 at `73b1735c8aa55f342003589eee17aef9b4251cc0`.
+Release target remains main. Useful transport changes were selectively replayed
+on that exact head; key stores, topic fields, pairing and --resume are preserved.
+The temporary carrier supplies UUID channel/connection identity, explicit targeted
+bytes, receipt ACK, local timeout and cancellation hooks only. Brandon's new
+ps-bound QR/result validators, registration orchestration and shared fixtures are
+still pending. No competing codec/staging workflow is supplied. Timeout is not
+rejection; ACK is not approval; ready requires verified enrollment. Optional
+result topicId remains necessary for secure firmware without v2.
+
+The protected FF1-SKYZ2E3A joint manual matrix remains blocked. Automated transport
+checks and existing signed endpoint fixtures do not replace that evidence.
+FFOS #174 build protections, fleet floors, recovery-image and shelf-stock upgrades,
+no rollback below dual-stack, and staged legacy retirement are release gates.
+No package publication, image/production deployment or device reset is part of
+this branch. Default feed URL remains `https://feed.feralfile.com/api/v1`.

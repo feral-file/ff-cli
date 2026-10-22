@@ -148,3 +148,7 @@ npm run lint:fix       # Optional mutating lint fix; review changes before commi
 ## License
 
 MIT
+
+Transport integration status and the separate optional v2 endpoint are documented
+in [Configuration](docs/CONFIGURATION.md#optional-generic-v2-transport-integration-branch).
+The ps-bound temporary pairing workflow remains blocked on shared endpoint fixtures.

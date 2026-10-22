@@ -42,7 +42,7 @@ function loadConfig(): Config {
     feed: {
       baseURLs: process.env.FEED_BASE_URLS
         ? process.env.FEED_BASE_URLS.split(',')
-        : ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'],
+        : ['https://feed.feralfile.com/api/v1'],
     },
   };
 
@@ -225,7 +225,7 @@ export function getFeedConfig(): {
     urls = [feedConfig.baseURL];
   } else {
     // Default feed URL
-    urls = ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'];
+    urls = ['https://feed.feralfile.com/api/v1'];
   }
 
   return {
@@ -262,12 +262,16 @@ const DEFAULT_FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.wo
  * per-device credential; it exists only for deployments that retain a separate
  * cloud-edge compatibility gate.
  */
-export function getFF1RelayerConfig(): { baseUrl: string; apiKey?: string } {
+export function getFF1RelayerConfig(): { baseUrl: string; apiKey?: string; v2Endpoint?: string } {
   return resolveFF1RelayerConfig(getConfig());
 }
 
 /** Resolve and validate the effective FF1 relayer configuration. */
-function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: string } {
+function resolveFF1RelayerConfig(config: Config): {
+  baseUrl: string;
+  apiKey?: string;
+  v2Endpoint?: string;
+} {
   const configured = config.ff1Relayer as unknown;
   if (
     configured !== undefined &&
@@ -298,10 +302,36 @@ function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: st
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('ff1Relayer.baseUrl must be a valid HTTP(S) URL');
   }
+  const v2Endpoint = fields.v2Endpoint ?? process.env.FF1_RELAY_V2_ENDPOINT;
+  if (v2Endpoint !== undefined) {
+    if (typeof v2Endpoint !== 'string') {
+      throw new Error('ff1Relayer.v2Endpoint must be a string');
+    }
+    const endpoint = new URL(v2Endpoint);
+    if (
+      !['https:', 'wss:'].includes(endpoint.protocol) &&
+      !(
+        ['http:', 'ws:'].includes(endpoint.protocol) &&
+        ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname)
+      )
+    ) {
+      throw new Error('ff1Relayer.v2Endpoint requires WSS/HTTPS outside loopback');
+    }
+    if (
+      endpoint.username ||
+      endpoint.password ||
+      endpoint.search ||
+      endpoint.hash ||
+      !['', '/'].includes(endpoint.pathname)
+    ) {
+      throw new Error('Invalid ff1Relayer.v2Endpoint');
+    }
+  }
   const apiKey = ((fields.apiKey as string | undefined) || process.env.FF1_RELAYER_API_KEY)?.trim();
   return {
     baseUrl,
     apiKey: apiKey || undefined,
+    ...(v2Endpoint ? { v2Endpoint: v2Endpoint as string } : {}),
   };
 }
 
