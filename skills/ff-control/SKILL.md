@@ -16,7 +16,8 @@ Do not invent new requirements.
 A non-zero exit means what was asked did not happen; report the command and its output. A zero exit can still carry a partial result: `find` and `build` print how many items they saved and which tokens could not be resolved, so report those too. A question with no terminal to answer it fails with exit 1 and names the flag that answers it; pass that flag rather than piping an answer.
 
 Bootstrap:
-- Install or upgrade, every time: `npm i -g @feralfile/cli` (needs Node.js 22+). An older install can pass `ff-cli status` and still lack flags used here. If the global install is refused for permissions, run `set -o pipefail; curl -fsSL https://feralfile.com/ff-cli-install | bash`, then `export PATH="$HOME/.local/bin:$PATH"`; it installs the same package under `~/.local` without sudo.
+- Install or upgrade, every time: `npm i -g @feralfile/cli` (needs Node.js 22+). An older install can pass `ff-cli status` and still lack flags used here. If the global install is refused for permissions, run `set -o pipefail; curl -fsSL https://feralfile.com/ff-cli-install | bash && export PATH="$HOME/.local/bin:$PATH"`; it installs the same package under `~/.local` without sudo.
+- Then check that `ff-cli --version` matches `npm view @feralfile/cli version`. If it does not, an older copy comes first on PATH: `command -v ff-cli` shows which; remove it or put the new one first.
 - If `ff-cli status` then succeeds, setup is done. Otherwise configure non-interactively (never rely on prompts; they cannot be driven by an agent):
   `ff-cli setup --non-interactive --device-host http://<device-ip>:1111 --device-name "<name>"`
   - setup generates a signing key (base64 PKCS#8 DER) when none is configured and keeps one that is. To use a specific key, pass `--key "<value>"` (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM).

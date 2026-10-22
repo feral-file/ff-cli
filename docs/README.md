@@ -467,7 +467,7 @@ Setup preserves existing devices when adding new ones. See selection rules and e
 
 ## Constraints
 
-- Per-requirement caps: `build_playlist` up to 20 with `tokenIds` (100 without), `query_address` up to 100, `fetch_feed` up to 20. Requirements add up; there is no total cap beyond DP-1's 1024 items
+- Per-requirement caps: `build_playlist` up to 20 with `tokenIds` (100 without), `query_address` up to 100 when `quantity` is a number (omitted or `"all"` takes the whole wallet), `fetch_feed` up to 20. Requirements add up; there is no total cap beyond DP-1's 1024 items
 - Per-source caps enforced in utilities
 - Per-item timing: when no duration is given, video/audio items carry **no** `duration` and `display.loop: false`, so the player advances at end-of-stream (DP-1 §4.1) — the media plays its natural length. Static items use `defaultDuration` (10s unless configured). An explicit duration always wins.
 

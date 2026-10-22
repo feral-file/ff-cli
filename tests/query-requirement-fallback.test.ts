@@ -227,4 +227,32 @@ describe('queryRequirement named token ids', () => {
     assert.equal(items.length, 1);
     assert.deepEqual(report, { missing: 1, wanted: 2 });
   });
+
+  test('a quantity cap does not hide a named token that failed', async () => {
+    const source = {
+      name: 'indexer',
+      async resolveTokens(coords: TokenCoordinate[]) {
+        return coords.map((coordinate) =>
+          coordinate.tokenId === '3'
+            ? { success: false, coordinate, error: 'not found' }
+            : resolved(coordinate)
+        );
+      },
+    } as unknown as TokenSource;
+    const report: { missing?: number; wanted?: number } = {};
+    const items = await utilities.queryRequirement(
+      {
+        type: 'build_playlist',
+        blockchain: 'ethereum',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        tokenIds: ['1', '2', '3'],
+        quantity: 2,
+      },
+      undefined,
+      source,
+      report
+    );
+    assert.equal(items.length, 2);
+    assert.deepEqual(report, { missing: 1, wanted: 3 });
+  });
 });

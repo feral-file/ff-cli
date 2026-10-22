@@ -318,11 +318,11 @@ async function queryTokenIdsRequirement(requirement, duration, source, report = 
   let items = await resolveCoordinates(coords, duration, source);
   // Named token ids are an exact request: each one that does not resolve is
   // something the caller asked for and did not get. The build loop turns this
-  // into a failure, so a playlist missing a named work never exits 0.
-  const wanted = quantity ? Math.min(coords.length, Number(quantity)) : coords.length;
-  if (items.length < wanted) {
-    report.missing = wanted - items.length;
-    report.wanted = wanted;
+  // into a failure, so a playlist missing a named work never exits 0. Count
+  // before the quantity cap below, which would otherwise hide the miss.
+  if (items.length < coords.length) {
+    report.missing = coords.length - items.length;
+    report.wanted = coords.length;
   }
   if (items.length > 0) {
     console.log(chalk.green(`✓ Got ${items.length} item(s)`));
