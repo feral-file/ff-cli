@@ -551,6 +551,11 @@ async function fallbackOrUnreachable(
     // A derived endpoint is used only for an FF1 whose verified status
     // advertised relay v2; otherwise a stranger's ACK on the device channel
     // could strand a command the topic would have delivered (config.ts).
+    // The flag changes only with a verified status, never on a failed
+    // send: one ambiguous v2 failure must not cut a v2-only FF1 off until
+    // the next LAN visit. The cost is the other way round: an FF1 that
+    // really left v2 is reached as "outcome unknown" (never resent) until
+    // its next verified status clears the flag.
     if (relay.v2Endpoint && request.op === 'cmd' && (relay.v2Explicit || record.relayV2)) {
       const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
