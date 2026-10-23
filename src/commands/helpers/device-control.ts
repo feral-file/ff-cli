@@ -375,11 +375,6 @@ async function pairByRegistration(
       `\n✓ An owner added ff-cli to ${result.deviceName} as ${chalk.bold(result.role)}. Finishing the pairing...`
     )
   );
-  console.log(
-    chalk.dim(
-      `Controller keys: ${controllerFilePath(device.id, staged ? stagingStore(store) : store)}`
-    )
-  );
   await finishEnrollment(device, record, staged, deps);
 }
 
@@ -643,6 +638,10 @@ async function finishEnrollment(
       storeRelayerTopic(device.id, topicId, deps.storeTopicFn);
     }
   }
+  // Where the keys are now: a staged pairing moves into the main store only
+  // once its enroll reply verified, and stays staged otherwise (--resume).
+  const keysStore = staged && result.status !== 'enrolled' ? stagingStore(mainStore) : mainStore;
+  console.log(chalk.dim(`Controller keys: ${controllerFilePath(device.id, keysStore)}`));
   reportEnrollment(device, result);
 }
 

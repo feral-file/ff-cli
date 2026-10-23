@@ -28,6 +28,7 @@ import {
   promoteStagedController,
   saveController,
   stagingStore,
+  controllerFilePath,
 } from '../src/utilities/control/controller-store';
 import {
   chooseControllerKeys,
@@ -585,12 +586,18 @@ describe('device pair (owner-initiated registration)', () => {
     const first = createController({ profile: resetProfile, label: 'old' }, store);
     markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
     const world = ownerWorld(approve());
-    await pairDevice(device, options, {
-      ...world.deps,
-      confirmFn: async () => {
-        throw new Error('must not ask: the owner already added ff-cli');
-      },
-    });
+    const output = await captureLog(() =>
+      pairDevice(device, options, {
+        ...world.deps,
+        confirmFn: async () => {
+          throw new Error('must not ask: the owner already added ff-cli');
+        },
+      })
+    );
+    // The path printed is where the keys live once enrolled, not the
+    // staging file the promotion just removed.
+    assert.ok(output.includes(`Controller keys: ${controllerFilePath(DEVICE_ID, store)}`));
+    assert.ok(!output.includes(controllerFilePath(DEVICE_ID, stagingStore(store))));
     const record = loadController(DEVICE_ID, store)!;
     assert.equal(controllerIdOf(record.keys), controllerIdOf(first.keys));
     assert.equal(record.profile.gen, profile.gen);
