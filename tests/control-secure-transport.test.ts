@@ -998,6 +998,7 @@ describe('secure generic carrier integration', () => {
     const record = enrolledRecord('owner');
     if (route.relayV2 !== undefined) {
       record.relayV2 = route.relayV2;
+      saveController(record, { dir: storeDir });
     }
     const device = fakeDevice();
     const previous = globalThis.WebSocket;
@@ -1170,14 +1171,19 @@ describe('secure generic carrier integration', () => {
     assert.equal(legacyCalls, 0);
   });
 
-  test('an ambiguous failure on the cached route forgets relayV2', async () => {
-    const { outcome } = await sendOverCarrier(
+  test('an ambiguous failure on the cached route keeps relayV2 and is not resent', async () => {
+    // One blip (a socket drop, the deadline) must not strand a v2-only FF1
+    // until the next LAN preflight: the flag stays, only a verified status
+    // changes it.
+    const { outcome, legacyCalls } = await sendOverCarrier(
       'no-receipt',
       { v2TimeoutMs: 300 },
       { relayV2: true }
     );
     assert.equal(outcome.kind, 'failed');
-    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, false);
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0, 'an ambiguous outcome is never resent on the legacy topic');
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
   });
 
   test('a derived endpoint is not used for an FF1 that has not advertised relay v2', async () => {

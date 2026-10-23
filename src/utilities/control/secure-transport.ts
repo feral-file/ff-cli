@@ -552,8 +552,7 @@ async function fallbackOrUnreachable(
     // advertised relay v2; otherwise a stranger's ACK on the device channel
     // could strand a command the topic would have delivered (config.ts).
     if (relay.v2Endpoint && request.op === 'cmd' && (relay.v2Explicit || record.relayV2)) {
-      const cachedRoute = !relay.v2Explicit;
-      const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint, cachedRoute);
+      const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
       }
@@ -600,8 +599,7 @@ async function sendViaV2(
   request: SecureRequest,
   record: ControllerRecord,
   deps: ResolvedDeps,
-  endpoint: string,
-  cachedRoute: boolean
+  endpoint: string
 ): Promise<SecureOutcome> {
   let client: V2Client;
   try {
@@ -638,9 +636,6 @@ async function sendViaV2(
     );
     return v2Answer(request, verified.get(settled)!);
   } catch (error) {
-    if (cachedRoute && error instanceof RelayAmbiguousError) {
-      forgetRelayV2(request, record, deps);
-    }
     return v2Failure(request, error as Error);
   } finally {
     client.close();
@@ -661,21 +656,6 @@ function v2Answer(request: SecureRequest, outcome: SecureOutcome): SecureOutcome
     );
   }
   return outcome;
-}
-
-/**
- * forgetRelayV2 drops the cached relayV2 flag after the cached route gave an
- * ambiguous failure with no verified reply: the FF1 may have left v2 (a
- * downgrade), and with strangers on its channel every later LAN-down command
- * would end the same way. The next verified status sets it again.
- */
-function forgetRelayV2(request: SecureRequest, record: ControllerRecord, deps: ResolvedDeps): void {
-  record.relayV2 = false;
-  try {
-    recordRelayV2(request.device.id, false, deps.controllerStore);
-  } catch (error) {
-    logger.debug(`Could not clear the FF1's relay transports: ${(error as Error).message}`);
-  }
 }
 
 /** v2Deadline gives a large command time to cross the relay's byte ceiling. */
