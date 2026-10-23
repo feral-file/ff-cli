@@ -50,7 +50,7 @@ import {
   CommandFailure,
   type PairDeps,
   confirmCorruptReplacement,
-  confirmReplacement,
+  noteReplacement,
   formatControllerTable,
   pairDevice,
   parseLabel,
@@ -584,37 +584,18 @@ describe('device pair (owner-initiated registration)', () => {
     const store = { dir: storeDir };
     const first = createController({ profile: resetProfile, label: 'old' }, store);
     markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
-    const asked: string[] = [];
     const world = ownerWorld(approve());
     await pairDevice(device, options, {
       ...world.deps,
-      confirmFn: async (q) => {
-        asked.push(q);
-        return true;
+      confirmFn: async () => {
+        throw new Error('must not ask: the owner already added ff-cli');
       },
     });
-    assert.deepEqual(asked, ['Replace the current pairing?']);
     const record = loadController(DEVICE_ID, store)!;
     assert.equal(controllerIdOf(record.keys), controllerIdOf(first.keys));
     assert.equal(record.profile.gen, profile.gen);
     assert.equal(record.role, 'controller');
     assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
-  });
-
-  test('declining the replacement keeps the current pairing and stages nothing', async () => {
-    const store = { dir: storeDir };
-    createController({ profile: resetProfile, label: 'old' }, store);
-    markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
-    const world = ownerWorld(approve());
-    await assert.rejects(
-      pairDevice(device, options, { ...world.deps, confirmFn: async () => false }),
-      /current pairing was kept/
-    );
-    const kept = loadController(DEVICE_ID, store)!;
-    assert.equal(kept.profile.gen, resetProfile.gen);
-    assert.equal(kept.role, 'owner');
-    assert.equal(loadController(DEVICE_ID, stagingStore(store)), null);
-    assert.equal(world.fake.seen.length, 0);
   });
 
   test('pair refuses to start over an approved but unfinished replacement', async () => {
@@ -1010,34 +991,15 @@ describe('controller store for owner-initiated pairing', () => {
     }
   );
 
-  test('replacing an enrolled record for another identity asks first', async () => {
+  test('replacing an enrolled record for another identity only prints a notice', () => {
     const store = { dir: storeDir };
     createController({ profile: resetProfile, label: 'old' }, store);
-    const never = async () => {
-      throw new Error('must not ask');
-    };
-    // Pending (not enrolled): nothing to lose, no question.
-    await confirmReplacement(device, profile, {}, never, store);
+    // Pending (not enrolled): nothing to lose, no notice.
+    assert.equal(noteReplacement(device, profile, store), false);
     markEnrolled(DEVICE_ID, { role: 'owner', nk: NK }, store);
-    // Same identity: no question.
-    await confirmReplacement(device, resetProfile, {}, never, store);
-    await confirmReplacement(device, profile, { yes: true }, never, store);
-    const asked: string[] = [];
-    await assert.rejects(
-      confirmReplacement(
-        device,
-        profile,
-        {},
-        async (q) => {
-          asked.push(q);
-          return false;
-        },
-        store
-      ),
-      /current pairing was kept/
-    );
-    assert.equal(asked.length, 1);
-    await confirmReplacement(device, profile, {}, async () => true, store);
+    // Same identity: no notice.
+    assert.equal(noteReplacement(device, resetProfile, store), false);
+    assert.equal(noteReplacement(device, profile, store), true);
   });
 
   test('replacing a corrupt controller file asks before the QR is shown', async () => {

@@ -418,7 +418,7 @@ ff-cli device pair office --label studio  # name the owner sees (default: hostna
                                           # no control or invisible formatting (bidi, zero-width) characters
 ff-cli device pair office --timeout 600   # wait longer for an owner (seconds, 10-600; default 300)
 ff-cli device pair office --resume        # finish a pairing an owner already approved
-ff-cli device pair office --yes           # replace a pairing for another FF1 identity without asking
+ff-cli device pair office --yes           # move a corrupt controller file aside without asking
 ```
 
 Pairing is owner-initiated, like adding an SSH key: nothing is requested from
@@ -454,8 +454,8 @@ answer arrived but enrolling did not finish (the FF1 was unreachable, Ctrl-C),
 `ff-cli device pair <name> --resume` finishes it without a new code.
 
 If ff-cli is already paired with the FF1 under a different identity (the FF1
-was factory reset), it asks before replacing that pairing, and keeps the
-current keys in place until the new pairing is enrolled: a declined or
+was factory reset), it says that the new pairing will replace it, and keeps
+the current keys in place until the new pairing is enrolled: a failed or
 abandoned pairing never loses an existing grant. The pending replacement is
 kept in `controllers/pairing/` until then.
 

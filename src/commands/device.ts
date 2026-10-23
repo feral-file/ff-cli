@@ -33,7 +33,7 @@ deviceCommand
   )
   .option('--timeout <seconds>', 'How long to wait for an owner, 10-600 (default: 300)')
   .option('--resume', 'Finish a pairing an owner already approved, without a new code')
-  .option('-y, --yes', 'Replace an existing pairing for another FF1 identity without asking')
+  .option('-y, --yes', 'Move a corrupt controller file aside without asking')
   .option(
     '--topic-handoff',
     'Use the one-time code and "Pair with ff-cli" in the app (FF OS without secure control); chosen automatically when the FF1 reports no secure control'
