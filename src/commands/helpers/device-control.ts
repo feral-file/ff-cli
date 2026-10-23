@@ -358,7 +358,7 @@ async function pairByRegistration(
   }
   const profile = result.profile!;
   const { keys, fromRecord } = chosen!;
-  await confirmReplacement(device, profile, options, confirmFn, store);
+  noteReplacement(device, profile, store);
   // A topicId stays in the record until the enroll reply verifies under this
   // result's profile (finishEnrollment): it arrived with the same unverified
   // result, so until then it neither replaces the keyring topic nor routes
@@ -705,34 +705,30 @@ export async function confirmCorruptReplacement(
 }
 
 /**
- * confirmReplacement asks before a pairing for another control identity
- * replaces an ENROLLED record: once the new pairing is enrolled, the old grant
- * (possibly the last reachable owner) is gone from this computer. Same rule
- * as unpair: ask on a TTY, or --yes.
+ * noteReplacement says when a pairing for another control identity will
+ * replace an ENROLLED record (expected after a factory reset). It does not
+ * ask: an owner has already added ff-cli, and the new pairing replaces the
+ * old one only once its enroll reply verifies (the staging store), so a
+ * failed enroll leaves the current pairing as it is.
  *
  * @param device - Device with ID
  * @param profile - Profile from the owner's verified result
- * @param options - `yes` skips the confirmation
- * @param confirmFn - Confirmation prompt (tests inject one)
  * @param storeOptions - Store options (tests)
- * @throws {CommandFailure} When declined
+ * @returns True when the notice was printed
  */
-export async function confirmReplacement(
+export function noteReplacement(
   device: PairDevice,
   profile: DeviceProfile,
-  options: { yes?: boolean },
-  confirmFn: (question: string) => Promise<boolean> = confirmInteractively,
   storeOptions: ControllerStoreOptions = {}
-): Promise<void> {
+): boolean {
   const existing = loadUnlessCorrupt(device.id, storeOptions);
   if (
     existing === 'corrupt' ||
     !existing ||
     !isEnrolled(existing) ||
-    sameIdentity(existing.profile, profile) ||
-    options.yes
+    sameIdentity(existing.profile, profile)
   ) {
-    return;
+    return false;
   }
   console.log(
     chalk.yellow(
@@ -744,12 +740,7 @@ export async function confirmReplacement(
           : '.')
     )
   );
-  if (!(await confirmFn('Replace the current pairing?'))) {
-    throw new CommandFailure(
-      'Pairing cancelled; the current pairing was kept.',
-      'Pass --yes to skip this check.'
-    );
-  }
+  return true;
 }
 
 /**
