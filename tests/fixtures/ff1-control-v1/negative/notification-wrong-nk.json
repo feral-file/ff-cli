@@ -1,0 +1,11 @@
+{
+  "name": "notification-wrong-nk",
+  "kind": "notification",
+  "description": "Sealed under another controller's nk.",
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..4zd-iYoSWPFeFe6V.1OFWVcLH7iqde2fVO9_y1EAm_YPIewha1F9tO95uzRDmKO3c3qiQ5WlwFdAQEYT4QwLg_IYCaLmBNIFK6WXOPf3oPMnBo6D0UEInRhm4pDvkGqYV3AvykPk201GvHhpDCYI8iPH50uydOrQtnRg9V3oH_68MFHAx4ctAhSGovmNXACm6HkuhYl1fsAZ68MJU64_2z8Jvr5vV1KYpDP0F_l0hgpNCdOyPkHcRVV6qq7Q-E0yjfLzrhkSCrYA.3jYn79wqFxGO8YoDnFyzwg",
+  "to": "owner",
+  "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+  "expect": {
+    "reject": true
+  }
+}

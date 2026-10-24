@@ -1,0 +1,31 @@
+{
+  "name": "controller-qr",
+  "kind": "controllerQR",
+  "description": "ff1-ctl:1|channelId|minterKey|sig.x|sig.y|enc.x|enc.y|ps|platform|label (§5.6.1). minterKey is b64u of the 65-byte uncompressed SEC1 point; split at most 9 times after the prefix.",
+  "cases": [
+    {
+      "description": "A ff-cli controller QR.",
+      "qr": "ff1-ctl:1|7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9|BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY|sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k|LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg|v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g|L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk|DKGaaktvRLMK0QPPdvtL_g|other|Stranger",
+      "channelId": "7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9",
+      "minterKey": "BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY",
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "sig": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k\",\"y\":\"LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg\"}",
+      "enc": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g\",\"y\":\"L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk\"}",
+      "ps": "DKGaaktvRLMK0QPPdvtL_g",
+      "platform": "other",
+      "label": "Stranger"
+    },
+    {
+      "description": "The label is the last field and may contain \"|\".",
+      "qr": "ff1-ctl:1|7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9|BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY|sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k|LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg|v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g|L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk|DKGaaktvRLMK0QPPdvtL_g|other|Studio | desk",
+      "channelId": "7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9",
+      "minterKey": "BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY",
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "sig": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k\",\"y\":\"LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg\"}",
+      "enc": "{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g\",\"y\":\"L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk\"}",
+      "ps": "DKGaaktvRLMK0QPPdvtL_g",
+      "platform": "other",
+      "label": "Studio | desk"
+    }
+  ]
+}

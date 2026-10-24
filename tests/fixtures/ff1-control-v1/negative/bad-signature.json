@@ -1,0 +1,53 @@
+{
+  "name": "bad-signature",
+  "kind": "request",
+  "description": "Owner kid, signed by the stranger's key.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "ZMzO6jvKfVz5IDnk663XN8ZyBpCwEkTGDoKFb8voPVI"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-bad-signature\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"sQ5c3GT7UP3xD6qRWwauhH6brvLfCxiL0UQg5RHXpxA\",\"cmd\":\"displayPlaylist\",\"req\":{\"intent\":{\"action\":\"now_display\"},\"dp1_call\":{\"dpVersion\":\"1.0.0\",\"title\":\"fixture\",\"items\":[]}}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-bad-signature",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "sQ5c3GT7UP3xD6qRWwauhH6brvLfCxiL0UQg5RHXpxA",
+    "cmd": "displayPlaylist",
+    "req": {
+      "intent": {
+        "action": "now_display"
+      },
+      "dp1_call": {
+        "dpVersion": "1.0.0",
+        "title": "fixture",
+        "items": []
+      }
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "EwTvZxmpbyD1P4bfj3e46I0FnO4zFDfeOpG2_RkFaTI",
+    "y": "zz2uxc5LXCIWvXfrpRG9_Trnl0M6OtoMPo40TxEoMpI",
+    "d": "0FP6q-94FoplpNg3s0F8HS8HFYx_vPzWVRqQeiefOFo"
+  },
+  "iv": "MBmbPHR_rtNHBVmb",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1iYWQtc2lnbmF0dXJlIiwiY3RyIjoxLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNTY2MCwib3AiOiJjbWQiLCJyayI6InNRNWMzR1Q3VVAzeEQ2cVJXd2F1aEg2YnJ2TGZDeGlMMFVRZzVSSFhweEEiLCJjbWQiOiJkaXNwbGF5UGxheWxpc3QiLCJyZXEiOnsiaW50ZW50Ijp7ImFjdGlvbiI6Im5vd19kaXNwbGF5In0sImRwMV9jYWxsIjp7ImRwVmVyc2lvbiI6IjEuMC4wIiwidGl0bGUiOiJmaXh0dXJlIiwiaXRlbXMiOltdfX19.4MX_M4uVOSv9wTBEeKnzrMySGCiewVFm-SBK2EbCWCm2lXIqZNforLQTi-LPqS5vB9ieb_hMKwBpPpFmuVIInA",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiRXdUdlp4bXBieUQxUDRiZmozZTQ2STBGbk80ekZEZmVPcEcyX1JrRmFUSSIsInkiOiJ6ejJ1eGM1TFhDSVd2WGZycFJHOV9Ucm5sME02T3RvTVBvNDBUeEVvTXBJIn19..MBmbPHR_rtNHBVmb.w5ih8-ruB-uHgPHSUUAAkHsFi1S0Z0j_qFLXqFXmL7XmTHh7fuXRHzCBrYDWp1YShJAgqpCQoq1iWEmvZXiRwKEFWdpzjAls3CJVSLRV2feycCg4ukUSW5IzOZKl4cE5dgIXsLnF3uan2vWlDV32AhE3LwdVsG6zMM3mYodmIhenxFtUsl5JmJbjWGmsj7rF47JP0HXgptqE9dvPPJABpIK3WIdX5CfHvY8TFKcOPcWPbqwMmXm8Aq2xT5auFLoeKneilXuYNwr_-Ulo-1-Gic2sLjfvZpHcAMoYFAXpkLdXb1j7L8vO5CLY0a8qg280k42z6B_7rb4-kX6Gp2hp2dnDrhA3wBkl9LL19vD2h0NhcXRXLWCJge3l7yryW_OO1qW7IGA02j_su8x-Rp7TMu9UVnxOVjhAhC8iE1pGacI--tRMt7riBJQP9gTRP4dvDQlruNnD1vo3lR48WE5RAxQxRm8EYB4Py8QJC6ObBNgOKCT3r9jnjPC1mw9fSSMamhMsycpipYm_u4p7Pj_OtZQ-jfMvwHS3HDqxSfbH-aN_MnyJu0a2KsxjlNZWiX4iKhd6_dT1S9qzMUAdrIO_b4V5v292NPZCmGX9OZAJhzKQCsxFF8eNYifRRCMJ4sIBGN2Px2M6McXyaK1wsW5Rg2_g-hMG9LSqhXOSKmLKNXgx2hLKz-KxrZ4V2dej4m89YjAZWaaH-dW6L_rUEzg3_VaLwRrYIAfagiIJwdzamYr_CT8uWmPKxjzGNkVxCMj2Zg8VcOhtRXw8YzLPtdOASxd27bNP3bU4EHL4yUECPJ6jDcs36LQnjqjYAgcAMjg44XfRrrvXB3ShZV0qwnc5vN3fRZQ-0V5dKQ4ACgqhJTPwIBtNeowcGoHOQWyhLJ7NXz0B2kSOrGL5ZXQ6A7xKxtEqCsZMOR1N.sXcTnjql0DBqygPJjB_N_w",
+  "rk": "sQ5c3GT7UP3xD6qRWwauhH6brvLfCxiL0UQg5RHXpxA",
+  "expect": {
+    "public": "bad_signature"
+  }
+}

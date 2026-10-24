@@ -1,0 +1,73 @@
+{
+  "name": "registerController-from-controller",
+  "kind": "request",
+  "description": "A controller grant cannot register another controller (§5.6, owner tier).",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "o8ideAz5vuuxkr4xkYofh_-nENSOzDp5Npb5_HkH8vE"
+  },
+  "from": "controller",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY\",\"rid\":\"rid-registerController-from-controller\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"8coE7BtC2EfMDifKRt2I4sda27ParbfX9nbuo9wFQCc\",\"cmd\":\"registerController\",\"req\":{\"sig\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k\",\"y\":\"LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg\"},\"enc\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g\",\"y\":\"L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk\"},\"label\":\"Stranger\",\"platform\":\"other\",\"role\":\"controller\"}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+    "rid": "rid-registerController-from-controller",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "8coE7BtC2EfMDifKRt2I4sda27ParbfX9nbuo9wFQCc",
+    "cmd": "registerController",
+    "req": {
+      "sig": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k",
+        "y": "LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg"
+      },
+      "enc": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g",
+        "y": "L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk"
+      },
+      "label": "Stranger",
+      "platform": "other",
+      "role": "controller"
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "5-xqtD4xBdDIWTVVVKuP3LR2wT1ZkpnmddM8LYnN-yY",
+    "y": "_1U2m2mDDjXS0-T5ZGTFy10GoJd6B69tW55C5TSjMN0",
+    "d": "cU2_qeQjgBcTS-NxI6uF52QgnurYjAcC8b9NkqONVUA"
+  },
+  "iv": "bLbJeUqOssDiSVWQ",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlMyYlZKMWczNGQteE1uUms3d3hhVHRvc2pfdnlaVllZNHl3azRSNFVFRFkiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUzJiVkoxZzM0ZC14TW5Sazd3eGFUdG9zal92eVpWWVk0eXdrNFI0VUVEWSIsInJpZCI6InJpZC1yZWdpc3RlckNvbnRyb2xsZXItZnJvbS1jb250cm9sbGVyIiwiY3RyIjoxLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNTY2MCwib3AiOiJjbWQiLCJyayI6Ijhjb0U3QnRDMkVmTURpZktSdDJJNHNkYTI3UGFyYmZYOW5idW85d0ZRQ2MiLCJjbWQiOiJyZWdpc3RlckNvbnRyb2xsZXIiLCJyZXEiOnsic2lnIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4Ijoic1hHWnJYbldMRnZLT3JSWV8tR3FNSEV4dHdIXzMweExCRkM1NHU2QTY3ayIsInkiOiJMRGVPdlVReXZPMER6OV8tc1NjRkZyNnptM2FOMDdMUHh6OGtScElfRFFnIn0sImVuYyI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6InY0SXg4azFXX1BWWFB2R3hLTkRiUTh6SjZyb1dLRklWVHd6Wll3RC16MWciLCJ5IjoiTF9KVjZ1MzNmdEtOejNHTHI5SWk5VHlERngxUWdpVUJreVFWQ3UyUmdDayJ9LCJsYWJlbCI6IlN0cmFuZ2VyIiwicGxhdGZvcm0iOiJvdGhlciIsInJvbGUiOiJjb250cm9sbGVyIn19.WCrFGP_XCkX2l_CKsINwCo6hO2M3_37x0Z81KgNZKYSsrmJunddg5FXt7Xod2XPx-3JMgiQjGakd6WN8UJpPEw",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiNS14cXRENHhCZERJV1RWVlZLdVAzTFIyd1QxWmtwbm1kZE04TFluTi15WSIsInkiOiJfMVUybTJtRERqWFMwLVQ1WkdURnkxMEdvSmQ2QjY5dFc1NUM1VFNqTU4wIn19..bLbJeUqOssDiSVWQ.WPy7m96m_kslwXtTIq8sCIBdZ6OtTfhB4Nq_fvGbtpQ53rMLW9vNHWaRYzgyvpm2GGW6yzGbkh8ko42Q_hzUCSOFp2SsaaLqLd-pOT6bnGej0kjJVSzfWZruET_Paa9LHdFchxZPd1wlBm4l8_YDK9qDijoZqzVYg2HFIQDyxKB43c26vcwsh5UuXSJYBTt3iJQmr9lz9O8MNExWDtufOjhwOrkmgYLylacZ7XUIfiwoNHP8CYQ2G69bKa0GoTS6-idkquet7ua90L9w4_SK5hIoPfnHlUxifnuNUl4JAWtLY5H8KwU5c-jHkZasZgX_iLU2D5yNdmg_4m2uSy27jWkMwCP9CkDPZD04bPNWoNyvN4uX-vEm1AvITUoHGesGTu5FI5tB3G4kJ2r7goZCoPY-hY_9FojloYMxXGNxQlSiCyCsa1znwp1mczyVRKGGUygF7W8kY81R2wUyw2AK378sbcU5Bi8Ym6SdMl7yDuuT_Snf964Zng_RlUwYQcLD2cbJJb4UgEiZdDiuOPI_gTghfuHgA2VCUw7U1KDu1UjxJUIGTHHN_wOHMU3QeI-8NXVRWDrMCYUxNP8LJmcpctrFYgDwC3CqydlqAdy8T3FcaCQ8Utaq5FA526mpO6g_LDMIw0ILOTtsI74rK3PXzjIUH-ecnfqvwSFjBet26tk7SLF73FpGb7W9dzx28JK8H3qTJLbeYfTP4G_Y5EAD1daSpGRJbfPLbcioShtI7-BL6RqaoXog1YTs3nFOLKx30sZ4isBDotfHFNAjBTvZ4Jm-FwivwshEb_g-DZ3uH-AC-8MdVXsTt473RgNWbnKZDK879sj9ltCObK8tBsn9wqprIuOrEzVc9DZKN6CbvrH-8mDSFQR5JYbtrdJ_amRRDew8TP1aaPgflzvjdBdgoanWCD-_kwe3sYOU1P4GBDm-y6_antbIE_cIvo-nM3S1oncLa-t_Y3Lywb7SjWqIKjK5osuNXSuPK3KWI9bACSgtiE_wMk4h0-_-S6wqSg2ss3IBTAqX55YKKYDTgqhIEWydGuHR4GqTEvE-ZzayOcb_JFbZAVtHpQo_9EN0S_9H4JY645KtaP51SA_V2xTO1PQHrVcHkxIg2q11lWZxM3cw-JKtRuKlnBYUSbPPFnhu-FJhP3gaBaf8tbC8QvRYBFG1We1aTtnYNfh1xQxUcN1GApZgotsG1GCu9ZZDQMZH6M04dHRerV7CIuhsO5Bv00_8fIco2Qv7JIFh_0r6MvluUA5EfmAeT0tAwl3n5hHSVFghlDdYt9mkbGFRlrlGIH9W7mj0KPkuaXtPELSrnSvs3CxXCB6eQdoQiupKsxqs1-5vfzj4UYa5try1HZ5XQYx_mPgJFirT.185y5-gUR_7U4c4AuKllaw",
+  "rk": "8coE7BtC2EfMDifKRt2I4sda27ParbfX9nbuo9wFQCc",
+  "expect": {
+    "replyCode": "permission_denied"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..rOL9Cj0Y8eyMk0ji.POrduQjDCITuh1iBh2McjLOmobVTfMbeMEnSvZbhTzrfN6RLAJ3IszI9yik5WmQs22XE7kcK_XQz1rgt7HhmgBxGv3o_mW6oz9PO5d8H5kqRX9P1P9ayCBwAM22sQqDaGXNAddF5dogI7LW7_c1xixT5IXCZ3NN_rcsFoF5_iKUt3HYzpmgPbPfIve7nW8CFuzu-Lz5xOyuB6rL9XY7YwqS-nkBZ7q3v1eDc96A1n4y-yoBVLD_qH4pD5fL5NZDmxH8bKyKm3IPiey7Oip3R_IYiOiuEEkolW9Wem6zV9PIDlTeUWYmra6MceIX1gxA3cmD6-USU6Xn87cxevqnqWpe8KasNKVXf853uqjOKikZbA1yQNgNoqJPUQ-YdNyGyktrofXDOfIiS8QimRvwvM87HJ5CgoXCJAbk8MZvFpkR4KSRHb_ElvEW0AlvioeplEZXpvPfVG6zopzrMjUBhYsI0lWIZE6I7x9wQWK8j8JVE7U1b7lzIj6bLZfEzDEECMMVA76uigQ8vFI3VrZHvV_FZNuAc55PYVpylkGTYvut3_H5pdO4w0Q2O91myYOlRpL3_eVgJiIul_f2uwqiTbOqlaofi2U3xqjPSZmeefgrQPWXuOl9v0K2_qb7jL7UipM9IftSlb3M.PsxTU7WEhUvEodFyAdQtgQ",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "rid": "rid-registerController-from-controller",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "permission_denied"
+    }
+  }
+}

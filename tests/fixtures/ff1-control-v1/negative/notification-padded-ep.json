@@ -1,0 +1,11 @@
+{
+  "name": "notification-padded-ep",
+  "kind": "notification",
+  "description": "ep carries base64 padding.",
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..4zd-iYoSWPFeFe6V.9hwT-W-eUHjViPIZrgKSRZzPOJogoNAjF-992umr8MLrE_d5732ulr6lA3Wx90Xf4jbLOET_udipP6tXKRQXsepyjRiEPfUDgFyMHWgYTUkIlDxjCTwCLiXPRGyADvt5v1cfyuq9PDPrfNKyN0fmW5Ol9k6oAyUxg07lw_yPH99nsEKnbfT_zGr9JiqK3sK9zZv61Neyrv4kJnmeAGAkljDYUNLjr9CpBK8-dWNpm9rnSsORiXegHdOq5RHr.5zaVXOE2Y0G8zY3AOOnchQ",
+  "to": "owner",
+  "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+  "expect": {
+    "reject": true
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "name": "permission-denied",
+  "kind": "request",
+  "description": "Controller grant sends an owner-tier command.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "iDg4-omzdt21cslwfuCxkSRoVEF7s_KlMMZGyXrwWEo"
+  },
+  "from": "controller",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY\",\"rid\":\"rid-permission-denied\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"yOgoZV66oC2PVU0Y6_a1wR-N5UHViHWlaBXzhjuiOIs\",\"cmd\":\"sshAccess\",\"req\":{\"enabled\":true}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+    "rid": "rid-permission-denied",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "yOgoZV66oC2PVU0Y6_a1wR-N5UHViHWlaBXzhjuiOIs",
+    "cmd": "sshAccess",
+    "req": {
+      "enabled": true
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "o3Nm5ItMwzm4si61jfr3K5B8iSNYNkSdhAGP8dLIBJI",
+    "y": "QLDESSST8zH8O_JDtFB468bddUELhwMYyzbFJjXAhlY",
+    "d": "v0xOKeHtAFeS2ietg3gG4sDDQt5vC1oX9LYd-8lA7ZE"
+  },
+  "iv": "R8N_zu4OnbI7RSq1",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlMyYlZKMWczNGQteE1uUms3d3hhVHRvc2pfdnlaVllZNHl3azRSNFVFRFkiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUzJiVkoxZzM0ZC14TW5Sazd3eGFUdG9zal92eVpWWVk0eXdrNFI0VUVEWSIsInJpZCI6InJpZC1wZXJtaXNzaW9uLWRlbmllZCIsImN0ciI6MSwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjU2NjAsIm9wIjoiY21kIiwicmsiOiJ5T2dvWlY2Nm9DMlBWVTBZNl9hMXdSLU41VUhWaUhXbGFCWHpoanVpT0lzIiwiY21kIjoic3NoQWNjZXNzIiwicmVxIjp7ImVuYWJsZWQiOnRydWV9fQ.-do3mGRmHphfTpHUhS1Up0o9Vy2zjZ9QfBzbPRkTVXi9ibbB85GZWNYuNbI7meX9hRTh4WUjO76-1X4eR--EFg",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoibzNObTVJdE13em00c2k2MWpmcjNLNUI4aVNOWU5rU2RoQUdQOGRMSUJKSSIsInkiOiJRTERFU1NTVDh6SDhPX0pEdEZCNDY4YmRkVUVMaHdNWXl6YkZKalhBaGxZIn19..R8N_zu4OnbI7RSq1.11apoRHNGoCLkhQ4edjzV43KYw1xEWBLgRzsPGhcT5zAuYn2W7obepANkULzpimd3spZrA_KS8JoMsxfPqMbbINr28FZ-Gdud1utIOzmtCzcuL58jRE8dIozHxEX4_tBd5nULvMAztjLzAE6f_uPzrvFJHtCVABVObv1C3fY4XLeHmkLHZN67Ue_elINStyuTQrsdhi15pi89JtH4QtstGdFUZFP1i78uWAhhBH52g8BqQ-akp7Lt-e8QcO6_pAmkK-XgEmxkQWODVlaUpszO-L5W87vv2afLw9cOHj2PEQ4C-7HwvE8K2cf32C8hSAXzFz_7qDdMYb6lFnyFdFC1cDIXVyQkL2kq6xKRSN3BsHIftXJjkYAj6xjgwi6IhukzSouUhTvUE11v9s47auSzw9CXelDwsOi8FQMdPtZ3h-hSaNEiRpJ8wmEYWA3eYgUpTBXrQN5G_2TJUXh8mbLbGmNY1MAUGp7Dph-dXcK_CIvLg2Rl0csz1axlZnfdHjmf382SfiPeEV6rIhVeKWw6pkGChEKad0lDy7egPiElFY0nMC_9uUVOPK1nUBiKSCZG8AsTJTxMi8sj8XtJ-4x7RO-gXeecxMZjAnW7AMLjxd-GUKv0_ti1QTmsOZZbECwN1aIq3usHz4J96OKxhYXQl1tPkbvzaM4rhTNVChHN4uzkUsgyiWwOW-456bNcMBK-ON_tH0lcLYIvzYyPy_BvQbanDqwm1__RhstIZoagM-ZaZde23gwKuq6jY65iCmG5VnKBAz5dK2NAQ.yZcmCFpyqjKWMmTPzlMqFQ",
+  "rk": "yOgoZV66oC2PVU0Y6_a1wR-N5UHViHWlaBXzhjuiOIs",
+  "expect": {
+    "replyCode": "permission_denied"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..Qrm_0aWG_XxDb94t.TwGE096eyjgoSJ5c26QsjkQav1UU7IWnUiylUAym1zkpx-GskpWOMnv5LF9GBOzFrc5KahvKXx6ZDpgc7RVngO_-gNCCT_HajscKB304z_bRcH71iEiXLBmCBmUmDKs0tc-3ZF2lO8HHQMNZPcOk-p_rZy7Cl6ihT_Fo5LEmbbUYepJJS2834OSQUV6jKh26SzHrpju3QQwKhwuasvfYaE0DlupH0dec4EaJ0uUH54VUCb0JRQMA3nIl_1QwBmqjEEya11pTDTzACxHwPU7EG5Bcfmf24jZPeyf1xxIUGARENoeYuh-eZ4x2OUycwgWOX2gf8kYVJzujzsRAftklXe8sciU4bRIC4fGAvuR8nb3zClmgaZ9kiFmm0DBtdfD82Lw-dducrjtb_Z4_jGJ4tZ6yc3OfcDJrZo1mQe1HBIV8O25Yu176fInLp0ITSPj9v7rP2onh6fajKHPe16BH721Y1YSJQiQbSlKLRAgx8wmPCR8GeIj8J_T3EbF9tjnE44MFXSDLjF7YFlDcsBYTj2Yf-LfESVBUthXDtA3Jw3c8GlP-6UtdiCQAGTLZUsh5uMvsfDBe0oZf90YceYkOLDrSwtnkh87ietBrcGzKg9QiEw.g9DqU1UEPWWYIc9sp5RFYg",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "rid": "rid-permission-denied",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "permission_denied"
+    }
+  }
+}

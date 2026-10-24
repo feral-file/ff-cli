@@ -1,0 +1,39 @@
+{
+  "name": "notification-device-status",
+  "kind": "notification",
+  "description": "Sealed notification to the owner under its nk; open with keys.json controllers.owner.nk.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "WycycdkK3_8IgcfKWJfXSAiT5YeDR9MV_Igztl3jCjI"
+  },
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..PQO3Q9S9VO2qoMHe.EFEoKXXoNsMziAQse5scSKIFdleRi5TaVV49Q05nkd-ZspUCQr8qEKW8fCRafHq6yIRpkD557fTve_YltRxChV6hBlrOZOJHf9Je6C0ezl9gD4wudmOdSWb_k-FtDPzl7VPJPmOpCKTFOZfx97z5IO-KLyE9rFkENudWTXsQ4q3q63P40-0nYnaHM5a6sACiJ8IqOrHCK1l2yQ8RTE7jhhdJFcMK2NFRyetGTH8ZpdKZfPqPGkJWgivgSaozIcERG4eDm8u1WbJGFeUxLCdsrHnSRhOyxBgdL7bBz15cfDnlqU75.x2Z8R_KR_xuHIupfG4Xyiw",
+  "to": "owner",
+  "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+  "expect": {},
+  "notifications": [
+    {
+      "to": "owner",
+      "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..PQO3Q9S9VO2qoMHe.EFEoKXXoNsMziAQse5scSKIFdleRi5TaVV49Q05nkd-ZspUCQr8qEKW8fCRafHq6yIRpkD557fTve_YltRxChV6hBlrOZOJHf9Je6C0ezl9gD4wudmOdSWb_k-FtDPzl7VPJPmOpCKTFOZfx97z5IO-KLyE9rFkENudWTXsQ4q3q63P40-0nYnaHM5a6sACiJ8IqOrHCK1l2yQ8RTE7jhhdJFcMK2NFRyetGTH8ZpdKZfPqPGkJWgivgSaozIcERG4eDm8u1WbJGFeUxLCdsrHnSRhOyxBgdL7bBz15cfDnlqU75.x2Z8R_KR_xuHIupfG4Xyiw",
+      "claims": {
+        "v": 1,
+        "dev": "FF1-FIXTURE1",
+        "gen": "772x9uI4OcVjB0inn2MHLA",
+        "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+        "ep": "T3ODqrDD1Yo",
+        "seq": 1,
+        "iat": 1767225600,
+        "type": "device_status",
+        "body": {
+          "screenRotation": "landscape",
+          "volume": 40
+        }
+      },
+      "wire": "{\"type\":\"notification\",\"notification_type\":\"sealed\",\"persist_record_count\":0,\"message\":{\"v\":1,\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"jwe\":\"eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..PQO3Q9S9VO2qoMHe.EFEoKXXoNsMziAQse5scSKIFdleRi5TaVV49Q05nkd-ZspUCQr8qEKW8fCRafHq6yIRpkD557fTve_YltRxChV6hBlrOZOJHf9Je6C0ezl9gD4wudmOdSWb_k-FtDPzl7VPJPmOpCKTFOZfx97z5IO-KLyE9rFkENudWTXsQ4q3q63P40-0nYnaHM5a6sACiJ8IqOrHCK1l2yQ8RTE7jhhdJFcMK2NFRyetGTH8ZpdKZfPqPGkJWgivgSaozIcERG4eDm8u1WbJGFeUxLCdsrHnSRhOyxBgdL7bBz15cfDnlqU75.x2Z8R_KR_xuHIupfG4Xyiw\"}}"
+    }
+  ]
+}

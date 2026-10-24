@@ -23,6 +23,13 @@ interface PollResponse {
   messages: BrokerHandoffMessage[];
 }
 
+/**
+ * TopicHandoffPayload is the v1 short-code handoff: the relayer topic only,
+ * for an FF1 without the control protocol (or with it but no owner yet),
+ * which accepts plaintext commands. The v2 controller-profile handoff is
+ * retired: a secured FF1 pairs through owner-initiated registration
+ * (control/registration.ts), the one source a profile is pinned from.
+ */
 export interface TopicHandoffPayload {
   v: 1;
   type: 'ff1_topic_handoff';
@@ -68,6 +75,24 @@ function parsePoll(value: unknown, channelId: string): PollResponse {
   return record as PollResponse;
 }
 
+/**
+ * parseHandoffPayload accepts a v1 topic handoff for the selected device and
+ * rejects everything else, including a retired v2 controller handoff.
+ *
+ * @param value - Decrypted handoff plaintext
+ * @param channelId - This receiver's channel
+ * @param expectedDeviceId - The configured device's stable ID
+ * @returns The validated payload
+ * @throws {Error} When the payload is for another channel or device, or malformed
+ */
+export function parseHandoffPayload(
+  value: unknown,
+  channelId: string,
+  expectedDeviceId: string
+): TopicHandoffPayload {
+  return parseTopicPayload(value, channelId, expectedDeviceId);
+}
+
 function parseTopicPayload(
   value: unknown,
   channelId: string,
@@ -90,8 +115,8 @@ function parseTopicPayload(
   return payload as TopicHandoffPayload;
 }
 
-/** One short-lived CLI-side channel waiting for a mobile topic transfer. */
-export class TopicHandoffReceiver {
+/** One short-lived CLI-side channel waiting for a mobile topic handoff. */
+export class HandoffReceiver {
   private constructor(
     readonly baseUrl: string,
     readonly channelId: string,
@@ -109,7 +134,7 @@ export class TopicHandoffReceiver {
       baseUrl?: string;
       fetchFn?: typeof fetch;
     } = {}
-  ): Promise<TopicHandoffReceiver> {
+  ): Promise<HandoffReceiver> {
     // Production default rides the shared deadline (#101 review).
     const fetchFn = options.fetchFn ?? defaultDeadlineFetch;
     const baseUrl = brokerBaseUrl(options.baseUrl);
@@ -130,7 +155,7 @@ export class TopicHandoffReceiver {
       channelId: created.channelId,
       minterPublicKeyJwk: publicKey,
     });
-    return new TopicHandoffReceiver(
+    return new HandoffReceiver(
       baseUrl,
       created.channelId,
       created.shortCode,
@@ -142,8 +167,8 @@ export class TopicHandoffReceiver {
     );
   }
 
-  /** Poll until mobile sends a valid encrypted topic for the selected device. */
-  async receiveTopic(options: {
+  /** Poll until mobile sends a valid encrypted topic handoff for the selected device. */
+  async receiveHandoff(options: {
     expectedDeviceId: string;
     pollIntervalMs?: number;
     maxWaitMs?: number;
@@ -176,11 +201,11 @@ export class TopicHandoffReceiver {
           seq: message.seq,
           message,
         });
-        return parseTopicPayload(plaintext, this.channelId, options.expectedDeviceId);
+        return parseHandoffPayload(plaintext, this.channelId, options.expectedDeviceId);
       }
       await new Promise((resolve) => setTimeout(resolve, options.pollIntervalMs ?? 1000));
     }
-    throw new Error('Timed out waiting for the mobile app topic transfer');
+    throw new Error('Timed out waiting for the mobile app handoff');
   }
 
   /** Close the broker channel and invalidate its participant credentials. */
