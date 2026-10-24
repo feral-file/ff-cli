@@ -1,0 +1,78 @@
+{
+  "name": "cmd-controller-command-failed",
+  "kind": "request",
+  "description": "Executed command that failed: ok:false, code command_failed, res = the handler's error body.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "sri7PKS3g2opgfd7zWnzaMvtYKRcz1Tj9BBgz7x4KT8"
+  },
+  "from": "controller",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY\",\"rid\":\"rid-cmd-controller-command-failed\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"VM4ZU1QM5-L9sGIrFXUwQxBiUF9HNMZpN3tcOHBzw4g\",\"cmd\":\"displayPlaylist\",\"req\":{\"intent\":{\"action\":\"now_display\"},\"dp1_call\":{\"dpVersion\":\"1.0.0\",\"title\":\"fixture\",\"items\":[]}}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+    "rid": "rid-cmd-controller-command-failed",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "VM4ZU1QM5-L9sGIrFXUwQxBiUF9HNMZpN3tcOHBzw4g",
+    "cmd": "displayPlaylist",
+    "req": {
+      "intent": {
+        "action": "now_display"
+      },
+      "dp1_call": {
+        "dpVersion": "1.0.0",
+        "title": "fixture",
+        "items": []
+      }
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "y4sCDTcKEgr3Eij00n8qW8knUC2TN-ljO_r1oFHemr8",
+    "y": "QBtHZMdyWGopvY2h6IphY_MfJ0v2RRPkkfY79jaYRUQ",
+    "d": "alHPvhtwShZ6FRL5AYwetlIeIaFahyNxj3xEXzLbDGA"
+  },
+  "iv": "1VA7ovlg1_RTNA2m",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlMyYlZKMWczNGQteE1uUms3d3hhVHRvc2pfdnlaVllZNHl3azRSNFVFRFkiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUzJiVkoxZzM0ZC14TW5Sazd3eGFUdG9zal92eVpWWVk0eXdrNFI0VUVEWSIsInJpZCI6InJpZC1jbWQtY29udHJvbGxlci1jb21tYW5kLWZhaWxlZCIsImN0ciI6MSwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjU2NjAsIm9wIjoiY21kIiwicmsiOiJWTTRaVTFRTTUtTDlzR0lyRlhVd1F4QmlVRjlITk1acE4zdGNPSEJ6dzRnIiwiY21kIjoiZGlzcGxheVBsYXlsaXN0IiwicmVxIjp7ImludGVudCI6eyJhY3Rpb24iOiJub3dfZGlzcGxheSJ9LCJkcDFfY2FsbCI6eyJkcFZlcnNpb24iOiIxLjAuMCIsInRpdGxlIjoiZml4dHVyZSIsIml0ZW1zIjpbXX19fQ.L4qF_WzkTCNUCZGXnux3DsqJRpD8ljNkTtZo8FbsCAu42w7Ha-LnN384_bSS5mWi1IhT8gJDv0K4zPyefrKL2A",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoieTRzQ0RUY0tFZ3IzRWlqMDBuOHFXOGtuVUMyVE4tbGpPX3Ixb0ZIZW1yOCIsInkiOiJRQnRIWk1keVdHb3B2WTJoNklwaFlfTWZKMHYyUlJQa2tmWTc5amFZUlVRIn19..1VA7ovlg1_RTNA2m.rAiJ8efC8fIEICj4WeUBblyfpCogLn6-I3ZLnX9HTgRnVXqtRNemtUzBabYtSuvXDNNE7ovKDdlaK65fshBNDowF2gKfWnQALCzcd3sbqrprlanAwq9qW6x4v-oR0LzpJxrXnob4OEeVuNPOxHyvgootrvfuscghbGk071eYvUidbfBRlEM94VwUvgmjQkGyy0eStJP6WR9JASExFKG9QVbBZSHjvpL8WVMWX1G8cG-DtXDNdYrTtx4C5_IcP-sWxV3FZJcZ-7_miu7-ebgcdl0HZAdWbT1CZXvxBRxIrgi1gk0hjYf8mZER5EiHAqLSGX5xVVj2LTr_HVpZcVKOn29e6XnPrsVjMAmD_6mxs9lo1t8q9dq6uaH9vwICGJZPN-CpRDNKHIl23wFGk1Q9Cq9knWbSu4pzmOMUc7koxM0SP2LmUIfioeiyPA1BGvmpegJ55O2EVY24mf55Q4Yu4019khsApX9YjOkOqwYURXfSgP1M8Q57uE28iukoUoq3k4_DhwNZn-QovxBMXWcBA6ZBUXBhorzWSsee5QeuR_kYG6uP7Ix9vwS7_PFMaFRxstpgMIuGUO1iZThfuugssSZCgAte05WTq_i2Bq3MMSZpUcucGJwVdCsWAbfnz8MV5j7oueB3YcWDLSHdHORfy8kVAOB7pwkU3WYdGbh4OnwqwhyehqME2wuzNX0wgKXD8d3UDzJ4EGyhASmoZGofZ2khZRHmCtAOVzVR_IOx8aXRSsyOpdM13FhYzManm9ulyr7MkOuxKvSfAeKPviIJaCsb90BSReea8QrE3g5cWJ0k77-j_n11pz2Wv1ZYU-8qxWtiSO9yPkuk8s09FtmuCmzyetxXL2B2CWCKq0YK2b439mSLqN-Vqn4s1oLiRQJOg0B6U91f6Ccn-ODI8foliw9FS80o9HOEc-0Ydq0bE71sLd7K1dqqJAJeUZDzSg.Es8MEM5ZPTGC7T7JJD95Cw",
+  "rk": "VM4ZU1QM5-L9sGIrFXUwQxBiUF9HNMZpN3tcOHBzw4g",
+  "expect": {
+    "execute": true,
+    "command": "displayPlaylist",
+    "principal": {
+      "controllerId": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "role": "controller"
+    },
+    "replyCode": "command_failed"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..u8LbcwMApZE4rKGH.d8nnIqs02cf5cDX5cNdSMn2wdIAFSuQXLQtnQ25uKtmcV5s6ZJNUiJ7nWB8HiyYqJe_kYdw9bP1LTUOPaG7fsAbcoqB7BcxK3V8y9Xnygwz-STwgrenIOQF9RBR4Op6u-WFJFErpx1X2BOZVaC1sutreEkxpXzon_5unkasaZn9kGC1EdJkjUZbrUUAUmux9WAMF_eECBITEfn5UihLgwytXeUAC53e4M3OhHXKpC3MGQVsCOv3zDuSaTWV8QOAljerDFMzuqkNxCyTmgkYQwn9vxBpZUJPko3VYgbPVdc9DWJlueLhe2F8wcVIL2SfdqD65UYfTMmdjnBWZowBX3ViYY9lGzhcH0laOZhsqHJVBYsXAAs5qTD2mIvcj8xU-O2QGZC1utFf8gCrgYBcLDu1RARdw-upv5-UFUMQKMAWd4IS5cgfREoozz6NE-nAbJqRd70sdn_dPwa7BM5H6BUl5nbqkIlXKy3fSS03xR2hRkm1WLGwHRnsbM9si3J_0p-TvIBHFBGrWRatDib6KSQ7-HBZgq_B-zdmyr_T_7Uq9e6TjmSJodqqxAib54iiN06hWWD47d2_LPrpJyrZMijBi_mX-XNJOd5DWMDYvccOCVUxtOtXdvUp202OEHrGwygeO32o64M0CmMnMhRxldJPkKIUf7SRqCMyuKGAxf2bTxw8qngOtsB1N2H-NXd5gdlOYxVpYeEUJ5sQLxqCiIWxq-YZ4e4PAVa2FroH86l2FJVTXDzFqPwXeCRNECVfUWl7UxA_yrPeDHsjHDp78D5lNAmKlYGST52KR-6buKOwlVmsKg4wQzCr_G28GkaugJ-2i9pgcyr8hnQCWVxga01PDrmPlcB97SZ2kxNgkPEqjy1uycCkSs_j4jKj3XEaBGkC9m6-GLqnWihN5WxiBORV7MAg.cZTsQonDx0NUZWgiqbmzwA",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "rid": "rid-cmd-controller-command-failed",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "command_failed",
+      "res": {
+        "command": "displayPlaylist",
+        "error": "sourceUnreachable",
+        "message": "sourceUnreachable: no playlist item source is loadable (item 0: HTTP 400)",
+        "ok": false
+      }
+    }
+  }
+}

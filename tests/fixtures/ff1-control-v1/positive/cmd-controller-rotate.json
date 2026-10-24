@@ -1,0 +1,67 @@
+{
+  "name": "cmd-controller-rotate",
+  "kind": "request",
+  "description": "Controller-tier command from a controller grant.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "76NPgCoKOL8m28kD4izJElal1K2CZx7YWr98BtRMWeY"
+  },
+  "from": "controller",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY\",\"rid\":\"rid-cmd-controller-rotate\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"-BwjZTPh4MuAQoZ43TemCLKXK7ssaYUzxvJhcJa2mzQ\",\"cmd\":\"rotate\",\"req\":{\"clockwise\":true}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+    "rid": "rid-cmd-controller-rotate",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "-BwjZTPh4MuAQoZ43TemCLKXK7ssaYUzxvJhcJa2mzQ",
+    "cmd": "rotate",
+    "req": {
+      "clockwise": true
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "s6AmjCTRyfL5NPW6Ph4AA0u0vo7f1VF4NxcqB_XUczk",
+    "y": "GTWwqC11hbUeYZehs0RwVTA_ejPHoDGloppcptWi05s",
+    "d": "XfxvfR6tOvc0ChjvWZiFv4O5_WPPhGLoAfN7z5PNskY"
+  },
+  "iv": "QuIJaRuotFvXH8Xv",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlMyYlZKMWczNGQteE1uUms3d3hhVHRvc2pfdnlaVllZNHl3azRSNFVFRFkiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUzJiVkoxZzM0ZC14TW5Sazd3eGFUdG9zal92eVpWWVk0eXdrNFI0VUVEWSIsInJpZCI6InJpZC1jbWQtY29udHJvbGxlci1yb3RhdGUiLCJjdHIiOjEsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI1NjYwLCJvcCI6ImNtZCIsInJrIjoiLUJ3alpUUGg0TXVBUW9aNDNUZW1DTEtYSzdzc2FZVXp4dkpoY0phMm16USIsImNtZCI6InJvdGF0ZSIsInJlcSI6eyJjbG9ja3dpc2UiOnRydWV9fQ.j6HT13ilCuC1wLn_VVWFxC2A8enYjBrst_pbYYAcSTfX3UdBBrTx7oek6zl2-qQnn18xqn9OTCpi4p4aG_D5-A",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiczZBbWpDVFJ5Zkw1TlBXNlBoNEFBMHUwdm83ZjFWRjROeGNxQl9YVWN6ayIsInkiOiJHVFd3cUMxMWhiVWVZWmVoczBSd1ZUQV9lalBIb0RHbG9wcGNwdFdpMDVzIn19..QuIJaRuotFvXH8Xv.4_5bViYCtCdvPd9sES0-NsOQV8EX7hbX_HzhK9kIqwbHqPVawyDgTnlCvgZIK78RHcpi8eTU2Q1bSmD9hcq4HQHczwIZfZQU9EqlTLqPkhMhuIzmxn6g8IJnpNNzCpbLw5XlUZEkdaqaszaXO52Inz6MzS17wx0xO549UY_8RQewtLTEmH50-PmEryOaslKj2eaNneC3euq_c4XxM8hZTTa2Z9PfT7uVH7uf3jxaRdDJkjAin_jirG6vucS5MaHC_lKlXJRchl5Y-yRnQQYGPLFNNyloDha-EghlcdxwunV6PlGfDvsgGZZDGOWNQNsdt1Pk64jP1vh9-e5q9ayh7tPEeF7jJr-HviE1tvxY2_GO8603Sb808wBCvOYurGPk-FhziTReiLL-Gk_14-yjRFMHTb6nEEivXLkW_9Vf6d7arMaI7z_gLED5RakiZ-AD1BQr4G0MAgj3nHnhgcZ5QJYwJOX-sSjKUjHCTGOf28gyr3iu2HE3NGjwn9VAyJfHo3gavN1XTsg6X_Nj_j0B5y5YK2JyAjnZX2cxMfpPs4_tMzYoLtK54iLI6qwo-S2wO6Jiaa-ivuhBmwNpYUzigKzZeoANItV-Xpu-BR08iPZKwzxZr9B8tzOrv7nuzZxAz7wLnzgT4mC_w5Ozdw-ZnrCdWhkppRk48Po_eIHiweAS3lpj-XYv0VgivUsM6UzNekLwlS4zvgZfS7LLyCNaU2L5eWcom5DUETsGpIv5_J_1DI3NO0mAZawG5Nm1omIWk4UELRIyf6FlRxafdE8.nYLmxyihoE8CovFuNo103w",
+  "rk": "-BwjZTPh4MuAQoZ43TemCLKXK7ssaYUzxvJhcJa2mzQ",
+  "expect": {
+    "execute": true,
+    "command": "rotate",
+    "principal": {
+      "controllerId": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "role": "controller"
+    },
+    "replyOk": true
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..E8Z9X3muUpC7ijuh.k2ftxDKjiIaY1U2Tclp9tB5dm4cdBVlMdRnD8cagzfrVndPmznEmMqXkli_glYzzTXwitwcR2J5OkQ5OO-KIFhGuCRUPZk0139o_5qlQN5g_qDtxbAzDdwqJ9I7ZmHGq3pDKlZyNsp8M7PP6HTyl9Yp7dwmwPZJsL3xzkmN3fJh3bQ8nj2PzCTd_kRJ1WCq1GiQdXMqVXmb6xFmwm-Q2ACTVlnRpWC4WXqSrL7w053IL25U2MzYsSbjabvwP3_1S3XdCgtXVxazjnjAn5DqWWQpVc0cKTrvbevzUkrHN6tcgNWPs3raBJ5DzCIPdfV2q78ySosxfVbGBVpqlp17x1eXqUI3VJEaruc5DVSZ0AtiOcxoNrNi0uo5QpjfbFON6U3dHiIXM7uxup9OKT6OGIn-IjYm442x2yEdU5d2ikRabzv6gVlpx_eWBsbpvc0r2yRtss2jRiGBj9F15YvK7eCsj0pyu5HTGQM73l4alCIsN_yTBzEG-DPxi-5ATHGBOyI3-sHPWTvEMWT4QX7XxBBh_YnfyU9KkGXlyIRMrjK4_SabUHEnAmn3gLY9nPMQa49FszQSJorjqpAfKRCUFV66NkUWhusNuOgo.48rJPx4cGUYLROcAmsFL2g",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+      "rid": "rid-cmd-controller-rotate",
+      "iat": 1767225600,
+      "ok": true,
+      "res": {
+        "ok": true
+      }
+    }
+  }
+}

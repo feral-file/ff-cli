@@ -1,0 +1,83 @@
+{
+  "name": "cmd-owner-registerController",
+  "kind": "request",
+  "description": "Owner registers the keys it scanned from a controller QR (§5.6); res carries the derived ctl. The controller then enrolls without inv as in enroll-approved.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "oOlK0_gPq091fbjz7ibZx58fU0FQYn-vm02GgyfcScE"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-cmd-owner-registerController\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"H8OajswNb-Szu-fu1sD9hdWi-CU8VzA-vO6t9gGAWt4\",\"cmd\":\"registerController\",\"req\":{\"sig\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k\",\"y\":\"LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg\"},\"enc\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g\",\"y\":\"L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk\"},\"label\":\"Stranger\",\"platform\":\"other\",\"role\":\"controller\",\"expiresAt\":1767312000}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-cmd-owner-registerController",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "H8OajswNb-Szu-fu1sD9hdWi-CU8VzA-vO6t9gGAWt4",
+    "cmd": "registerController",
+    "req": {
+      "sig": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k",
+        "y": "LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg"
+      },
+      "enc": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g",
+        "y": "L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk"
+      },
+      "label": "Stranger",
+      "platform": "other",
+      "role": "controller",
+      "expiresAt": 1767312000
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "LtyunHI6bqicrwESK1pNLCEYYYhLyH0I-Fd7QZas4do",
+    "y": "Q153AIbR_YetIR3RKnb53p3cJ4BXMc4XkjhsIy0QjqU",
+    "d": "FWXoJ7_yxBVqpADMIkxfeOW973EGqCLvJ3gyRn6s0zA"
+  },
+  "iv": "v7HNP0HIxcB5V0c0",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1jbWQtb3duZXItcmVnaXN0ZXJDb250cm9sbGVyIiwiY3RyIjoxLCJpYXQiOjE3NjcyMjU2MDAsImV4cCI6MTc2NzIyNTY2MCwib3AiOiJjbWQiLCJyayI6Ikg4T2Fqc3dOYi1TenUtZnUxc0Q5aGRXaS1DVThWekEtdk82dDlnR0FXdDQiLCJjbWQiOiJyZWdpc3RlckNvbnRyb2xsZXIiLCJyZXEiOnsic2lnIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4Ijoic1hHWnJYbldMRnZLT3JSWV8tR3FNSEV4dHdIXzMweExCRkM1NHU2QTY3ayIsInkiOiJMRGVPdlVReXZPMER6OV8tc1NjRkZyNnptM2FOMDdMUHh6OGtScElfRFFnIn0sImVuYyI6eyJjcnYiOiJQLTI1NiIsImt0eSI6IkVDIiwieCI6InY0SXg4azFXX1BWWFB2R3hLTkRiUTh6SjZyb1dLRklWVHd6Wll3RC16MWciLCJ5IjoiTF9KVjZ1MzNmdEtOejNHTHI5SWk5VHlERngxUWdpVUJreVFWQ3UyUmdDayJ9LCJsYWJlbCI6IlN0cmFuZ2VyIiwicGxhdGZvcm0iOiJvdGhlciIsInJvbGUiOiJjb250cm9sbGVyIiwiZXhwaXJlc0F0IjoxNzY3MzEyMDAwfX0.XwYmkhxtvyARJWQLnuq-TjCRPaOVT0R-jIQZEFiJEbCsZbVODsFhNwkcdQUgydAgSQqodSxq17YeSnCaw9CeUg",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiTHR5dW5ISTZicWljcndFU0sxcE5MQ0VZWVloTHlIMEktRmQ3UVphczRkbyIsInkiOiJRMTUzQUliUl9ZZXRJUjNSS25iNTNwM2NKNEJYTWM0WGtqaHNJeTBRanFVIn19..v7HNP0HIxcB5V0c0.OOqJYCkg_3vtjT-BEuV1KhmnPMCUuQq1muFNH5zfKQgGcc8oY_ysDubcVQvpV_WSUhqO54GfK_f8yQRmv-eFpdLOTM1mMDrOauwNYfkonBqboqMYFDvGAHeuKhh_QIbqIMhr3S-KH5ryK9orUVR3XuB4J4Pyjtzt8RTUtT-j31PCPzikmpz8NFWLHJRKVz2gsgbkW9GId6lBjHWOdqqpwHEx02KeoM71dFMblzmc7r_zSF9MH780nh10_l3bQS-c_X5Rbdw6euQXTQ4Y-TizLyAH0Z40Xg3VBmlFyDmu2v9OTYPDYKhIntUfDaRU0piSsqGXL3rQpRKa96v5BoyY8B4h5acmDFATBSJeDpetpaLOmFUHDEHZyD4MZGGqljzCswOiTfTpW9213BVZ0cFYDww0Rgjh8k-49dSwJSQba-nMPIGcdg-C-rMsS0K5u2d1uaFA6iilf2cr7SfQWOWqZIdr4CVVr5XOaiMgu_PU6SmnTGvEuQd1kRk0WFqxeZTRbOYJXVyAOtT5J3kqQNsa6bviMMgWDWnszj3S1Cpfk1fp7MXinECbIlp65KJ5kDlXOLnKydWxSzC-cv5DnDaoMw1SSzX-2lFEsszTKPljStCacMpIfxGH2JnrbZPyurmQjXxIYMSwx2xXfpBd-E3Ydr3DsoIhDk4Tr8OKLKYh37FuFwcm6uMp07jnACHbjq0c3imFwDhD0qx-8yndjbP53kWxiSwsb1ZutAZwazm8oPXlBqZ-WX0yp5d0i1mmet420XVeAZLl0HtbS2xFb4i7kXpzyn2kY_LUMFO9QNLNcIr26jA0COZ73F7ZEVXGXEyHISYsgFmQEgmAynM1ee7HJCFQJ_7d7XnaazkknHIYXBCMq0TvqaOPDnegoUnvBmPXN7YKm1RzQ7DynU75ZaDpgCjb_aXdSFXG8KfrZH1FuXGX3eBjNQDx0uc4cY-JxJ6JIB7JXDaFFE3QDlzARyT9h60Va5Rv40BXYx-MjvOXnUSuqJBlvR0mcFt8BYk-osnQzDp1d-njJOC_8sa7kaqqeeO6Ohwk9UwmoAf_oM74A_buS2eEAMPxQGZTspV4_S15-eMxQcII5nSaKr2UztaI9_Hy3D-Jzl4WQA36whRixgXankPBntludJtMxmnQMmISgSWehhlMTErttmC3cJlPYSBVfoyitTig8vOEO7ZOecVBgsVgRHyC7-Iazzo9Gy9AXg-NYeG1Csf9x-1DsyBuLBkwbQ3ZJIYhKRnrOKhdf9pvuk-ANc1m5kOVcsw7fleXd4GUCuf4nAN9kuDKUVD0xFV6lYMFV67HKNFbeMrXUi6hobYYzv5kwGZfzy5hExp5yDJtwbs6EILAshdgo_xrvxqMFwkhel5vhJ_jbWAe-voSRWwN4GkPThg_UQ-1LQU.7RC-UfWJLT48zuaLvXBvZw",
+  "rk": "H8OajswNb-Szu-fu1sD9hdWi-CU8VzA-vO6t9gGAWt4",
+  "expect": {
+    "command": "registerController",
+    "principal": {
+      "controllerId": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "role": "owner"
+    },
+    "replyOk": true
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..1rHPx1syz3S8w3Re.f1aKaMVjv8Qt7iujlo0E3LKm6Jcvl0TxImYYnCoB7aSRczgE26-7QPhKpTRiEH2oY1aGEfsb6FKNFJkVPH_HACYOCgDvtUIv-Qv4tLO_q26qpTrvvoSqjg80YXU9j5dyb4d7WZKz28ie2Lu_55OV7eQwreKnra-KW7SUUZipwaRpHr5hxJlvDrvhYze5emNL9_rcI6zE6IwlgMPryjEUaKYzvNzXT0LCXm0eF3QgBfPwAPqbfj0R4hJTrM8ZpJThdXjvM7HwV0Nqs0fmjHutQ_Gaq1_A_WqQb8ZFuTkqNYHQ-OIfGMd49ut36nAhR-a_djE2cAu77fnYzYCZ_ghqbgCFdUSz8m4f8VHHpiPzVCHRBfEmkp6eg1oHJTO7ckXSXvj8qJDOHKSUcV5gJo9OQt7NcGPOxvbfPb-IkkSMJqLtXMg4-F5nUGuySGm55fAhh09ZtIXKarusIFMDfshcOt44FKHTSBsQl0IAVns5M13W0JSBq6un2ZOSxLuuMC6F76vr0UrZzU8gcae2rfhUkjHN_rJ0toOl5kIPfcd8wVsTOgr7Q_texQaLt5H94_KZDX80v6Fp6KHKi2Sp40p4g8g_3vTqecMriiqPcBwXEWcB2G-M7CLqBZKng0uSsdr_OGRLZuaNaC5bep-rKHR9-oeBx3gRp__TExEUPdblu4niXYKBS8XyV04NBbKniH3U_jmTJHPlxC4hf8A_0U4EUqnEwYTMGLhjvJZqjqHA7xFvErEHlfWPJdgqUKuIJ-COKpBnkA.vVSP44CXZk1gLBZSV_SyMA",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "rid": "rid-cmd-owner-registerController",
+      "iat": 1767225600,
+      "ok": true,
+      "res": {
+        "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+        "role": "controller",
+        "expiresAt": 1767312000
+      }
+    }
+  }
+}

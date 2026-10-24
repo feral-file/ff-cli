@@ -1,0 +1,60 @@
+{
+  "name": "controller-registration",
+  "kind": "registration",
+  "description": "Owner app seals an approved result to the controller QR's minter key (§5.6.2); the controller opens and checks it (§5.6.3), with profile.dev matched against wantDev.",
+  "now": 1767225600,
+  "controller": "stranger",
+  "qr": "ff1-ctl:1|7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9|BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY|sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k|LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg|v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g|L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk|DKGaaktvRLMK0QPPdvtL_g|other|Stranger",
+  "minterKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "o-RA1lhO5Ql6B1XsJSQuaWEk4Vg_ke2sWDJDTNF0f1M",
+    "y": "mxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY",
+    "d": "YF-PJxAeuoPkTb5FkvSjKXQm_Ty3Xy95ol_JSh3kwf4"
+  },
+  "channelId": "7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9",
+  "ps": "DKGaaktvRLMK0QPPdvtL_g",
+  "wantDev": "FF1-FIXTURE1",
+  "ownerEphemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "JMGIhnnPUJ6bh8u-_RE9aZRe1zdwqij9oqHQBCQ94W8",
+    "y": "pM8dglRpwsCHDNxYrky1RZB7Hp2GanE6zoDaTc4dE6w",
+    "d": "9FPcfGFMCzx1djezVBHE1pOhQSrKEXPd-spbiXdzo_g"
+  },
+  "iv": "A0T4wptejZSMqcBQ",
+  "plaintext": "{\"v\":1,\"type\":\"ff1_controller_registration\",\"channelId\":\"7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9\",\"ps\":\"DKGaaktvRLMK0QPPdvtL_g\",\"ctl\":\"eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q\",\"outcome\":\"approved\",\"profile\":{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"sig\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"5jpANW8lLoNYtEBXDv2jPgpWd26B0qqVN2zZwUAfw64\",\"y\":\"DT4WvFtjCo0h6XHTGMG7cmPVBYFqYFN3OYlIbUREyQg\"},\"enc\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"m_DDu8fTpmS9lGeEuKDUpSXiFQCwMEXEOtlqtFxn_b0\",\"y\":\"T-W2r4vBsiYSbwb7_C48ZPvr9yQufQZAvWQXsMpHGCU\"}},\"deviceName\":\"Living Room FF1\",\"role\":\"controller\",\"expiresAt\":1767312000,\"topicId\":\"fixture-topic-0001\"}",
+  "result": {
+    "v": 1,
+    "type": "ff1_controller_registration",
+    "channelId": "7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9",
+    "ps": "DKGaaktvRLMK0QPPdvtL_g",
+    "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+    "outcome": "approved",
+    "profile": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "sig": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "5jpANW8lLoNYtEBXDv2jPgpWd26B0qqVN2zZwUAfw64",
+        "y": "DT4WvFtjCo0h6XHTGMG7cmPVBYFqYFN3OYlIbUREyQg"
+      },
+      "enc": {
+        "crv": "P-256",
+        "kty": "EC",
+        "x": "m_DDu8fTpmS9lGeEuKDUpSXiFQCwMEXEOtlqtFxn_b0",
+        "y": "T-W2r4vBsiYSbwb7_C48ZPvr9yQufQZAvWQXsMpHGCU"
+      }
+    },
+    "deviceName": "Living Room FF1",
+    "role": "controller",
+    "expiresAt": 1767312000,
+    "topicId": "fixture-topic-0001"
+  },
+  "wire": "{\"v\":1,\"type\":\"ff1_controller_registration_sealed\",\"epk\":\"BCTBiIZ5z1Cem4fLvv0RPWmUXtc3cKoo_aKh0AQkPeFvpM8dglRpwsCHDNxYrky1RZB7Hp2GanE6zoDaTc4dE6w\",\"iv\":\"A0T4wptejZSMqcBQ\",\"ct\":\"48EexmRLzTuTgWgHcOrUzHh0fNLIUumIvSXeUM5Kq1Ob_PJeiNTH9hcpSLXiBf4-WA2PCGtRa74R15S7ecovRtH2ThDUwOoiboRuAG8noei7aKii_BbJgWajCu3azBejw3uAIo8hraA377eTesD3zU2RFtB7mpuJFHmR7g_L5lgAkgWgn1W-RBLjig0Ewmyhoa4SQ5tsjXrWYl-4fandTBWQ6kKAi7htIehIOsaAQ8ptKxp7920PG-hCsCtH9WG1qdzQEb4tqIbkqvE_RLT1oNvJYa2glTTSgOjjSCUkWHVXCid9JUgOhuJq-UP1a9Lvr7LK8zmkMFzD2X94eoKtthMIoeHv-05ODBwvhDTsochU9VpMVDZqb5atLGgGV7Fezhz8XtUzfd7l8xsuw_noEB6tULGiDP6NVIR_Sx6_NaUvckfVojyG2Gx7Yfcml-adK8b52cIwWzHHu6zTj35WDabYwwGxcYneFlsBkzOZ_rmXZtK3xR5t4jZbif229rGo0gFYY6eqY6H3py2Oe49QERS9rv0YMdCnj-6FLXUPcJ-Pv2u3OUZM4wEAIkZhj8p7-qOO7EYq4lC0dc2Wn8tw46IsID3ullm1KH778FDvyTE3-vRmbT4VweDjNBhxy83pZg9-rKRRpBpFm26y20VDGUzokftbRBVo6jZKxpyuiE3hWVFxJjWGsgD4yMWj7G7cCLZuwzw4ooEswpvVwgL3AcDQY2T90rMxo0I7If8dO5PDR56VUIle59AtdoWWSTV1k_sxox94igpWlZVTuQcImvvAxp_4w_E9-QasQkviXtv4VhSemRM9R_DJPhFb0mrQM1bQjVVuJJVtY9EsjMiKmQlbGXMiLEy7CCP4pwMrFg\"}",
+  "expect": {
+    "replyOk": true
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "notification-bad-ep",
+  "kind": "notification",
+  "description": "ep is not b64u of exactly 8 bytes (here 3 bytes).",
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..4zd-iYoSWPFeFe6V.9hwT-W-eUHjViPIZrgKSRZzPOJogoNAjF-992umr8MLrE_d5732ulr6lA3Wx90Xf4jbLOET_udipP6tXKRQXsepyjRiEPfUDgFyMHWgYTUkIlDxjCTwCLiXPRGyADvt5v1cfyuq9PDPrfNKyN0fmW5Ol9k6oAyUxgy2IoM6rL7xgo0Knd_D6zGr9PT7UjYSqwZr9zsL05bt3NHOQRnErjzafNYPzq9K1FOhNJHVni9a2UpTOlg.exed2dln6Ghg5JFx8nAtgQ",
+  "to": "owner",
+  "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+  "expect": {
+    "reject": true
+  }
+}

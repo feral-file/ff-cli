@@ -1,10 +1,44 @@
 /**
  * SSH access control for FF1 devices.
+ *
+ * The sshAccess command is LAN-only: it is POSTed straight to the device's
+ * `/api/cast` endpoint and never falls back to the relayer.
+ *
+ * Topic proof (feral-file#3551 phase 0): on a claimed FF1, newer FF OS rejects
+ * a LAN `sshAccess` (and `connect`) cast unless it carries the relayer topic in
+ * the `X-FF1-Topic` header, answering HTTP 401 `{"error":{"code":"topic_required"}}`.
+ * The topic is the secret that `ff-cli device pair` stores in the OS keyring;
+ * holding it proves the CLI was paired by the owner through the mobile app.
+ * Older firmware and unclaimed devices ignore the header, so the request is
+ * still sent without it when no topic is stored. The topic value must never be
+ * logged or placed in an error message.
+ *
+ * Secure control (feral-file#3551 M6): when ff-cli holds a controller file for
+ * the device, `sshAccess` is sent as an ff1-control-v1 envelope instead, still
+ * LAN-only. `sshAccess` is owner tier, so a controller-role grant gets
+ * `permission_denied`, mapped to "needs an owner grant". No topic header is
+ * sent on that path: the signed envelope is the proof.
  */
 
 import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-compatibility';
+import { getTopicId } from './topic-store';
+import type { FF1Device, FF1DeviceConfig } from '../types';
+import type { ControllerRecord, ControllerStoreOptions } from './control/controller-store';
+import {
+  type SecureTransportDeps,
+  findSecureController,
+  runSecureCommand,
+} from './control/secure-transport';
+
+/** FF1_TOPIC_HEADER is the LAN cast header that carries the relayer topic proof. */
+export const FF1_TOPIC_HEADER = 'X-FF1-Topic';
+
+/** TOPIC_REQUIRED_CODE is the device error code for a missing or wrong topic proof. */
+const TOPIC_REQUIRED_CODE = 'topic_required';
+
+type FetchFunction = (input: string, init?: RequestInit) => Promise<Response>;
 
 interface SshAccessParams {
   enabled: boolean;
@@ -22,21 +56,28 @@ interface SshAccessResult {
   details?: string;
 }
 
+/** SshAccessDependencies are optional test seams; production uses the defaults. */
+export interface SshAccessDependencies {
+  fetchFn?: FetchFunction;
+  getTopicIdFn?: (deviceId: string) => string | null;
+  getFF1DeviceConfigFn?: () => FF1DeviceConfig;
+  /** Controller key store location (tests); defaults to the user config dir. */
+  controllerStore?: ControllerStoreOptions;
+  /** Unix-seconds clock for secure requests (tests). */
+  nowFn?: () => number;
+}
+
 /**
- * Send an SSH access command to an FF1 device.
+ * sendSshAccessCommand sends an SSH access command to an FF1 device over the LAN.
  *
  * @param {Object} params - Function parameters
  * @param {boolean} params.enabled - Whether to enable SSH access
  * @param {string} [params.deviceName] - Device name to target (defaults to first configured)
  * @param {string} [params.publicKey] - SSH public key to authorize (required for enable)
  * @param {number} [params.ttlSeconds] - Time-to-live in seconds for auto-disable
- * @returns {Promise<Object>} Result object
- * @returns {boolean} returns.success - Whether the command succeeded
- * @returns {string} [returns.device] - Device host used
- * @returns {string} [returns.deviceName] - Device name used
- * @returns {Object} [returns.response] - Response from device
- * @returns {string} [returns.error] - Error message if failed
- * @throws {Error} When device configuration is invalid or missing
+ * @param {SshAccessDependencies} [overrides] - Optional fetch, topic-store, and config seams
+ * @returns {Promise<SshAccessResult>} Result object; never throws. A device that
+ *   demands topic proof yields `success: false` with an actionable pairing error.
  * @example
  * // Enable SSH for 30 minutes
  * const result = await sendSshAccessCommand({
@@ -45,21 +86,20 @@ interface SshAccessResult {
  *   ttlSeconds: 1800,
  * });
  */
-export async function sendSshAccessCommand({
-  enabled,
-  deviceName,
-  publicKey,
-  ttlSeconds,
-}: SshAccessParams): Promise<SshAccessResult> {
+export async function sendSshAccessCommand(
+  { enabled, deviceName, publicKey, ttlSeconds }: SshAccessParams,
+  overrides: SshAccessDependencies = {}
+): Promise<SshAccessResult> {
+  const fetchFn: FetchFunction =
+    overrides.fetchFn ?? ((input, init) => fetchWithTimeout(input, init ?? {}));
   try {
     if (enabled && (!publicKey || !publicKey.trim())) {
-      return {
-        success: false,
-        error: 'Public key is required to enable SSH access',
-      };
+      return { success: false, error: 'Public key is required to enable SSH access' };
     }
 
-    const resolved = resolveConfiguredDevice(deviceName);
+    const resolved = resolveConfiguredDevice(deviceName, {
+      getFF1DeviceConfigFn: overrides.getFF1DeviceConfigFn,
+    });
     if (!resolved.success || !resolved.device) {
       return {
         success: false,
@@ -68,71 +108,205 @@ export async function sendSshAccessCommand({
     }
     const device = resolved.device;
 
-    const compatibility = await assertFF1CommandCompatibility(device, 'sshAccess');
+    const secure = findSecureController(device, overrides.controllerStore);
+    if (secure.failure) {
+      return { success: false, error: secure.failure.error, details: secure.failure.details };
+    }
+    const secureDeps: SecureTransportDeps = {
+      fetchFn: overrides.fetchFn as typeof fetch | undefined,
+      getTopicIdFn: overrides.getTopicIdFn,
+      controllerStore: overrides.controllerStore,
+      nowFn: overrides.nowFn,
+    };
+
+    const compatibility = await assertFF1CommandCompatibility(device, 'sshAccess', {
+      fetchFn: overrides.fetchFn,
+      controller: secure.record ? { record: secure.record, deps: secureDeps } : undefined,
+    });
     if (!compatibility.compatible) {
       return {
         success: false,
         error: compatibility.error || 'FF1 OS does not support SSH access command',
-        details: compatibility.version ? `Detected version ${compatibility.version}` : undefined,
+        details:
+          compatibility.details ??
+          (compatibility.version ? `Detected version ${compatibility.version}` : undefined),
       };
     }
 
-    const apiUrl = `${device.host}/api/cast`;
-
-    const request: Record<string, unknown> = {
-      enabled,
-    };
-    if (publicKey && publicKey.trim()) {
-      request.publicKey = publicKey.trim();
-    }
-    if (typeof ttlSeconds === 'number') {
-      request.ttlSeconds = ttlSeconds;
+    const body = buildSshAccessBody(enabled, publicKey, ttlSeconds);
+    if (secure.record) {
+      return await sendSshAccessSecurely(device, secure.record, body.request, secureDeps);
     }
 
-    const requestBody = {
-      command: 'sshAccess',
-      request,
-    };
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (device.apiKey) {
-      headers['API-KEY'] = device.apiKey;
-    }
-
-    const response = await fetchWithTimeout(apiUrl, {
+    const topicId = lookupTopicId(device, overrides.getTopicIdFn ?? getTopicId);
+    const response = await fetchFn(`${device.host}/api/cast`, {
       method: 'POST',
-      headers,
-      body: JSON.stringify(requestBody),
+      headers: buildSshAccessHeaders(device, topicId),
+      body: JSON.stringify(body),
     });
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`SSH access request failed: ${response.status} ${response.statusText}`);
-      logger.debug(`Error details: ${errorText}`);
-      return {
-        success: false,
-        error: `Device returned error ${response.status}: ${response.statusText}`,
-        details: errorText,
-      };
-    }
-
-    const responseData = (await response.json()) as Record<string, unknown>;
-    logger.info('SSH access command succeeded');
-    logger.debug(`Device response: ${JSON.stringify(responseData)}`);
-
-    return {
-      success: true,
-      device: device.host,
-      deviceName: device.name || device.host,
-      response: responseData,
-    };
+    return await interpretSshAccessResponse(device, response);
   } catch (error) {
     logger.error(`Error sending SSH access command: ${(error as Error).message}`);
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/**
+ * sendSshAccessSecurely sends `sshAccess` as a secure envelope over the LAN
+ * (no retry and no relayer fallback, matching the plaintext path).
+ *
+ * @param device - Device with a controller record
+ * @param record - Enrolled controller record
+ * @param request - The unchanged sshAccess request object
+ * @param deps - Transport seams
+ * @returns SSH access result
+ */
+async function sendSshAccessSecurely(
+  device: FF1Device,
+  record: ControllerRecord,
+  request: Record<string, unknown>,
+  deps: SecureTransportDeps
+): Promise<SshAccessResult> {
+  const result = await runSecureCommand(
+    {
+      device: device as FF1Device & { id: string },
+      record,
+      cmd: 'sshAccess',
+      req: request,
+      relayerFallback: false,
+      retry: false,
+    },
+    deps
+  );
+  if (!result.success) {
+    logger.error(`SSH access request failed: ${result.error}`);
+    return { success: false, error: result.error, details: result.details };
+  }
+  logger.info('SSH access command succeeded');
+  return {
+    success: true,
+    device: device.host,
+    deviceName: device.name || device.host,
+    response: result.response,
+  };
+}
+
+/**
+ * lookupTopicId reads the stored relayer topic for a device, or null.
+ *
+ * A missing device ID, a missing topic, or an unavailable keyring all degrade
+ * to "send without the header": unclaimed devices and older firmware accept
+ * that, and a device that does require proof answers 401 topic_required, which
+ * is mapped to the pairing guidance. Failing hard here would break SSH on every
+ * device the header is irrelevant to.
+ */
+function lookupTopicId(
+  device: FF1Device,
+  getTopicIdFn: (deviceId: string) => string | null
+): string | null {
+  if (!device.id) {
+    return null;
+  }
+  try {
+    return getTopicIdFn(device.id);
+  } catch (error) {
+    logger.debug(`Secure topic storage unavailable: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/** buildSshAccessHeaders returns the cast headers, adding topic proof only when known. */
+function buildSshAccessHeaders(device: FF1Device, topicId: string | null): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (device.apiKey) {
+    headers['API-KEY'] = device.apiKey;
+  }
+  if (topicId) {
+    headers[FF1_TOPIC_HEADER] = topicId;
+  }
+  return headers;
+}
+
+/** buildSshAccessBody returns the `sshAccess` cast body. */
+function buildSshAccessBody(
+  enabled: boolean,
+  publicKey: string | undefined,
+  ttlSeconds: number | undefined
+): { command: 'sshAccess'; request: Record<string, unknown> } {
+  const request: Record<string, unknown> = { enabled };
+  if (publicKey && publicKey.trim()) {
+    request.publicKey = publicKey.trim();
+  }
+  if (typeof ttlSeconds === 'number') {
+    request.ttlSeconds = ttlSeconds;
+  }
+  return { command: 'sshAccess', request };
+}
+
+/** interpretSshAccessResponse maps the device HTTP response onto an SshAccessResult. */
+async function interpretSshAccessResponse(
+  device: FF1Device,
+  response: Response
+): Promise<SshAccessResult> {
+  if (!response.ok) {
+    const errorText = await response.text();
+    logger.error(`SSH access request failed: ${response.status} ${response.statusText}`);
+    logger.debug(`Error details: ${errorText}`);
+    if (isTopicRequired(response.status, errorText)) {
+      return { success: false, error: topicRequiredMessage(device), details: errorText };
+    }
     return {
       success: false,
-      error: (error as Error).message,
+      error: `Device returned error ${response.status}: ${response.statusText}`,
+      details: errorText,
     };
   }
+
+  const responseData = (await response.json()) as Record<string, unknown>;
+  logger.info('SSH access command succeeded');
+  logger.debug(`Device response: ${JSON.stringify(responseData)}`);
+  return {
+    success: true,
+    device: device.host,
+    deviceName: device.name || device.host,
+    response: responseData,
+  };
+}
+
+/** isTopicRequired reports whether a device rejection is the topic-proof 401. */
+function isTopicRequired(status: number, body: string): boolean {
+  if (status !== 401) {
+    return false;
+  }
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: unknown } };
+    return parsed?.error?.code === TOPIC_REQUIRED_CODE;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * topicRequiredMessage tells the user how to pair the CLI for this device.
+ *
+ * The same guidance covers "never paired" and "stored topic is stale" (the
+ * device rotated its topic): pairing again replaces the keyring entry. A device
+ * without a stable ID cannot be paired, so it is told to re-add first.
+ */
+function topicRequiredMessage(device: FF1Device): string {
+  const label = device.name || device.host;
+  const pairCommand = `ff-cli device pair ${quoteArg(label)}`;
+  const base = `This FF1 requires ff-cli to be paired before SSH access can be changed.`;
+  // Securing first makes the pairing an owner grant, which keeps working once
+  // the FF1 no longer has a relayer topic (feral-file#3551 relay v2).
+  const secure = `In the Feral File app, choose "Secure this FF1" for this device if it is offered`;
+  if (!device.id) {
+    return `${base} Re-add the device with its ID (ff-cli device add --id <FF1 device ID>). ${secure}, then run \`${pairCommand}\` and choose "Pair with ff-cli".`;
+  }
+  return `${base} ${secure}, then run \`${pairCommand}\` and choose "Pair with ff-cli", then retry.`;
+}
+
+/** quoteArg double-quotes a shell argument that contains whitespace or quotes. */
+function quoteArg(value: string): string {
+  return /[\s"'$`\\]/.test(value) ? JSON.stringify(value) : value;
 }
