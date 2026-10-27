@@ -1,0 +1,30 @@
+{
+  "name": "registration-owner-expiry",
+  "kind": "registration",
+  "description": "An owner role with expiresAt.",
+  "now": 1767225600,
+  "controller": "stranger",
+  "qr": "ff1-ctl:1|7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9|BKPkQNZYTuUJegdV7CUkLmlhJOFYP5HtrFgyQ0zRdH9TmxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY|sXGZrXnWLFvKOrRY_-GqMHExtwH_30xLBFC54u6A67k|LDeOvUQyvO0Dz9_-sScFFr6zm3aN07LPxz8kRpI_DQg|v4Ix8k1W_PVXPvGxKNDbQ8zJ6roWKFIVTwzZYwD-z1g|L_JV6u33ftKNz3GLr9Ii9TyDFx1QgiUBkyQVCu2RgCk|DKGaaktvRLMK0QPPdvtL_g|other|Stranger",
+  "minterKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "o-RA1lhO5Ql6B1XsJSQuaWEk4Vg_ke2sWDJDTNF0f1M",
+    "y": "mxGdF3qrhlvwLYIUYsoNSie_yZbFhPEuW8AYj-3fnpY",
+    "d": "YF-PJxAeuoPkTb5FkvSjKXQm_Ty3Xy95ol_JSh3kwf4"
+  },
+  "channelId": "7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9",
+  "ps": "DKGaaktvRLMK0QPPdvtL_g",
+  "ownerEphemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "869SkTtfPaMUlNl1jARUj3nNWproyuuda-84leSJiH8",
+    "y": "Qdx9eOGn8qHEYYpdSnlx3CTgIxuG1WX1OSgUJcF3_gU",
+    "d": "PV_oo50TkPrO-pqdJ5N8cCCzzOWH8SLV3DJijuGlFiw"
+  },
+  "iv": "jGw3FDo1MIZ3MzL9",
+  "plaintext": "{\"v\":1,\"type\":\"ff1_controller_registration\",\"channelId\":\"7b0d6e4a-2f51-4c8e-9a43-a48fcc56c5d9\",\"ps\":\"DKGaaktvRLMK0QPPdvtL_g\",\"ctl\":\"eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q\",\"outcome\":\"approved\",\"profile\":{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"sig\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"5jpANW8lLoNYtEBXDv2jPgpWd26B0qqVN2zZwUAfw64\",\"y\":\"DT4WvFtjCo0h6XHTGMG7cmPVBYFqYFN3OYlIbUREyQg\"},\"enc\":{\"crv\":\"P-256\",\"kty\":\"EC\",\"x\":\"m_DDu8fTpmS9lGeEuKDUpSXiFQCwMEXEOtlqtFxn_b0\",\"y\":\"T-W2r4vBsiYSbwb7_C48ZPvr9yQufQZAvWQXsMpHGCU\"}},\"deviceName\":\"Living Room FF1\",\"role\":\"owner\",\"expiresAt\":1767312000,\"topicId\":\"fixture-topic-0001\"}",
+  "wire": "{\"v\":1,\"type\":\"ff1_controller_registration_sealed\",\"epk\":\"BPOvUpE7Xz2jFJTZdYwEVI95zVqa6MrrnWvvOJXkiYh_Qdx9eOGn8qHEYYpdSnlx3CTgIxuG1WX1OSgUJcF3_gU\",\"iv\":\"jGw3FDo1MIZ3MzL9\",\"ct\":\"mfkjc60ra1h5xswDdrE5ahEksaatmELp8D5Mqiu2U0Y7yr_YjQBhLZ4EbBusgyfFFUphkRIaHRj9Id4qH0aUbpEVT5v078a1zNlDyhjhBjrGVjy-xtC4w5Pi5hILWBn9gkuZgSCKBKlnm6MIi0LzfF-LqHcPDbCGNubPvzk-suMevCg2oriCMX6GWvU0mM0dWZcYsYq5_Shi0V_u6WNiRLcj1Y3keYaUQG-GdzOI-KcYKMHMxGgP2jrZjJXBs_2ICoF4uthv4VN4rdkOrmhNeQMnZOqDrBTisxHHkXAjsr1B63ZvLaweP6H3r7WFkTz9_3j8cOiC6Uf-1Mq2l6fOp3lODlZYIPBI_EpLF-zZ2v7tIpNnrZcc0DwsQ1dlv7t5vlYqGr1E_TfEXN5qKLbC4nepuwue5CeFu_LlK7TxNVGfmyMQ-GxLfK310o9fG2MY2zhhfIFryJmh81SZyge_kgcAZBH7KVNRJVAVh05hcIIKq8Mc4Vo7637zqvggj96Yh5fS2yCMgT21qjxnAOvIckTI1tlw_cEti-Q1yyu1oJ25SnDAJ1ajsxf5YWlLuwQ1C13fa9LH5KoRwR8JiOEe0_eRyNvTbVIs5qCDKuXkG5FhEjOQxlYriSVQQS29eYVtC1eTrvniyfABx7Dz7l-vx9dIU7ywQ07YdG3UWa5uQdfzPwK1WhXzkz_aUpMYrTkTXRg5mvsol1FXs9yaSy_9ElTvYgycR5HjFc08cJ0sH39KrvbauTMx2_Fhqqk46k4OOaJSjJtUTJoOOJF5htfuQjAEVPIFfMfQqrri3w7dHfqWmdgsFucYQhkwbxqKxp8Hr6EUrszPtIWxPdyuB9HCHsdh63QkwMw8z04\"}",
+  "expect": {
+    "reject": true
+  }
+}

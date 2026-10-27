@@ -1,0 +1,21 @@
+{
+  "name": "oversize",
+  "kind": "request",
+  "description": "A compact one byte over the 4 MiB limit (MaxCompactBytes); build it from compactRepeat.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "sm-M2xcDc1z3eqCg-ysKQ16sGN3jCQ-OT24bWc7xQnI"
+  },
+  "compactRepeat": {
+    "char": "A",
+    "count": 4194305
+  },
+  "expect": {
+    "public": "bad_envelope"
+  }
+}

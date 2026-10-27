@@ -1,0 +1,11 @@
+{
+  "name": "notification-ctl-mismatch",
+  "kind": "notification",
+  "description": "Header kid is the owner but the claims name another ctl.",
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLW50Zitqd2UiLCJraWQiOiJ6UW9sUHdDV1gyWEE0ZGJxTUtGdFh2ZC1QYlBqMXBha3dUSzJpWGRrWVRnIn0..4zd-iYoSWPFeFe6V.9hwT-W-eUHjViPIZrgKSRZzPOJogoNAjF-992umr8MLrE_d5732ulr6lA3Wx90Xf4jbLOET_udipP6tXKRQXsepypHuJB-9FpDjgSx0hNEM4jkZfNykOLC6RflGmHZBfh2Vc59bkYTm7Qs6iCUfmW5Ol9k6oAyUxg07lw_yPH994vkz2e-Cs1GHgKGGCy5Slxp371dKyqf0iJmWQVm0tg3fASJTivM-jApUScnZ8mty2RM3RhHy9Rsvr4xE.KZMXdNzWd4NuYYm_PDOzLA",
+  "to": "owner",
+  "nk": "_hu_QoLSfDshDGH3zR6w4gbtHyO1QIUkYEUcpFp4R68",
+  "expect": {
+    "reject": true
+  }
+}

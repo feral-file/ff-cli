@@ -1,0 +1,16 @@
+{
+  "name": "reply-wrong-rk",
+  "kind": "reply",
+  "description": "Valid reply opened with a different rk.",
+  "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..4zd-iYoSWPFeFe6V.jKQD6GA88uDxJjRTPQUabnKn0-FTH5PnkOgfLJRiVrie8nSPJtKVOzG6esXul2-hI5yVFK_PpPripsmeSLFpse42mDh5zplQ1IYP2E3sEhQ9EL4E1DIgblLRzde3cjdBdgSUPVFp13PY5zDaaGWP9f4e3pwLLg_xw0cguUqRsrH4G5yL4X7rknO6xTB_NkphWeitH3UAxtmiFbLQGFEeveeFf21Y0Jg336FT5FM2rGW4JDgjJ8UMCJcJO3lPA_jhUPr1AH724xXmcQHux4-nVryj9ty84F1dyuw0M6K6NvOpsloClMJvv3vme_QjAyPlavX-3YcXUM5Jb7Ex69fr7Pdpzn5Od__rLe_GKDD20a8X6uy_kyOgPxFmno9wgzF0M5PYS1QO1oXiKkJ7XBgUt0LHnkjH4ma4rn5_rSyalEZrw9q3em-9tq7xHk1LaokUn6iDjV8aLb8pCIc87JwOTjpVisNTXiSIEY7-eQ6S6kdcuKoL1Vy4oRn6TuD4MnfJi95NuRE6YLchJbAISDZxjO7IbEPQ3n0h4Jxxib_Qku329DRiiBBAtJcaFKflZGUWlVk0cERe.skwdAc5j1gMqENxghho8bQ",
+  "rk": "o7_jJ5BI1GQkQRBwSRWNpa2LYFcpgkgfuQ4m3b5YsXc",
+  "bind": {
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-client"
+  },
+  "expect": {
+    "reject": true
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "name": "expired",
+  "kind": "request",
+  "description": "now > exp + 30.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "O8YsUAdNZchfkgMhBXg-6h59wPk4136b9L1H7I9ijyM"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-expired\",\"ctr\":1,\"iat\":1767225480,\"exp\":1767225569,\"op\":\"cmd\",\"rk\":\"jroWYwIlWpgT2QS4fzNexfTwHDeazIfsDPArWm97vog\",\"cmd\":\"displayPlaylist\",\"req\":{\"intent\":{\"action\":\"now_display\"},\"dp1_call\":{\"dpVersion\":\"1.0.0\",\"title\":\"fixture\",\"items\":[]}}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-expired",
+    "ctr": 1,
+    "iat": 1767225480,
+    "exp": 1767225569,
+    "op": "cmd",
+    "rk": "jroWYwIlWpgT2QS4fzNexfTwHDeazIfsDPArWm97vog",
+    "cmd": "displayPlaylist",
+    "req": {
+      "intent": {
+        "action": "now_display"
+      },
+      "dp1_call": {
+        "dpVersion": "1.0.0",
+        "title": "fixture",
+        "items": []
+      }
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "plD-3S2hYWB8QxtDS_rsCMoL2khzhzn9skU8ZnJw9CQ",
+    "y": "HufpueB6PwR6bSrP-f2q2e4ZrCIYe6SrAMfqpwmIdcM",
+    "d": "SIxQjgym9wMCr_X5VjzErahGli4aIMxD8XicoGAPO_8"
+  },
+  "iv": "cTxiOlBtHQumWqu_",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1leHBpcmVkIiwiY3RyIjoxLCJpYXQiOjE3NjcyMjU0ODAsImV4cCI6MTc2NzIyNTU2OSwib3AiOiJjbWQiLCJyayI6Impyb1dZd0lsV3BnVDJRUzRmek5leGZUd0hEZWF6SWZzRFBBcldtOTd2b2ciLCJjbWQiOiJkaXNwbGF5UGxheWxpc3QiLCJyZXEiOnsiaW50ZW50Ijp7ImFjdGlvbiI6Im5vd19kaXNwbGF5In0sImRwMV9jYWxsIjp7ImRwVmVyc2lvbiI6IjEuMC4wIiwidGl0bGUiOiJmaXh0dXJlIiwiaXRlbXMiOltdfX19.Hmw2TpW-Xsx0ulaml2XFA4aue0kPfNywxkezWZAvaRh644mS-qg-1jZU7oqKzVB-j_f-aMm03kJ3_f4dMv9kPQ",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoicGxELTNTMmhZV0I4UXh0RFNfcnNDTW9MMmtoemh6bjlza1U4Wm5KdzlDUSIsInkiOiJIdWZwdWVCNlB3UjZiU3JQLWYycTJlNFpyQ0lZZTZTckFNZnFwd21JZGNNIn19..cTxiOlBtHQumWqu_.jIRZambAMLgMuYicHsl64Q-AI1drEnlLLyHIJS_5Tgjm5Y4tmqmaRxG3b7P5CiwUmxv7lohN3T5llBFQ8ILnqGDP2CD9JSW9KSGCLbWAUGN9ZTb-0bEKuHB5K-hsC29XDiSHV6nLgDHEeuB51GYXX-Wwr9Pf9llhlduqQIHLerCVes-SMl46j60ZCUU-EPOby_DcOK_11WZLuakt_YltfojCKbRf8ALBBX3ibp47d_YR2f7KP-0Q3Pq4fgLcDnWJNmnD325udt86KOYPdQIyy0phTvnFLG1PhObXD-FLsg39WppYW6i4KKOFLnGhvocDF8uwtlXQUfxCF6q49-5xO3pYBfgMArGOXUQbBEQoLRqJ61loKm-Gtn5JjXcobVF4xpjU1XrDMJpkZnvdwlDlr_TSuWO1T5vEZL3iz1YMEQY_-fqf26MGom_unQeCRZ0sSzhf1nYTYVw0tA6j3jzLC01m7EF7_SVssEom3CVavmfpZfVLBOcZlyK8N-Xuj8Rcjgrad2VqetlBQPo4EI3FcyyuwH4BG_GZYQVqcCLuaxq9VwIJ4ka-Flcff8ddzPP4g7ww6aGVJq3zA04GQghR1Jr5Au7cgQg7_swUf2Q0KrcGDZRi3tmK0lmI6rPT986qfJNmkD9lwTME5wpIgQr2zYX2mnLCgocmHdxSq6zCRVtt9UvLcksyOLTwvn4gC2r_NGUX8Y_FvRGPUl7bOSki0YoKyPwO_ugnSihqCOw56DF-pkY_1myCSzRxrRKy9maC9UNGtxTe_pWfpjYARFODR5sizPoYsomyJ3YIM_4xaHEs3HIqBr1Ff9wmBE6z6Ej8kiqb47NhhJ8fplP6_NZBRS3_xFDlqvhKkQsKd_W1VmMqkiuxTw7hj759JkNHg9AldTA415-ySEsDApdYQlCwTA.n4pGhKtfWQd8swTLiTS9lw",
+  "rk": "jroWYwIlWpgT2QS4fzNexfTwHDeazIfsDPArWm97vog",
+  "expect": {
+    "replyCode": "expired"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..lOtAu7LnKsNOThxB.08fcRYTq2-AasHI2FEfsstikZswo8fOj5FimmMkOB7hL-OYYvl6hIQBKVfoyA-C-AfzM5n8m81WaQ-9Imja_BVkpWMfgWwHgQ4_qgCg5GoxeQeT5AXfzgsFTFCRlYS0mh7WsGgy7RB1PDaBH3ppNFrVu4cnSF75YgTfA8te56v1H2SfVzXpDfD0dmOcEB6myWnYNqxa84BqaszJjoT5YtF9SLH-M_o3b3k60WYQ5Tg5QNEIo8rGODfI1duR0oNBnhc0cVi52EDItmpvcy57sHQRsIjdPmXHCDHULmC6rLNhg1Z-_ZLnEipO52YcAWMn1JxtdpFiCf4opDHjnlDR2OJnvW5Dnsjd_4SgFTf0oZKd5rPrnUjumm_qpYOKHANBfV6e6pc-jNhc98nnAkb3tV17vck7vENEnP_rSTNp6_-BCqgvbbx017bayDVVz41y3wspzr4fZWZSQIPIJfIvgTomZZQx2vcBzXIe105N1VzFo29VVythzyRNzw88W8gca5pZXi6jNE2szAC5WhBIGcgGHHsBRWDxC-CSA4sbPuEschOx90Ks-fmpCT9EeHRtqGjHYSAg5hA.75tGsesD6kESI2hIsSGWnA",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "rid": "rid-expired",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "expired"
+    }
+  }
+}
