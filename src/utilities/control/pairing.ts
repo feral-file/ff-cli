@@ -166,8 +166,10 @@ export async function probeControlSupport(
       ? 'secure'
       : 'unknown';
   }
-  const status = body.message;
-  if (!ok || !isPlainObject(status) || status.ok === false) {
+  // The LAN hub answers with the bare status object (FF OS 2.0.12 and
+  // later); a relayer-shaped `{message: status}` is accepted too.
+  const status = isPlainObject(body.message) ? body.message : body;
+  if (!ok || status.ok === false) {
     return 'unknown';
   }
   if (status.control === undefined) {

@@ -655,6 +655,20 @@ describe('pairing path selection', () => {
   }
 
   test('the LAN status picks the path', async () => {
+    // The LAN hub answers with the bare status object, as FF OS does.
+    const lan = (body: Record<string, unknown>) => statusFetch(() => json(200, body));
+    assert.equal(
+      await probeControlSupport(device, lan({ installedVersion: '2.0.12', contract: '2' })),
+      'plaintext'
+    );
+    assert.equal(
+      await probeControlSupport(device, lan({ control: { v: 1, state: 'legacy' } })),
+      'plaintext'
+    );
+    assert.equal(
+      await probeControlSupport(device, lan({ control: { v: 1, state: 'enrolled' } })),
+      'secure'
+    );
     const status = (message: Record<string, unknown>) => statusFetch(() => json(200, { message }));
     assert.equal(
       await probeControlSupport(device, status({ installedVersion: '1.0.9' })),
