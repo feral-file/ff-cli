@@ -7,7 +7,8 @@
  * ff-cli only consumes this interface. The relay v2 carrier
  * (`/v2/channels/{channelId}/connections`) is implemented by
  * relay-pairing-channel.ts, which plugs in with setPairingChannelOpener at
- * startup when a v2 endpoint is configured. Without one the default opener
+ * startup when a v2 endpoint is configured. Without one (or with invalid
+ * relayer settings) the default opener
  * fails with PairingTransportUnavailableError, so the CLI says so instead of
  * waiting on nothing.
  *
@@ -38,11 +39,11 @@ export type PairingChannelOpener = (
   signal: AbortSignal
 ) => Promise<PairingChannel>;
 
-/** PairingTransportUnavailableError is thrown when no relay pairing channel is built in. */
+/** PairingTransportUnavailableError is thrown when relay v2 is off, so no pairing channel is installed. */
 export class PairingTransportUnavailableError extends Error {
   constructor() {
     super(
-      'owner-initiated pairing needs the relay v2 pairing channel, which this build does not include yet'
+      'owner-initiated pairing needs the relay v2 pairing channel, and relay v2 is turned off (check ff1Relayer.v2Endpoint, FF1_RELAY_V2_ENDPOINT and ff1Relayer.baseUrl)'
     );
     this.name = 'PairingTransportUnavailableError';
   }
