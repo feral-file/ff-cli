@@ -1,0 +1,72 @@
+{
+  "name": "display-expired",
+  "kind": "request",
+  "description": "An expired display grant: access_revoked, as for a grant record.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "displayGrants": [
+      {
+        "name": "display",
+        "expiresAt": 1767225599
+      }
+    ],
+    "randSeed": "5pV92EONqGSNEvpcqiexwrvWMptPhmVIjj40qfGbUJQ"
+  },
+  "from": "display",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8\",\"rid\":\"rid-display-expired\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"xQp45YBhagoZLnVdTPaIwNdVIN-DH_Ol6vUG5B1XvWk\",\"cmd\":\"displayPlaylist\",\"req\":{\"intent\":{\"action\":\"now_display\"},\"dp1_call\":{\"dpVersion\":\"1.0.0\",\"title\":\"fixture\",\"items\":[]}}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+    "rid": "rid-display-expired",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "xQp45YBhagoZLnVdTPaIwNdVIN-DH_Ol6vUG5B1XvWk",
+    "cmd": "displayPlaylist",
+    "req": {
+      "intent": {
+        "action": "now_display"
+      },
+      "dp1_call": {
+        "dpVersion": "1.0.0",
+        "title": "fixture",
+        "items": []
+      }
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "4ip2_aNe9GMerdMHHZdUzXq60HB-9PbzQt2gmy30J9o",
+    "y": "L6ibB0sgl2ntsKEX4n4BhIy5Shwfi-7-m7Wvsd8E5Rs",
+    "d": "AxBudb2VZtIeoEuzXAY68UEkMX7l2Pqkkc3C9Ckzon4"
+  },
+  "iv": "Hrzq7JQ9hKRQbOfl",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlBOekh0ajltUGpPM2pmZUpHWTR1YnlXSjRvbDJmRzY2VjdCZkMycHBLQTgiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUE56SHRqOW1Qak8zamZlSkdZNHVieVdKNG9sMmZHNjZWN0JmQzJwcEtBOCIsInJpZCI6InJpZC1kaXNwbGF5LWV4cGlyZWQiLCJjdHIiOjEsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI1NjYwLCJvcCI6ImNtZCIsInJrIjoieFFwNDVZQmhhZ29aTG5WZFRQYUl3TmRWSU4tREhfT2w2dlVHNUIxWHZXayIsImNtZCI6ImRpc3BsYXlQbGF5bGlzdCIsInJlcSI6eyJpbnRlbnQiOnsiYWN0aW9uIjoibm93X2Rpc3BsYXkifSwiZHAxX2NhbGwiOnsiZHBWZXJzaW9uIjoiMS4wLjAiLCJ0aXRsZSI6ImZpeHR1cmUiLCJpdGVtcyI6W119fX0.ov90Oy2j4LPRXSuYuj1Ye-68gBkC4hsR3Yv59Il6dTnKNH9Ps6amUy7uVtIBxmjF11_8Z-NFzpOO-O6VLQdYEA",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiNGlwMl9hTmU5R01lcmRNSEhaZFV6WHE2MEhCLTlQYnpRdDJnbXkzMEo5byIsInkiOiJMNmliQjBzZ2wybnRzS0VYNG40QmhJeTVTaHdmaS03LW03V3ZzZDhFNVJzIn19..Hrzq7JQ9hKRQbOfl.tQ2Gw_5qFfzc9exXICbgWlHf1__4NU-ylwa57XL1beJAahDNpK68h6BHImvM0lrUFwDDx8sknpzvcTSUEMRSWF4tJ1s8ebzSf25PkGOJTV9ThkVSskW-e0-OAA_OwVmiDTuNEiOQnReToKFIlbHAHx8QADuA6H1lLlseHJI0wvi5IBmZyCpYPRFSYZIbDEM7XgZTrliDL4ivxh1r8tpThMy9P0v-rQ17VbKD0qJLvthn4FoVRBTzYpjVdTV-GdmYUa4ODxhW4xZJrtZOhdznO8l-2M5ZZOffPumV07M1zF9FuxvRujtQAi3D0Wi-jPYcqmVsqmYdCRIc150MTyYpkZNa9cO0XaR6QxU8KzCtiS9OQgruCqUMTjmybozqLKVdHEQzYf-UnmP6Px3-sNgM4VCoqU1sCWb-czey6SKuUIe0mcdksbOrcI9OtwA7oS1thXa_wmMWNysfLVkSerQWQpj_B_6guo0NWkQdJZD60FImvbKxLIiJ_YrHDOMGCKwOsAt6Fr5AdOl9JMpvBMhvY4kP8LSnHS68Yolol24YEQV8fzmHyAxjzEVXMtC3TYTHRWantGVAUazC8JNKP3e_wWlDBTiJok7KbR9l5JUhZUCIo4RPeOy65fhRMnTNrpxr7V5UlbtSyDwEsDmneLFlyu_qvNNjC0PWMMuml5NVvdEOrv0QWs_ev105IeFCQh1GlRjrMf4r0t7_gQKFrAVXjBQfVHl4re0kAVvRDZwEdSn4DwwhFcwCgEFZP2iWhb3_qCPkvL-k_rL7F1ol2vqLBfXBmC-ZZY8UNuTAV0UY5sR976UtXeM-HkOfsCxUUp9qUYh26ytC_of_1sDDI2mIbXnyeeCF4dJ-AJdBitaLgBOFWN8FdiA8hoky_1OFGVMyns_wV1zyEgLUJpHIOD_833qW8hRcMHeCelh-.bqJVeqCW7-miTz0WbQl41A",
+  "rk": "xQp45YBhagoZLnVdTPaIwNdVIN-DH_Ol6vUG5B1XvWk",
+  "expect": {
+    "replyCode": "access_revoked"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..h7fv8hm3k0aNRKtJ.0F_reA_Uu7TVRy0BUDRtrjPkKZaZMaUUB7RXStYvU_ytYplevGo57NrzwYL7C3Epu1WraMolPvQYeO-cIo5pgQtPKqpWEwp0N1_yKE4KJbIct-nKIL-2YIRCnhbYBGUjReMRVDitDhI3wsM00D9ru6AjIholn86vzgOLLj8mKy4oH0UGrmAr94KQtGtPYFIGoos784T3lUuX2Te1fC7BEQB6_ERHnNf9_PeBZd0AQwaMf843k5SNN5XiblovZOKHriJL9WaV5oxC-Ln54fVO7d0pJpzUTb8FjzEAjhLEY-zNF5KXs6YRGBRwWOYiKmSy5z6XfF8MWDbigZtL_EbGA2Kw9ZgRDM9U-HgqYiR-FnyO5T-w5X12Hc36-krg_92-wjibr_BwUBd6_39jcEoonh4yY_NHShj6Esdcz7uxP_-a_Kqx8OhMzokTb6SSZ2Ztqnsht_BJzaLRuM3XfBxONzbm9p1Qtq5ISudSdzSDwbF-yygTg8tWNDBxWiYS986_VGM0QCVrZEptUFQ9lV8qY3qgf8L5Kq2KFkgoAb7FoMimLpPCSx3Fm6L0eTFtCu2S85SsqyoIgj1BZv2J-zOPbIkFLJDvGfdSqEwO.jKb-q1K3u_33SW6hUBCRQg",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+      "rid": "rid-display-expired",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "access_revoked"
+    }
+  }
+}

@@ -149,7 +149,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
 - `device pair [name]` – Pair ff-cli with an FF1: on FF OS with secure control, show a QR code that an owner scans with "Add controller" in the Feral File app, then enroll with the role the owner picked (needs internet; the FF1 must already have an owner); on FF OS without secure control, display a one-time code for "Pair with ff-cli" in the app and store the relayer access it sends
   - Options: `--label <label>`, `--timeout <seconds>` (10–600, default 300), `--resume` (finish a pairing an owner already approved), `-y, --yes` (move a corrupt controller file aside without asking), `--topic-handoff` (force the one-time-code path, e.g. when the FF1 is not on this LAN)
-- `device controllers [name]` – List an FF1's paired controllers and pending requests (owner only)
+- `device controllers [name]` – List an FF1's paired controllers, Play sites with a display grant, and pending requests (owner only)
 - `device revoke <controller-id> [name]` – Revoke a controller or deny its pending request (owner only)
 - `device unpair [name]` – Revoke ff-cli's own access on the FF1 (best effort), then delete its controller keys (always asks first; `-y, --yes` skips)
 - `device rename <name> <new-name>` – Rename a configured FF1 device (host, API key, and default status are untouched)

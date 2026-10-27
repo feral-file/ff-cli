@@ -18,7 +18,13 @@ import { fetchWithTimeout } from '../../utilities/http';
 import { storeTopicId } from '../../utilities/topic-store';
 import { createPrompt, promptYesNo } from './prompt';
 import type { FF1Device } from '../../types';
-import { type DeviceProfile, controllerIdOf, labelProblem } from '../../utilities/control/codec';
+import {
+  type ControlRole,
+  type DeviceProfile,
+  type ListedPlatform,
+  controllerIdOf,
+  labelProblem,
+} from '../../utilities/control/codec';
 import { isThumbprint } from '../../utilities/control/jwk';
 import {
   type ControllerRecord,
@@ -913,16 +919,33 @@ function ownerFailure(result: SecureCommandResult): CommandFailure {
   return new CommandFailure(result.error || 'The FF1 refused the request', result.details);
 }
 
-/** ControllerRow / PendingRow are the listControllers `res` entries (§5.5). */
-interface ControllerRow {
+/**
+ * ListedRow / PendingRow are the listControllers `res` entries (§5.5). A
+ * device lists two shapes in one `controllers` array: the `grants.json`
+ * records (with `self`), then every display grant (§5.7) with
+ * `role:"display"`, `platform:"web"`, the site's origin and no `self`.
+ * ff-cli only prints display rows; it never treats one as a controller or
+ * owner.
+ */
+interface ListedRow {
   ctl: string;
-  role: string;
+  role: ControlRole;
   label: string;
-  platform: string;
+  platform: ListedPlatform;
   createdAt: number;
   expiresAt?: number;
   revokedAt?: number;
-  self: boolean;
+  /** Controller rows only. */
+  self?: boolean;
+  /** Display rows only. */
+  origin?: string;
+  originAttested?: boolean;
+}
+
+/** ListControllersResult is the listControllers `res` (§5.5). */
+export interface ListControllersResult {
+  controllers?: ListedRow[];
+  pending?: PendingRow[];
 }
 
 interface PendingRow {
@@ -937,7 +960,7 @@ function formatTime(unix: number | undefined): string {
   return unix ? new Date(unix * 1000).toISOString().replace('T', ' ').slice(0, 16) : '-';
 }
 
-function rowStatus(row: ControllerRow, nowSeconds: number): string {
+function rowStatus(row: ListedRow, nowSeconds: number): string {
   if (row.revokedAt) {
     return `revoked ${formatTime(row.revokedAt)}`;
   }
@@ -948,21 +971,30 @@ function rowStatus(row: ControllerRow, nowSeconds: number): string {
 }
 
 /**
+ * rowLabel is the LABEL cell. A display row shows the site's origin, which
+ * is what the owner approved, marked when the broker did not attest it
+ * (§5.7: a device-initiated channel only asserts the origin).
+ */
+function rowLabel(row: ListedRow): string {
+  if (row.role !== 'display' || row.origin === undefined) {
+    return row.label;
+  }
+  return row.originAttested ? row.origin : `${row.origin} (unverified)`;
+}
+
+/**
  * formatControllerTable renders a listControllers result as text lines.
  *
  * @param res - listControllers `res`
  * @param nowSeconds - Current time for expiry display
  * @returns Lines to print
  */
-export function formatControllerTable(
-  res: { controllers?: ControllerRow[]; pending?: PendingRow[] },
-  nowSeconds: number
-): string[] {
+export function formatControllerTable(res: ListControllersResult, nowSeconds: number): string[] {
   const lines: string[] = [];
   const rows = (res.controllers ?? []).map((row) => [
-    row.self ? '*' : ' ',
+    row.self === true ? '*' : ' ',
     row.role,
-    row.label,
+    rowLabel(row),
     row.platform,
     formatTime(row.createdAt),
     rowStatus(row, nowSeconds),
@@ -1013,11 +1045,19 @@ export async function runControllers(name: string | undefined): Promise<void> {
     throw ownerFailure(result);
   }
   console.log(chalk.blue(`\nControllers on ${deviceLabel(device)} (${device.id})\n`));
-  const res = (result.response ?? {}) as { controllers?: ControllerRow[]; pending?: PendingRow[] };
+  const res = (result.response ?? {}) as ListControllersResult;
   for (const line of formatControllerTable(res, Math.floor(Date.now() / 1000))) {
     console.log(`  ${line}`);
   }
-  console.log(chalk.dim('\n  * = this ff-cli\n'));
+  console.log(chalk.dim('\n  * = this ff-cli'));
+  if ((res.controllers ?? []).some((row) => row.role === 'display')) {
+    console.log(
+      chalk.dim(
+        '  display = a Play site (browser) that may only cast to this FF1; `ff-cli device revoke` removes it'
+      )
+    );
+  }
+  console.log();
 }
 
 /**

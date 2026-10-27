@@ -30,7 +30,7 @@ import {
 import {
   CONTROL_PLATFORMS,
   type ControlPlatform,
-  type ControlRole,
+  type ControllerRole,
   type ControllerKeys,
   type DeviceProfile,
   parseProfile,
@@ -135,7 +135,7 @@ export interface RegistrationResult {
   /** Present exactly when outcome is "approved", as are deviceName and role. */
   profile?: DeviceProfile;
   deviceName?: string;
-  role?: ControlRole;
+  role?: ControllerRole;
   expiresAt?: number;
   topicId?: string;
 }

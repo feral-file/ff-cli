@@ -1,0 +1,63 @@
+{
+  "name": "approveController-role-display",
+  "kind": "request",
+  "description": "The display role is never wire-assignable: approveController{role:\"display\"} is command_failed with res.error invalid_request, like any invalid role.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "randSeed": "n55hjQ3GEUXm6zI7rqjfbTLpeKW81D4J2UOcexa53YE"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-approveController-role-display\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"pW8uU1RlXYwzrgTBoq2l9MDPWBZDLDxtNL2EPmBh0-M\",\"cmd\":\"approveController\",\"req\":{\"ctl\":\"eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q\",\"role\":\"display\"}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-approveController-role-display",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "pW8uU1RlXYwzrgTBoq2l9MDPWBZDLDxtNL2EPmBh0-M",
+    "cmd": "approveController",
+    "req": {
+      "ctl": "eE1hf3Jr1DeJxkhkK2xVBTJajzC5UovDTkKvj7Vb-9Q",
+      "role": "display"
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "Kpd_aXqxOQzwO05kr50M8JLKhCk1HfQGFq2NOJkHTRY",
+    "y": "zuXZR4zHpSp-ewr_pT2bk_0CFll_NMkBdcLw_WH_j20",
+    "d": "FmzvRqkcYRQmIUcBxWk2FHevWfhNHF21UXRN2kl3q3c"
+  },
+  "iv": "pocNOBkHttqcd_cw",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1hcHByb3ZlQ29udHJvbGxlci1yb2xlLWRpc3BsYXkiLCJjdHIiOjEsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI1NjYwLCJvcCI6ImNtZCIsInJrIjoicFc4dVUxUmxYWXd6cmdUQm9xMmw5TURQV0JaRExEeHROTDJFUG1CaDAtTSIsImNtZCI6ImFwcHJvdmVDb250cm9sbGVyIiwicmVxIjp7ImN0bCI6ImVFMWhmM0pyMURlSnhraGtLMnhWQlRKYWp6QzVVb3ZEVGtLdmo3VmItOVEiLCJyb2xlIjoiZGlzcGxheSJ9fQ.DjG6t66OtAkOv9RB0Bz_7ANOa1LaOfapMmZdSPRCgzEqKKJNyO-RpgB4AvdGi0uRs3ttAIfajA9kD1G8GJH5Uw",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiS3BkX2FYcXhPUXp3TzA1a3I1ME04SkxLaENrMUhmUUdGcTJOT0prSFRSWSIsInkiOiJ6dVhaUjR6SHBTcC1ld3JfcFQyYmtfMENGbGxfTk1rQmRjTHdfV0hfajIwIn19..pocNOBkHttqcd_cw.LyiLjSgf0ezSWtNwmRN8KB-Dlt5BNlJzpEFvN_y8_iIg4oqnfoYzMrzQ4TVG4mKQw9eAybj3Ipye-l51s7Jvvhdop82G6xnotvU4N9bCy0YFfBc3K1c1Al0xaZ6zXi_VYWL7Xz8ZImjJDR9vvpN3tiLRChdMkT6o1N6Y1Nes3nvC5T-KJCWcg5SO2rAd6oHhqizGbfxy4n_oN-ubAdHwXAXdWAhmITSLWdh6dp3vJDngECkJNxbIYHamdsmBgGcVB0w5WjTS0i8xIU5Lwg5Bv_rvH5ApqLZpqRCSquM54cZHb6uDOxPh5x1FuupF_HSCO9O9QRg3egcNBA1ck1f0QL05k9TFnamrLo-72CGAP6fx_4iJbQpeQXKCiNQ7ZWO1F3Yu-_rEW_QoUpryoRivcr4ywSsclJsF8t0mFe0_W4FWdVXVJa0sfSRTXdj86xQy3OpTz0xsPjODBrBcLtssdrmJc7qd5Y1gbPaF9GzM91UwGb49xWYqnNmCSH1qSgpC3DX1Yhc7rVQMPeD5ChyjcoyMSwJ4R_RLksVps3fQAIfbL-r22ZUj43TPcQFlcjasgZq1CsZea1Bt0YUTHee8byAfSE3p7y1ouNYmSKHGpP-K9VkHsXNVx_BCnc-J3wBAWIshzQm8-nQq-Mp3dUX2wsZGsees3JZ-FIv_F0jzXePlUXAnz2EEuTdDx7KQTNASKHnHW0IyArc9DKTFAqErTiZTT7hmLFhRZfmVf6S5ka9297h2-fr5WKtMa5ikprd_QCPEiH8or1NlMEL03CvYoQ4EudSg_FlGoS1NgUTAorFZ8GIhsSrFu4pd8KhWQlLhl4_dRyqhs-1kLpZotf0-4nNRE1muLXLyRmQ4xeVJr_IBk7I8sqAGSYg6IrVsOpaQvATTMeM2Db75gGsnw_U.i48QWQUq7LfNRpRBkcVgUg",
+  "rk": "pW8uU1RlXYwzrgTBoq2l9MDPWBZDLDxtNL2EPmBh0-M",
+  "expect": {
+    "replyCode": "command_failed"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..1ovuGUmcAvVeZ_8r.LtcUPL6v2hpRC_DBYVNLuZNYxZpVXrVZIDG5_CNTjJkMpm_LvWk7zF3m1GBDS7AHASH09uDr0oSnBQ6-o-7QHdd3g8LbK86nICCK8jwaxPDbPahCkq5AekM0jMwdmrRn8VAq5nuQZoxMR-tCsofL8Tp5ZsTsoUEnF_gZCvZZ4eAT5cB1_iwhBdgrKaTSY917_f0xU167n_2c0LetM5UUpUSAZIf8IDFFnr-7ZvPXegFM2--DJADHJzz-QbJXk2kAKIGpFfUx6X6bXGlG-1Uskq5SbVHtaqalKgnL9R52KDgknDWithwGu9_WYnt0sdUV_cZKimVwMT-kvpQlB1qgbqAywcoOyzKV8-6ToxG4KCRLRv-J8kxVGboL6fz7kDFwUR1uyCqECZCAiVRrYdU-Th0WgarWcT7T6YUFDxtuHkcRcOmh6yfNMF0SUjKZOGTdPQx5W2yo53ulQ9A01KuRQXx-xpJDN6vVxhX1FMi_8wx-5mh9VqYQvIxv9mxuCh9aomxm23jJ6DseYgkmHI4nmm7geKKSW4sw2W3xdSS1GSpP6URhrRZ3S06nW5VCtAemRgv-mpB3atAFvQyvWoL5fBjTVw3wcoRBQmb-YDF0-KlIhIppEOW30vt_sW9aYY7Wp6IorWxp1z0NqJ-GmvBikyJlCm1Sb_xSFsUbCK7VpIUm5dJBRbEG0pEHJbU.OReqYisutvwQ-IaQBw2yMA",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "rid": "rid-approveController-role-display",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "command_failed",
+      "res": {
+        "error": "invalid_request"
+      }
+    }
+  }
+}

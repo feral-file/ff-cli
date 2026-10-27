@@ -1,0 +1,66 @@
+{
+  "name": "display-connect",
+  "kind": "request",
+  "description": "A display grant cannot connect (claim).",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "displayGrants": [
+      {
+        "name": "display"
+      }
+    ],
+    "randSeed": "tDKl2bDwVwpOygiej1CrGsogUHTJ7214FzuNUZmc8S0"
+  },
+  "from": "display",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8\",\"rid\":\"rid-display-connect\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"mN04gvxNHPtormCy_1qL6rqbNQYivz_6I1c40t2abXU\",\"cmd\":\"connect\",\"req\":{\"clientDevice\":{\"deviceId\":\"x\"}}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+    "rid": "rid-display-connect",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "mN04gvxNHPtormCy_1qL6rqbNQYivz_6I1c40t2abXU",
+    "cmd": "connect",
+    "req": {
+      "clientDevice": {
+        "deviceId": "x"
+      }
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "_jINfbRvn7dgW3CmyOZyrOwVr_A20S7l2gwE_NOiVco",
+    "y": "UVewlw2I-_k-ENWFaBynvW8o5Shlj99Juto7jqypjXE",
+    "d": "0Nxah_HiKHx6BWCCuWekEVpe-3L6IuOz6on5yeln3EY"
+  },
+  "iv": "swRnLyrCjxQMfIDM",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlBOekh0ajltUGpPM2pmZUpHWTR1YnlXSjRvbDJmRzY2VjdCZkMycHBLQTgiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUE56SHRqOW1Qak8zamZlSkdZNHVieVdKNG9sMmZHNjZWN0JmQzJwcEtBOCIsInJpZCI6InJpZC1kaXNwbGF5LWNvbm5lY3QiLCJjdHIiOjEsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI1NjYwLCJvcCI6ImNtZCIsInJrIjoibU4wNGd2eE5IUHRvcm1DeV8xcUw2cnFiTlFZaXZ6XzZJMWM0MHQyYWJYVSIsImNtZCI6ImNvbm5lY3QiLCJyZXEiOnsiY2xpZW50RGV2aWNlIjp7ImRldmljZUlkIjoieCJ9fX0.CYZTMXqIA_H5rIYLO7__VE6Z3h0-znPElRprvyQGAPtSL8DGg_isFq7i6Qh6jDgE2HtXlK3LN6VuZ98wAKtxVQ",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiX2pJTmZiUnZuN2RnVzNDbXlPWnlyT3dWcl9BMjBTN2wyZ3dFX05PaVZjbyIsInkiOiJVVmV3bHcySS1fay1FTldGYUJ5bnZXOG81U2hsajk5SnV0bzdqcXlwalhFIn19..swRnLyrCjxQMfIDM.QJNWTPFWFNVO_pwL16mA39IISr8auOj2E8Z_Lx5y0ws6OFO0Al66B8p9DqdiPJCfPu2NjWejmkJAgvYQi3KlAZiJF2iWhKUF3cG0anfE9og6nmpvEv24nVurO22ccw7CNZXH5CwoeroLZ-uZgN_-ORyM2FxGrwbCmvAyCjVWAIpK5yKJbgX-gy31v-t7BWj3k4s6kvjsuLycH1pD-ml_u7e37pOSj-O62Bv5WrTC4-NeR8Z0hbhxRrsPkY2JvslSdtYUondkdBRwI-3GSlCZDQr4H2G1jPEWQSF-fbzeV3-772zmHw-NszBir1QuRmggTfrXqCsz51r4Z-Iaqj50sqNFnTMLs8gh-gLkw3D-hZF2EqGUR3pbFg-hUlJCXFUxjxKMcVcRIUHyMphDKDzXV0rJ4AxMJVY0895QYX4c1VgwZ0BQAGEwLc12wfU9-XQbfOIcny55p_CyBRcoi5u1VFmubBeafkP2PWTDEFAR2nT-sOKBm-v-1aCX-s3YzvajErZDhRG66MUkmM4ImPqY7UFzcAjBFfmvOnWrH-x5EHLSqb6kQ6tYBgOrtCy8Wg-ODzJLjpnmKHCA_DJvA3bWzrJIpdttCcpH1or7go1Jto-uBins3yJBbD4o8Y-7Ak6RHE6PpIl2n2M7KvASV2P5N9HwGyF5qxg9CJRy1rHZT48Nmimx6NIcXT3HFCGZk6kk4RRv3vDSVDaatzTfvK0ZP4JLio_ET_rsDvIl_IfbTAUpudgXZADmxXisld3Uj7MdufUNL50KjE0JGSMjRLiKG1oq8-FRmNjbveqf.hTM4nsDknHZ-sKHADsLHGA",
+  "rk": "mN04gvxNHPtormCy_1qL6rqbNQYivz_6I1c40t2abXU",
+  "expect": {
+    "replyCode": "permission_denied"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..yviFySC0sOQsInit.S2hgTVfPj1xkkPQaQ8on9NpADbOSK39SDFPVZg0FBR3Pzw400F7EQjuUW3ZQnLgR70zDuj7kFpnTPE_mliLKf-Dng2yeGKW8vhoxR8NRydc1RN2erWOZyrQar67vwK0ZNVjPsdSSdyPiZNRZqMpm51McUX-OXz-dOzmwaOajaYItDFqn2pMqsEovJMp_CKnOj3E-6hwl_5MWn3vsFqaclsYV6Oh5AlboEDRiPfIN_x_wz_89essOh4HjMYCrgDbNB2mcw9MTd9iVuzfJlu02Y3ddm_T_K6ZdJRISBzTrT1rCvstnN2jU53XiTxIxnH_44BS_xa7KR1tkbHPLXGnmpzsHAZJHBN8sht1pbPPCVjcUm-PVFZ9EqpZYmWlTEB-ohEYqKsjeaalFD8520hTk5p3IROh9Bza6iw-KMfK7ygPzYXxkP2PHl2A3Gv1wGbmVeOY8TefGKGPu-uI-WO4MXPGK4JHjdnIzQKF1V-eSYziIPCHt_SbCWNITVI2GE-2Gk6hPLHJQN0jLtJxL3Uk6Ln0bQ7_zoEhHqU61zlq17yJrGKUydOzCbRo84Z2mPc1gmphqyFvVy6mS4Tk6uuv2Y3KzKMk9aYUkYz1PHO4zLQ.b33myc3oaW9rcUchkkQK9A",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+      "rid": "rid-display-connect",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "permission_denied"
+    }
+  }
+}

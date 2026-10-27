@@ -330,7 +330,11 @@ You can also manage devices independently with:
   an unfinished pairing); only `--topic-handoff` does then.
 
 - `ff-cli device controllers [name]` – List the controllers paired with an FF1
-  and any pending requests (owner only).
+  and any pending requests (owner only). On FF OS with display grants the list
+  also shows Play sites that an owner approved through mint pairing, with role
+  `display`, platform `web` and the site's origin in the LABEL column
+  (`(unverified)` when the relay did not attest it). A display row may only
+  cast to the FF1; `ff-cli device revoke` removes it like any controller.
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
 - `ff-cli device unpair [name]` – Revoke ff-cli's own access on the FF1 (best

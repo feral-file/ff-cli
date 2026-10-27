@@ -59,8 +59,16 @@ function load(dir: string): Fixture[] {
 const positive = load('positive');
 const negative = load('negative');
 
-function grantKeys(names: string[]): Record<string, Jwk> {
+/** FixtureSetup is the device state a request vector runs against (§12). */
+interface FixtureSetup {
+  grants: string[];
+  /** Display grants (§5.7); the device admits their keys like grant keys. */
+  displayGrants?: Array<{ name: string; expiresAt?: number }>;
+}
+
+function grantKeys(setup: FixtureSetup): Record<string, Jwk> {
   const out: Record<string, Jwk> = {};
+  const names = [...setup.grants, ...(setup.displayGrants ?? []).map((g) => g.name)];
   for (const name of names) {
     const c = controllers[name];
     out[c.ctl] = { kty: 'EC', crv: 'P-256', x: c.sig.x, y: c.sig.y };
@@ -99,9 +107,10 @@ describe('ff1-control-v1 fixture inventory', () => {
         kind
       );
     }
-    // 74 files at ffos-user a02cca0: keys.json + 16 positive + 57 negative.
-    assert.equal(positive.length, 16);
-    assert.equal(negative.length, 57);
+    // 85 files at ffos-user feat/3551-display-grants: keys.json + 20 positive
+    // + 64 negative (SOURCE.md).
+    assert.equal(positive.length, 20);
+    assert.equal(negative.length, 64);
   });
 
   test('the reordered-ctr vector is accepted (ctr inside the window, unseen)', async () => {
@@ -155,8 +164,7 @@ describe('approvalCode (§5.4)', () => {
 describe('positive request vectors', () => {
   for (const f of positive.filter((v) => v.kind === 'request')) {
     describe(f.name, () => {
-      const setup = f.setup as { grants: string[] };
-      const grants = grantKeys(setup.grants);
+      const grants = grantKeys(f.setup as FixtureSetup);
 
       test('the independent device opener opens the Go request and its claims match', () => {
         const opened = openRequest(f.compact as string, device.enc, grants);
@@ -309,13 +317,13 @@ describe('negative reply and notification vectors (client MUST reject)', () => {
 describe('negative request vectors', () => {
   for (const f of negative.filter((v) => v.kind === 'request')) {
     const expect = f.expect as { public?: string; replyCode?: string };
-    const setup = f.setup as { grants: string[] };
+    const setup = f.setup as FixtureSetup;
     if (expect.public) {
       test(`${f.name}: the device side answers public ${expect.public}`, () => {
         const repeat = f.compactRepeat as { char: string; count: number } | undefined;
         const compact = repeat ? repeat.char.repeat(repeat.count) : (f.compact as string);
         assert.throws(
-          () => openRequest(compact, device.enc, grantKeys(setup.grants)),
+          () => openRequest(compact, device.enc, grantKeys(setup)),
           (error: unknown) => error instanceof DevicePublicError && error.code === expect.public
         );
       });

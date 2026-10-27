@@ -1,0 +1,105 @@
+{
+  "name": "cmd-owner-listControllers-display",
+  "kind": "request",
+  "description": "listControllers on a device holding a display grant: the display row follows the grant records with role display, origin, originAttested and platform web (§5.5).",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "displayGrants": [
+      {
+        "name": "display"
+      }
+    ],
+    "randSeed": "a5YfwyX1GUm2PmOtHP9yZ1-Mghb52Pb5YshAhKNkc14"
+  },
+  "from": "owner",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg\",\"rid\":\"rid-cmd-owner-listControllers-display\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"_zcK4uYk3VpUhu3_40p-C46ftX8rCfT51-ieVKkWOto\",\"cmd\":\"listControllers\",\"req\":{}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+    "rid": "rid-cmd-owner-listControllers-display",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "_zcK4uYk3VpUhu3_40p-C46ftX8rCfT51-ieVKkWOto",
+    "cmd": "listControllers",
+    "req": {}
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "mpIkg3JS6tsPKg8sxvm7o4PwBVW89JMaQ9pvnF0qxrA",
+    "y": "ShoavDQJVQaRuwuvAHiaTW-fqoU6CIeTwNFjb5or3GM",
+    "d": "f8dGFwmGjLhd7Hr_sKvEO87pL4kuWuNxeDAhpdCyw1Q"
+  },
+  "iv": "IW_3wpat7l9jflcb",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6InpRb2xQd0NXWDJYQTRkYnFNS0Z0WHZkLVBiUGoxcGFrd1RLMmlYZGtZVGciLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoielFvbFB3Q1dYMlhBNGRicU1LRnRYdmQtUGJQajFwYWt3VEsyaVhka1lUZyIsInJpZCI6InJpZC1jbWQtb3duZXItbGlzdENvbnRyb2xsZXJzLWRpc3BsYXkiLCJjdHIiOjEsImlhdCI6MTc2NzIyNTYwMCwiZXhwIjoxNzY3MjI1NjYwLCJvcCI6ImNtZCIsInJrIjoiX3pjSzR1WWszVnBVaHUzXzQwcC1DNDZmdFg4ckNmVDUxLWllVktrV090byIsImNtZCI6Imxpc3RDb250cm9sbGVycyIsInJlcSI6e319.L-IdXi32WN3NYcq8ePvk4vv-DImVRasXpoNh1bjbr67FK-udzOtWfXJhVWp_EF2h13ixdazXfPxVR2-vXTN_Mg",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoibXBJa2czSlM2dHNQS2c4c3h2bTdvNFB3QlZXODlKTWFROXB2bkYwcXhyQSIsInkiOiJTaG9hdkRRSlZRYVJ1d3V2QUhpYVRXLWZxb1U2Q0llVHdORmpiNW9yM0dNIn19..IW_3wpat7l9jflcb.QhgmyuXBCXMN4zzl_-_7y6-kXgm0r1HnQYuGX76vWCtc48wMTHn6UFTZG9mwG7yfkRrb3du5qNlWgPUcw8kfluj23tLzM_V9aq2hn27w64uTPHxMArJjpVlBHuiOHVxNHIdOwVDkz3QZsXdDY70G3gnmvDJsRLOjYYxVoE7dSjB0F8FlsH77m04ADqpPoYwdottP-VZn4I0bXPhnZGEuqYja05IlTqYEZq4teOHqOqbbbNcBcH-qqwUN116xeNaGY94tuy7cu7W2MnZtnSjGSghwJPN9Qz1V_omw21qUIjjJcsYe2OHyVOV8FaOj7x4ePHdr5cfXYscqQTJFMandtYZliYUmDydiJ-bM0wuc94ITHKZQ0zcnZ-5rzaP75lY_EK7nafZZssID6CNlKZV6Mk7vRVNJwgM7Krj2PDkM0UJpVf7zj-ueT10KE2bPyiuXx9Y3742DPVZRwI1KoeTdCu_3IKYpZ8hYmBnGO0mC57Jtek_ruZdcu2CxtwKvJmVPf7IG-_2B_MddC9NDGrBbLIBQ4qlPJ3xK078Bl1La-f0SEdal6AF6Fl7IC1X59TrJ78DJksSYqZi6Pw6euLahU-2qK8kZc4hFGbXjDal0BvAAB26VBUw2NibO-i9xd9eqBG_aQysGU8RlPDjShL6kzjX-saq9rxYc_XpjSquFX6RchyPdt0uWU6Ew4M57-sG0Fc1wtRcGUGRqoZbMYMKafxXJNceJiOOuNNmfE5no0BwL6mpEZ9eHpHCDKP5fN1KZ6DDoLkmvOuPgejh64tVI6KJwCkE.JvLJW4uaa4egdv8yUbcvBg",
+  "rk": "_zcK4uYk3VpUhu3_40p-C46ftX8rCfT51-ieVKkWOto",
+  "expect": {
+    "command": "listControllers",
+    "principal": {
+      "controllerId": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "role": "owner"
+    },
+    "replyOk": true
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..to0KgcwGqTpH05ue.inTveIhzmULOpPUuepiIQqMonmUSOwgQSyOxgNB1jqBAbWbKCwUgTmS9PXJdEOu7ZMwWJp8_8iiVcxWbe23l9FU_RASLjOTaq5sHRkRqxcFUBhUSvrOlzmEHRXa6c4Kz06jcYcgENby4w9Q4GtMBCWn9Wb-cYxwrd_j4x7xeXagxgXBYQzR2G1dJloiiqOKUoudBGHLegTHzAuhd3hm-18ifOxwyKdZky-S6LmdlGNoXVzamFeJZkWzu8r5lrHc-DS8AtmEH5GoVdy-mjvQmYDXoObiro2w6MlTt626MfPAGYlSfBeCY5ivXEblnn-B-akijS7vLODFrSOjV_oyc6LffFJ__nE5ze5ZUKrUNxE6x5wTRMzCip97YGzG4F-jiNtfE0z2W6pm-FblXLczq7ZFo3AKh39QKfIu15i2jNiOePpqSX81ROVgIJSrbIEN2giZwEYO_aVyNT7KBhzz7yyruecGJLCaPSy74m3AClTANlBqaVnZNfSyc3V_MckeeWK-q0Xhwl6KFGFDQZlRjJuhpRpxkdN0ZmX8KqFtKJ7L_trgzuVSQ97ln4zLnIMmEyHvT-tQJpHf5dTGTZ5INaAclGE8FuzwgdnMSPj5aiNx7xEe5YEiUfmhZNYe95ciFyQSln3Lg8UkyyfLxKSYbVacFVHxld7JjAyNKV2-HTlueJjzXF8k8ezTEr4i40wootjGRtsBgYokyOIFHyhP88onmRzPqV-7k3iKKZXRuE6DUAy71Ji4ThfiruPZJ4mC6OGQtDUKS5xdXOZBTvwmv_PVUcHyK0lq4Atrtr3OkZ-OTxgYqi6D4bLvNm8oOKd2c-I5D2Oev5mrXQz0_hn4QK_sW0DjK4xfLwtvyJA0boETQ7V-9j1MRytYJi20pYrTALBHythkSyVyKvvx6UYVT5CXzOD9pu1CHog-nIpfgR28on2FHTWwkXf6IVnJNk_o_jnI2xSgY1piwzEaJxxPsKB7TDLTcIY2Hjt95S_-MjfM6FOLHY2__v21ggCXWc7u-H9yE7q-QnReh1zZAoVTBkX0lYgExhCt2Vha4gfur5XmZl5LH1nm0-M5aHje9IUNvCTP5obkRdovbI6UYWY56mOGN_cWEOU7yybbyda-WI9zplCu2o7oH-hn6mzmmA4dMJTG3rttjlpnuvqMr-pLqkuGgiF1hACYQHKBJVNmHEVDlaAlSxSkrGTooSpOQA2gPQVpK_K2jBcXN4c72f2casrFv4iTKImOGCT9s1qS1RfQPfg8KnMZw1rW0_gFzBmDSRJCpKF1DtAMXzQUktz5O7xiruXmVHkS9fzEzt4p9xVEOUXJvvgy6f5BMdWCsBiH5I6gcJ979U6EwwvZCBcdRfp8KHGy2TenYf8ZrNjKu92dq49p68Gmcr94Rz70PhACmY6zaw4__l8ibsktx4t3YWGNbE0dfiKwuwyr2mu3v1trC9XaEcUgnoyjjTTqdvAqr-Bc55WoNYbvg7RODCjP_VwsSeUKRlUhCepiXSeLzqYICrBUamtdKN-TV_hOZUKh9C-vGF6J39x3ZkWIrVPtXvPcYzZiNDcLYh_YTv9ULoPCMFMGng_JxiWvqu-amQrMK5PuWed79gzuE9HGhU3s2MonovEc3fiXecntsLJwxYPCl-EDE2ndSAWa9CCnNIxEZ3HaFV0J9rPC0pZq3TPJ7yTGD6sy4-4T0nBVCxZ3CJ2b1r-onGIFvAtYaGalI7Aq2Fsyhcx6mFdU2Dhkoyk22AOXNcaNEYUc15tJxTJsrlrBocidwipwapQDGNiIAOsCSxghrPteMA549dUs3-Y0ipsddWhOmr3MK3wRcnpjEV2gqDaSNsq4.OxkZWok4VoIVRTmAfX1DEA",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+      "rid": "rid-cmd-owner-listControllers-display",
+      "iat": 1767225600,
+      "ok": true,
+      "res": {
+        "controllers": [
+          {
+            "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
+            "role": "owner",
+            "label": "Owner phone",
+            "platform": "ios",
+            "createdAt": 1767222000,
+            "self": true
+          },
+          {
+            "ctl": "S2bVJ1g34d-xMnRk7wxaTtosj_vyZVYY4ywk4R4UEDY",
+            "role": "controller",
+            "label": "Living room tablet",
+            "platform": "android",
+            "createdAt": 1767222000,
+            "self": false
+          },
+          {
+            "ctl": "Ym85kZeVg6Js-1lNmtDsLzhA8GdEZ2Nt5lEXOBGNCg0",
+            "role": "controller",
+            "label": "Old laptop",
+            "platform": "cli",
+            "createdAt": 1767222000,
+            "revokedAt": 1767225000,
+            "self": false
+          },
+          {
+            "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+            "role": "display",
+            "label": "artblocks.io",
+            "origin": "https://artblocks.io",
+            "originAttested": true,
+            "platform": "web",
+            "createdAt": 1767225600
+          }
+        ],
+        "pending": []
+      }
+    }
+  }
+}
