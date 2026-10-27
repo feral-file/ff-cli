@@ -81,7 +81,7 @@ The current code and internal context imply these practical goals:
 
 ### Current behavior
 
-The current implementation still depends on Feral File-operated infrastructure for some data retrieval paths, including the hardcoded production indexer endpoint used for NFT lookup.
+Token data for `find`, `build`, and `enrich` comes from the Feral File indexer (ff-indexer-v2) by default. Raster's public GraphQL API is selectable with `tokenSource: "raster"` and is under evaluation as the replacement (feral-file#3576); it stays opt-in until the data bugs reported on feral-file#3546 are fixed. One token source answers a whole run; there is no fallback between them.
 
 ### Design direction
 
@@ -105,7 +105,7 @@ Based on the code today, the CLI is responsible for:
 - resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
 - running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
 - supporting a deterministic build path from structured JSON (`build`)
-- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant), including inline Ref Manifests on items that carry indexer metadata
+- building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant), including inline Ref Manifests on items that carry token-source metadata
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
 - publishing validated playlists to configured feed servers
@@ -165,13 +165,17 @@ Today the CLI groups into these workflow areas:
 - `find`
 - `build`
 
-An item's `provenance.contract` is read from the indexer row, not inferred. Each
-row carries the token's own `standard` (`erc721`, `erc1155`, `fa2`) and its
-CAIP-2 `chain` (`eip155:1`, `tezos:mainnet`), and both are written through. The
-client's own detection sees a chain name and an address and nothing else, so it
-answers `erc721` for every EVM contract; it applies only to rows that carry no
-standard, and to the CID a lookup by coordinate must build before the indexer
-has been asked anything. A row naming a chain DP-1 has no word for is recorded
+An item's `provenance.contract` is read from the token source's row, not
+inferred. Each row carries the token's own standard and its CAIP-2 `chain`
+(`eip155:1`, `tezos:NetXdQprcVkpaWU` on Raster, `tezos:mainnet` on the
+indexer), and both are written through. Raster standards DP-1 cannot name
+(`CRYPTOPUNKS`, `ORDINAL_INSCRIPTION`) are written as `other`. Raster
+lowercases EVM addresses; they are checksummed before use, so an item's `id`
+(derived from the address and token id) and its provenance are the same
+whichever source built it. The client's own detection sees a chain name and an
+address and nothing else, so it answers `erc721` for every EVM contract; it
+applies only to rows that carry no standard, and to the CID a lookup by
+coordinate must build before the indexer has been asked anything. A row naming a chain DP-1 has no word for is recorded
 as `other` — the item is still built, and the client's guess is never
 substituted for a chain the row already named.
 
@@ -290,13 +294,13 @@ and nothing else. `enrich` is the repair path for those.
 - It writes `inlineManifest` and nothing else. `source`, `duration`, `title`,
   `id`, and `display` are curator decisions and survive untouched even when the
   indexer disagrees with them.
-- An item the indexer cannot resolve is reported, never synthesized. The same
+- An item the token source cannot resolve is reported, never synthesized. The same
   rule the manifest mapping follows applies here: the CLI does not invent fields
   it cannot substantiate, and an invented artist line inside a signed document
   is worse than an absent one.
-- DP-1 names the EVM family `evm`; the FF indexer names it `ethereum`. Enrich
-  translates between the two. Unlisted chain names pass through so the indexer
-  decides what it supports.
+- DP-1 names the EVM family `evm`; the token sources name it `ethereum`. Enrich
+  translates between the two. Unlisted chain names pass through so the token
+  source decides what it supports.
 - Enrichment changes the document, so both the `signatures[]` envelope and the
   legacy flat `signature` are removed and the playlist must be re-signed.
   Leaving a stale envelope in place would produce a file that fails
@@ -308,9 +312,10 @@ and nothing else. `enrich` is the repair path for those.
   discards the integrity hash the remote manifest is checked against. That
   conversion, if ever wanted, belongs behind its own flag.
 - Enrichment looks each distinct coordinate up once, however many items share
-  it. A token the indexer has not seen triggers an indexing job and a poll that
-  can take minutes, and a playlist that repeats a work would otherwise submit
-  that job once per appearance.
+  it. On Raster the lookups are batched; on the indexer a token it
+  has not seen triggers an indexing job and a poll that can take minutes, and a
+  playlist that repeats a work would otherwise submit that job once per
+  appearance.
 - Overriding an item's title changes the manifest's content, so it also changes
   the manifest's `id`. The indexer derives that id from the token coordinate,
   so two items of one artwork receive the same one; leaving it alone while
@@ -358,7 +363,8 @@ and nothing else. `enrich` is the repair path for those.
   nor the response can say which network is meant. Ethereum is chosen because
   it is the only EVM network this client can reach — `buildTokenCID` maps
   ethereum to `eip155:1` and tezos to `tezos:mainnet` and throws for anything
-  else. The residual risk is narrow: an L2 work whose address and token id also
+  else, and the Raster token source likewise builds Ethereum and Tezos mainnet
+  only. The residual risk is narrow: an L2 work whose address and token id also
   exist on Ethereum would take the Ethereum work's metadata. The command
   is the operator's to make: `--assume-ethereum` asserts it, and without that
   flag `evm` items are skipped with a reason that names the flag. The warning

@@ -18,7 +18,6 @@ process.emitWarning = function (warning: unknown, type?: WarningType, ctor?: unk
   return originalEmitWarning.apply(this, [warning as never, type as never, ctor as never]);
 } as unknown as typeof process.emitWarning;
 
-import { getConfig } from './config';
 import type {
   Requirement,
   PlaylistSettings,
@@ -30,6 +29,18 @@ import type {
 // Lazy load utilities to avoid circular dependencies
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const getUtilities = () => require('./utilities');
+
+/**
+ * REQUIREMENT_TYPES lists every requirement `build` accepts, in the order
+ * `build --help` documents them. Kept beside validateRequirements so a new
+ * branch there and this list change together.
+ */
+export const REQUIREMENT_TYPES = [
+  'build_playlist',
+  'query_address',
+  'fetch_feed',
+  'feral_file_artwork',
+] as const;
 
 /**
  * Validate and apply constraints to requirements
@@ -117,7 +128,10 @@ export function validateRequirements(requirements: Requirement[]): Requirement[]
       }
     }
 
-    throw new Error(`Requirement ${index + 1}: invalid type "${(req as { type?: string }).type}"`);
+    throw new Error(
+      `Requirement ${index + 1}: invalid type "${(req as { type?: string }).type}". ` +
+        `Valid types: ${REQUIREMENT_TYPES.join(', ')} (see ff-cli build --help).`
+    );
   });
 }
 
@@ -160,10 +174,6 @@ export async function buildPlaylistDirect(
   const playlistSettings = applyPlaylistDefaults(params.playlistSettings);
 
   const utilities = getUtilities();
-  const config = getConfig();
-
-  // Initialize utilities with config (indexer endpoint, API key, etc.)
-  utilities.initializeUtilities(config);
 
   return await utilities.buildPlaylistDirect({ requirements, playlistSettings }, options);
 }

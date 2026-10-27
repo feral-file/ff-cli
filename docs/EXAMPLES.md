@@ -261,14 +261,14 @@ the flag; without it those items are skipped rather than guessed at, because
 the wrong network returns a different artwork's metadata. A Tezos playlist
 needs no flag.
 
-Items the indexer cannot resolve are listed rather than guessed at:
+Items the token source cannot resolve are listed rather than guessed at:
 
 ```text
 Nothing to enrich
 
   Skipped 3:
     Kim Asendorf — PXL NET — no provenance.contract chain/address/tokenId to look up
-    Untitled — the indexer returned nothing for it
+    Untitled — the token source returned nothing for it
     Pre-Process — chain "evm" names a family; pass --assume-ethereum to assert the network
 ```
 

@@ -1,136 +1,165 @@
 import assert from 'node:assert/strict';
-import { afterEach, beforeEach, describe, test } from 'node:test';
+import { afterEach, describe, test } from 'node:test';
 import { createRequire } from 'node:module';
+import {
+  RASTER_CANNOT_LIST_CONTRACT,
+  TokenSourceCapabilityError,
+  type ListOptions,
+  type ResolvedToken,
+  type TokenCoordinate,
+  type TokenSource,
+} from '../src/utilities/token-source-contract';
 
 const require = createRequire(import.meta.url);
 const utilities = require('../src/utilities');
-const nftIndexer = require('../src/utilities/nft-indexer');
 
-interface IndexerToken {
-  contract_address: string;
-  token_id: string;
-}
-
-interface MockCall {
-  address: string;
-  limit: number;
-  offset: number;
-}
-
-let ownerCalls: MockCall[] = [];
-let contractCalls: Array<{ address: string; limit: number }> = [];
-
-const originalQueryTokensByOwner = nftIndexer.queryTokensByOwner;
-const originalQueryTokensByContract = nftIndexer.queryTokensByContract;
-const originalGetNFTTokenInfoBatch = nftIndexer.getNFTTokenInfoBatch;
-const originalMapIndexerDataToStandardFormat = nftIndexer.mapIndexerDataToStandardFormat;
-const originalConvertToDP1Item = nftIndexer.convertToDP1Item;
 const originalFetch = globalThis.fetch;
 
-/**
- * Build a deterministic DP1 item from minimal token input.
- *
- * @param {IndexerToken} token - Minimal token row from indexer
- * @returns {object} DP1 item used by tests
- */
-function toItem(token: IndexerToken): object {
-  return {
-    id: `item-${token.token_id}`,
-    title: `Token ${token.token_id}`,
-    source: `https://example.com/${token.token_id}.mp4`,
-    duration: 10,
-    license: 'cc0',
-  };
-}
-
-beforeEach(() => {
-  ownerCalls = [];
-  contractCalls = [];
-
-  nftIndexer.queryTokensByOwner = async (address: string, limit: number, offset = 0) => {
-    ownerCalls.push({ address, limit, offset });
-    return {
-      success: true,
-      tokens: [],
-    };
-  };
-
-  nftIndexer.queryTokensByContract = async (address: string, limit: number) => {
-    contractCalls.push({ address, limit });
-    return {
-      success: true,
-      tokens: [
-        {
-          contract_address: address,
-          token_id: '101',
-        },
-      ],
-    };
-  };
-
-  nftIndexer.mapIndexerDataToStandardFormat = (token: IndexerToken) => ({
-    success: true,
-    token,
-  });
-
-  nftIndexer.convertToDP1Item = (mapped: { token: IndexerToken }) => ({
-    success: true,
-    item: toItem(mapped.token),
-  });
-
-  nftIndexer.getNFTTokenInfoBatch = async (
-    tokens: Array<{ contractAddress: string; tokenId: string }>,
-    duration: number
-  ) =>
-    tokens.map((token) => ({
-      ...toItem({ contract_address: token.contractAddress, token_id: token.tokenId }),
-      duration,
-    }));
-});
-
 afterEach(() => {
-  nftIndexer.queryTokensByOwner = originalQueryTokensByOwner;
-  nftIndexer.queryTokensByContract = originalQueryTokensByContract;
-  nftIndexer.getNFTTokenInfoBatch = originalGetNFTTokenInfoBatch;
-  nftIndexer.mapIndexerDataToStandardFormat = originalMapIndexerDataToStandardFormat;
-  nftIndexer.convertToDP1Item = originalConvertToDP1Item;
   globalThis.fetch = originalFetch;
 });
 
+/** resolved builds a successful result whose item id names the token. */
+function resolved(coordinate: TokenCoordinate): ResolvedToken {
+  return {
+    success: true,
+    coordinate,
+    item: { id: `item-${coordinate.tokenId}`, source: `https://example.com/${coordinate.tokenId}` },
+    still: '',
+  };
+}
+
+interface FakeCalls {
+  owner: Array<{ address: string; opts: ListOptions }>;
+  contract: Array<{ address: string; opts: ListOptions }>;
+  resolve: TokenCoordinate[][];
+}
+
+/**
+ * fakeSource records every call. `ownerTokens` are what the owner listing
+ * returns; `canListContracts` false makes it behave like Raster.
+ */
+function fakeSource(
+  name: 'raster' | 'indexer',
+  options: { ownerTokens?: string[]; canListContracts: boolean }
+): { source: TokenSource; calls: FakeCalls } {
+  const calls: FakeCalls = { owner: [], contract: [], resolve: [] };
+  const toResult = (address: string) => (tokenId: string) =>
+    resolved({ chain: 'ethereum', contractAddress: address, tokenId });
+  const source: TokenSource = {
+    name,
+    async resolveTokens(coords) {
+      calls.resolve.push(coords);
+      return coords.map(resolved);
+    },
+    async listTokensByOwner(address, opts) {
+      calls.owner.push({ address, opts });
+      return { results: (options.ownerTokens ?? []).map(toResult(address)), skippedUnsupported: 0 };
+    },
+    async listTokensByContract(address, opts) {
+      calls.contract.push({ address, opts });
+      if (!options.canListContracts) {
+        throw new TokenSourceCapabilityError(RASTER_CANNOT_LIST_CONTRACT);
+      }
+      return { results: [toResult(address)('101')], skippedUnsupported: 0 };
+    },
+  };
+  return { source, calls };
+}
+
+const EVM_ADDRESS = '0xaeE022552B539dB18297D7481b6D547C622488B3';
+
 describe('queryRequirement owner-to-contract fallback', () => {
-  test('falls back to contract lookup for EVM addresses with no owned tokens', async () => {
-    const address = '0xaeE022552B539dB18297D7481b6D547C622488B3';
-
+  test('falls back to a contract listing for EVM addresses with no owned tokens', async () => {
+    const { source, calls } = fakeSource('indexer', { canListContracts: true });
     const items = await utilities.queryRequirement(
-      {
-        type: 'query_address',
-        ownerAddress: address,
-        quantity: 10,
-      },
-      10
+      { type: 'query_address', ownerAddress: EVM_ADDRESS, quantity: 10 },
+      10,
+      source
     );
-
-    assert.equal(ownerCalls.length, 1);
-    assert.equal(ownerCalls[0].address, address);
-    assert.equal(contractCalls.length, 1);
-    assert.equal(contractCalls[0].address, address);
-    assert.equal(items.length, 1);
-    assert.equal(items[0].id, 'item-101');
+    assert.equal(calls.owner.length, 1);
+    assert.deepEqual(calls.owner[0].opts, { limit: 10, duration: 10 });
+    assert.equal(calls.contract.length, 1);
+    assert.equal(calls.contract[0].address, EVM_ADDRESS);
+    assert.deepEqual(
+      items.map((item: { id: string }) => item.id),
+      ['item-101']
+    );
   });
 
-  test('does not run contract fallback for non-EVM addresses', async () => {
+  test('does not run the contract fallback for non-EVM addresses', async () => {
+    const { source, calls } = fakeSource('indexer', { canListContracts: true });
+    const items = await utilities.queryRequirement(
+      { type: 'query_address', ownerAddress: 'tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb', quantity: 10 },
+      10,
+      source
+    );
+    assert.equal(calls.owner.length, 1);
+    assert.equal(calls.contract.length, 0);
+    assert.deepEqual(items, []);
+  });
+
+  test('on a source that cannot list contracts, the fallback ends empty instead of failing', async () => {
+    const { source, calls } = fakeSource('raster', { canListContracts: false });
+    const items = await utilities.queryRequirement(
+      { type: 'query_address', ownerAddress: EVM_ADDRESS, quantity: 10 },
+      10,
+      source
+    );
+    assert.equal(calls.contract.length, 1);
+    assert.deepEqual(items, []);
+  });
+
+  test('quantity "all" walks the whole wallet', async () => {
+    const { source, calls } = fakeSource('raster', {
+      ownerTokens: ['1', '2'],
+      canListContracts: false,
+    });
+    const items = await utilities.queryRequirement(
+      { type: 'query_address', ownerAddress: EVM_ADDRESS, quantity: 'all' },
+      undefined,
+      source
+    );
+    assert.equal(calls.owner[0].opts.limit, 'all');
+    assert.equal(items.length, 2);
+    assert.equal(calls.contract.length, 0);
+  });
+});
+
+describe('queryRequirement build_playlist', () => {
+  test('contract-only input fails with the reason on a source that cannot list contracts', async () => {
+    const { source, calls } = fakeSource('raster', { canListContracts: false });
+    await assert.rejects(
+      () =>
+        utilities.queryRequirement(
+          { type: 'build_playlist', blockchain: 'ethereum', contractAddress: EVM_ADDRESS },
+          10,
+          source
+        ),
+      (error: unknown) =>
+        error instanceof TokenSourceCapabilityError && error.message === RASTER_CANNOT_LIST_CONTRACT
+    );
+    assert.equal(calls.owner.length, 0);
+  });
+
+  test('token ids are resolved as coordinates in one call', async () => {
+    const { source, calls } = fakeSource('raster', { canListContracts: false });
     const items = await utilities.queryRequirement(
       {
-        type: 'query_address',
-        ownerAddress: 'tz1VSUr8wwNhLAzempoch5d6hLRiTh8Cjcjb',
-        quantity: 10,
+        type: 'build_playlist',
+        blockchain: 'ethereum',
+        contractAddress: EVM_ADDRESS,
+        tokenIds: ['7', '8'],
       },
-      10
+      undefined,
+      source
     );
-
-    assert.equal(ownerCalls.length, 1);
-    assert.equal(contractCalls.length, 0);
-    assert.deepEqual(items, []);
+    assert.equal(calls.resolve.length, 1);
+    assert.deepEqual(
+      calls.resolve[0].map((coord) => coord.tokenId),
+      ['7', '8']
+    );
+    assert.equal(items.length, 2);
   });
 });
 
@@ -153,13 +182,12 @@ describe('queryRequirement Feral File artwork', () => {
         }),
       } as Response;
     };
+    const { source } = fakeSource('raster', { canListContracts: false });
 
     const items = await utilities.queryRequirement(
-      {
-        type: 'feral_file_artwork',
-        artworkId: 'public-artwork-id',
-      },
-      10
+      { type: 'feral_file_artwork', artworkId: 'public-artwork-id' },
+      10,
+      source
     );
 
     assert.deepEqual(calls, ['https://feralfile.com/api/artworks/public-artwork-id']);
@@ -168,5 +196,63 @@ describe('queryRequirement Feral File artwork', () => {
       items[0].id,
       'item-92419109143972345096969611651362597777388673613154609693448331487805624917924'
     );
+  });
+});
+
+describe('queryRequirement named token ids', () => {
+  test('reports how many named tokens did not resolve', async () => {
+    // A source that resolves only token 1 of the two named.
+    const source = {
+      name: 'indexer',
+      async resolveTokens(coords: TokenCoordinate[]) {
+        return coords.map((coordinate) =>
+          coordinate.tokenId === '1'
+            ? resolved(coordinate)
+            : { success: false, coordinate, error: 'not found' }
+        );
+      },
+    } as unknown as TokenSource;
+    const report: { missing?: number; wanted?: number } = {};
+    const items = await utilities.queryRequirement(
+      {
+        type: 'build_playlist',
+        blockchain: 'ethereum',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        tokenIds: ['1', '2'],
+      },
+      undefined,
+      source,
+      report
+    );
+    assert.equal(items.length, 1);
+    assert.deepEqual(report, { missing: 1, wanted: 2 });
+  });
+
+  test('a quantity cap does not hide a named token that failed', async () => {
+    const source = {
+      name: 'indexer',
+      async resolveTokens(coords: TokenCoordinate[]) {
+        return coords.map((coordinate) =>
+          coordinate.tokenId === '3'
+            ? { success: false, coordinate, error: 'not found' }
+            : resolved(coordinate)
+        );
+      },
+    } as unknown as TokenSource;
+    const report: { missing?: number; wanted?: number } = {};
+    const items = await utilities.queryRequirement(
+      {
+        type: 'build_playlist',
+        blockchain: 'ethereum',
+        contractAddress: '0x1111111111111111111111111111111111111111',
+        tokenIds: ['1', '2', '3'],
+        quantity: 2,
+      },
+      undefined,
+      source,
+      report
+    );
+    assert.equal(items.length, 2);
+    assert.deepEqual(report, { missing: 1, wanted: 3 });
   });
 });

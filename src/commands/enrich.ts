@@ -18,8 +18,7 @@ import { validatePlaylist } from '../utilities/playlist-verifier';
 // that was never unsafe. The signer's direct-write path needs the opposite predicate; see same-file.ts.
 import { isSameEntryForRename } from '../utilities/same-file';
 
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { resolveTokenBatch } = require('../utilities/nft-indexer');
+import { getTokenSource, isResolved } from '../utilities/token-source';
 
 interface EnrichOptions {
   output?: string;
@@ -62,8 +61,8 @@ export interface AtomicWriteFs {
  * disk.
  *
  * The default destination is the input file, and a plain write truncates it
- * first. Enrichment runs after a lookup that can take minutes while the indexer
- * warms tokens, so the window between truncation and a complete write is a
+ * first. Enrichment runs after a network lookup that can be slow (minutes on
+ * the indexer, which warms unseen tokens), so the window between truncation and a complete write is a
  * window in which an interruption, a full disk, or an I/O error leaves the
  * curator with an empty or half-written playlist and no copy of what they had.
  * A rename within the same directory is atomic, so the original file survives
@@ -355,10 +354,10 @@ const SKIP_COPY: Record<SkippedItem['reason'], string> = {
   'external-ref': 'carries an external ref, which outranks an inline manifest',
   'no-provenance': 'no provenance.contract chain/address/tokenId to look up',
   'ambiguous-chain': 'chain "evm" names a family; pass --assume-ethereum to assert the network',
-  // The indexer drops unresolved tokens from its response rather than
-  // reporting why, so there is no per-item reason to relay here.
-  'not-indexed': 'the indexer returned nothing for it',
-  'no-metadata': 'the indexer resolved it but has no artist, description, or still image',
+  // The lookup adapter keeps only resolved tokens, so there is no per-item
+  // reason to relay here.
+  'not-indexed': 'the token source returned nothing for it',
+  'no-metadata': 'the token source resolved it but has no artist, description, or still image',
 };
 
 export const enrichCommand = new Command('enrich')
@@ -389,7 +388,7 @@ export const enrichCommand = new Command('enrich')
         process.exit(1);
       }
 
-      // Validate before spending minutes on indexer lookups for a document
+      // Validate before spending time on token lookups for a document
       // that was never going to be writable.
       const before = await validatePlaylist(playlist);
       if (!before.valid) {
@@ -404,21 +403,16 @@ export const enrichCommand = new Command('enrich')
         process.stdout.write(chalk.dim(`\r  ${done}/${count} looked up...`));
       };
 
-      // resolveTokenBatch is (tokens, duration, onProgress) — the second
-      // positional is DP-1 display seconds, not the callback. Enrichment never
-      // sets duration (the curator's timing is not ours to touch), so it is
-      // passed undefined and the callback goes third. find.ts carries the same
-      // warning; getting this wrong silently returns unusable results.
-      //
-      // The raw results are used rather than getNFTTokenInfoBatch's items so
-      // the indexer's still rides beside each item: the item itself drops the
-      // still whenever it equals the indexer's chosen source, and enrichment
+      // Enrichment never sets duration (the curator's timing is not ours to
+      // touch). The raw results are used rather than bare items so the token
+      // source's still rides beside each item: the item itself drops the still
+      // whenever it equals the source the token source chose, and enrichment
       // needs it against the curator's source instead.
+      const source = getTokenSource();
       const lookup: TokenLookup = async (tokens, onProgressCallback) => {
-        const results: Array<{ success: boolean; item?: IndexerItem; still?: string }> =
-          await resolveTokenBatch(tokens, undefined, onProgressCallback);
+        const results = await source.resolveTokens(tokens, { onProgress: onProgressCallback });
         return results
-          .filter((result) => result.success && result.item)
+          .filter(isResolved)
           .map((result) => ({ ...(result.item as IndexerItem), still: result.still }));
       };
 
@@ -452,7 +446,7 @@ export const enrichCommand = new Command('enrich')
       if (shouldWrite) {
         // Re-validate the enriched candidate. An inline manifest is schema-
         // checked the same way a fetched one is (playlists extension §3.6), so
-        // a malformed manifest from the indexer must not reach the file.
+        // a malformed manifest from the token source must not reach the file.
         const after = await validatePlaylist(result.playlist);
         if (!after.valid) {
           reportInvalid('Enrichment produced an invalid playlist:', after);

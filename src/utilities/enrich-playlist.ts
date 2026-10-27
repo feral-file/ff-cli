@@ -26,6 +26,7 @@
 import { createHash } from 'node:crypto';
 
 import * as logger from '../logger';
+import type { TokenCoordinate } from './token-source-contract';
 
 /**
  * Dp1Provenance is the on-chain coordinate block DP-1 items carry. Enrichment
@@ -69,19 +70,12 @@ export interface Dp1Playlist {
   [key: string]: unknown;
 }
 
-/** TokenCoordinate is the lookup key shape the indexer client expects. */
-export interface TokenCoordinate {
-  chain: string;
-  contractAddress: string;
-  tokenId: string;
-  /**
-   * The token standard the playlist asserts, when it does. The indexer keys
-   * ERC-721 and ERC-1155 tokens under different CIDs and cannot tell them
-   * apart from an address alone, so without this an ERC-1155 work is looked
-   * up as ERC-721 and never found.
-   */
-  standard?: string;
-}
+/**
+ * TokenCoordinate is the lookup key shape every token source accepts. It is
+ * defined by the token source contract and re-exported here so existing
+ * imports keep working; this module stays free of any vendor import.
+ */
+export type { TokenCoordinate };
 
 /**
  * IndexerItem is one resolved entry of a lookup: a DP-1 item carrying
@@ -116,7 +110,7 @@ export interface IndexerItem {
  * TokenLookup resolves coordinates to indexer items. The result may be shorter
  * than the input and in any order. Injected rather than imported so tests
  * exercise the mapping without a network call; the CLI passes an adapter over
- * `getNFTTokenInfoBatch`.
+ * the configured token source (token-source.ts).
  */
 export type TokenLookup = (
   tokens: TokenCoordinate[],

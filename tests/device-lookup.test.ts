@@ -53,6 +53,48 @@ describe('findExistingDeviceEntry', () => {
     assert.equal(result?.name, 'kitchen');
   });
 
+  test('IP host: the same address on another port is a different device', () => {
+    // Several FF1s can sit behind one address on different ports (port forwarding, a tunnel).
+    const devices = [{ host: 'http://127.0.0.1:18131', name: 'Art Computer' }];
+    const result = findExistingDeviceEntry(devices, 'http://127.0.0.1:18132', '');
+    assert.equal(result, undefined);
+  });
+
+  test('IP host: a remembered address on another port is a different device', () => {
+    const devices = [
+      { host: 'http://192.168.1.20:1111', name: 'office', addresses: ['192.168.1.20'] },
+    ];
+    assert.equal(findExistingDeviceEntry(devices, 'http://192.168.1.20:2222', ''), undefined);
+  });
+
+  test("IP host: a .local entry's remembered address on another port is a different device", () => {
+    const devices = [
+      { host: 'http://ff1.local:1111', name: 'office', addresses: ['192.168.1.10'] },
+    ];
+    assert.equal(findExistingDeviceEntry(devices, 'http://192.168.1.10:18132', ''), undefined);
+  });
+
+  test('discovery: a device found at a stored address but another port is a different device', () => {
+    const devices = [{ host: 'http://192.168.1.20:18131', name: 'first' }];
+    const result = findExistingDeviceEntry(devices, 'http://ff1-other.local:18132', '', undefined, [
+      '192.168.1.20',
+    ]);
+    assert.equal(result, undefined);
+  });
+
+  test('IP host: a remembered address on the same port still matches a .local entry', () => {
+    const devices = [
+      { host: 'http://ff1-abcd1234.local:1111', name: 'office', addresses: ['192.168.1.20'] },
+    ];
+    assert.equal(findExistingDeviceEntry(devices, 'http://192.168.1.20:1111', '')?.name, 'office');
+  });
+
+  test('IP host: the same address and port still matches across protocols', () => {
+    const devices = [{ host: 'http://192.168.1.20:1111', name: 'office' }];
+    const result = findExistingDeviceEntry(devices, 'https://192.168.1.20:1111', '');
+    assert.equal(result?.name, 'office');
+  });
+
   test('TXT-name match: stored entry found by discoveredName when host completely changed', () => {
     // No stored id — TXT-name fallback applies
     const devices = [{ name: 'kitchen', host: 'http://192.168.1.10:1111' }];
