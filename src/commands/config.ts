@@ -5,6 +5,7 @@ import {
   getConfig,
   getConfigPaths,
   getFeedConfig,
+  getTokenSourceConfig,
   validateConfig,
 } from '../config';
 
@@ -27,6 +28,7 @@ export const configCommand = new Command('config')
         const config = getConfig();
         console.log(chalk.blue('\nCurrent configuration\n'));
         console.log(chalk.bold('Default duration:'), chalk.white(config.defaultDuration + 's'));
+        console.log(chalk.bold('Token source:'), chalk.white(getTokenSourceConfig().source));
         // The effective list, numbered. `-s <index>` on publish, fetch, replace
         // and unpublish is an index into exactly this list — whichever of
         // config.feedServers, the legacy feed.baseURLs, FEED_BASE_URLS, or the

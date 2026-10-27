@@ -187,7 +187,10 @@ interface RunResult {
  * `killOn` regex and SIGKILL the child mid-run to stop it reaching the real
  * indexer; that raced the network and is gone.
  */
-function runFind(args: string[], options: { stdin?: string } = {}): Promise<RunResult> {
+function runFind(
+  args: string[],
+  options: { stdin?: string; env?: Record<string, string> } = {}
+): Promise<RunResult> {
   return new Promise((resolveRun, rejectRun) => {
     const dir = mkdtempSync(join(tmpdir(), 'ff-find-cmd-'));
     const child = spawn(process.execPath, [tsxCli, cliEntry, 'find', ...args], {
@@ -201,6 +204,7 @@ function runFind(args: string[], options: { stdin?: string } = {}): Promise<RunR
         NODE_ENV: 'test',
         INDEXER_API_URL: indexerUrl,
         FORCE_COLOR: '0',
+        ...options.env,
       },
     });
 
@@ -272,10 +276,7 @@ const SERIES_HIT = {
   },
 };
 
-function tokensPage(
-  nodes: Array<{ chainId: string; contractAddress: string; tokenId: string }>,
-  hasNextPage: boolean
-): unknown {
+function tokensPage(nodes: Array<Record<string, unknown>>, hasNextPage: boolean): unknown {
   return {
     data: {
       artwork: {
@@ -296,10 +297,36 @@ const ETH_TOKEN = (
   tokenId,
 });
 
+/** A series token row carrying the media a Raster-sourced item needs. */
+const PLAYABLE_ETH_TOKEN = (tokenId: string): Record<string, unknown> => ({
+  ...ETH_TOKEN(tokenId),
+  tokenStandard: 'ERC721',
+  name: `Test Series #${tokenId}`,
+  description: 'A test work.',
+  media: {
+    previewHash: null,
+    previewType: null,
+    contentUrl: `https://example.com/${tokenId}.mp4`,
+    normalizedContentUrl: null,
+    contentType: 'video',
+  },
+  artworks: [
+    {
+      id: '42',
+      slug: 'test-series',
+      title: 'Test Series',
+      description: '',
+      platform: { id: 'feralfile', name: 'Feral File' },
+      artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }],
+    },
+  ],
+  artists: [],
+});
+
 describe('find command — Raster series flow (mock GraphQL server)', () => {
-  test('complete series → "Build playlist with N tokens?" prompt; "n" cancels before indexing', async () => {
+  test('complete series → "Build playlist with N tokens?" prompt; "n" cancels before resolving', async () => {
     handler = (query) => {
-      if (query.includes('tokenByRef')) {
+      if (query.includes('ResolveToken(')) {
         return SERIES_HIT;
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
@@ -310,12 +337,12 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.match(result.stdout, /Build playlist with 2 tokens\?/);
     assert.doesNotMatch(result.stdout, /the first/);
     assert.match(result.stdout, /Cancelled\./);
-    assert.doesNotMatch(result.stdout, /Indexing/);
+    assert.doesNotMatch(result.stdout, /Resolving/);
   });
 
   test('--limit below series size → "the first N tokens" prompt wording', async () => {
     handler = (query) => {
-      if (query.includes('tokenByRef')) {
+      if (query.includes('ResolveToken(')) {
         return SERIES_HIT;
       }
       // One page holding more tokens than the limit: the truncation is
@@ -330,35 +357,44 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     assert.match(result.stdout, /Cancelled\./);
   });
 
-  test('--output bypasses the confirm prompt and proceeds to indexing', async () => {
+  test('--output bypasses the prompt and builds from Raster with no indexer call', async () => {
+    const queries: string[] = [];
     handler = (query) => {
-      if (query.includes('tokenByRef')) {
+      queries.push(query);
+      if (query.includes('ResolveToken(')) {
+        return SERIES_HIT;
+      }
+      return tokensPage([PLAYABLE_ETH_TOKEN('1'), PLAYABLE_ETH_TOKEN('2')], false);
+    };
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
+      env: { FF_TOKEN_SOURCE: 'raster' },
+    });
+    assert.doesNotMatch(result.stdout, /Build playlist with/);
+    assert.match(result.stdout, /Resolving 2 tokens via Raster/);
+    assert.match(result.stdout, /Playlist saved to out\.json/);
+    assert.equal(result.code, 0, result.stderr);
+    // The feral-file#3576 done check: building yields items and the request
+    // trace shows no indexer call at all.
+    assert.deepEqual(indexerOps, []);
+    // The series page already carried every field, so no tokenByRef batch.
+    assert.ok(!queries.some((query) => query.includes('TokensByRef')));
+  });
+
+  test('the default token source is the indexer, with no deprecation warning', async () => {
+    handler = (query) => {
+      if (query.includes('ResolveToken(')) {
         return SERIES_HIT;
       }
       return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
     };
     const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
-    // What this test is for: --output skips the confirm prompt and goes
-    // straight to indexing. The earlier version killed the child on the
-    // "Indexing" line and asserted the kill landed first (code === null),
-    // which raced a live network call; a fast indexer lost it and the release
-    // gate went red.
-    assert.doesNotMatch(result.stdout, /Build playlist with/);
-    assert.match(result.stdout, /Indexing 2 tokens via FF indexer/);
-    // The mock carries the run through enqueue, poll, and token query, so the
-    // flow reaches a determinate end rather than being cut short.
-    assert.match(result.stdout, /2\/2 tokens indexed/);
-    assert.match(result.stderr, /No tokens could be indexed/);
+    assert.doesNotMatch(result.stderr, /deprecated/);
+    assert.match(result.stdout, /Resolving 2 tokens via FF indexer/);
+    assert.match(result.stdout, /2\/2 tokens resolved/);
+    assert.match(result.stderr, /No tokens could be resolved via FF indexer/);
     assert.equal(result.code, 1);
-    // The exit message alone proves nothing: a client that regressed to
-    // reading `jobId` would fail at the enqueue and still land here. What
-    // shows the protocol path completed is each token's own lifecycle.
-    //
-    // Asserted per token, never across them: the two workflows run
-    // concurrently under Promise.all, so one token's enqueue can legitimately
-    // reach the mock before the other's first lookup. A single global sequence
-    // would reject valid interleavings and fail intermittently in CI — the
-    // same class of flake this suite was repaired to remove.
+    // What shows the protocol path completed is each token's own lifecycle,
+    // asserted per token because the two workflows run concurrently.
     assert.ok(
       !indexerOps.some((entry) => entry.op === 'UNEXPECTED'),
       'mock saw an operation it does not model'
@@ -375,7 +411,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
 
   test('series with only unsupported-chain tokens → clear error, exit 1', async () => {
     handler = (query) => {
-      if (query.includes('tokenByRef')) {
+      if (query.includes('ResolveToken(')) {
         return SERIES_HIT;
       }
       return tokensPage(
@@ -394,7 +430,7 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
 
   test('unindexed token → single-token fallback messaging and 1-token prompt', async () => {
     handler = (query) => {
-      if (query.includes('tokenByRef')) {
+      if (query.includes('ResolveToken(')) {
         return { data: { tokenByRef: null } };
       }
       return { errors: [{ message: 'unexpected query for single-token path' }] };
@@ -447,10 +483,10 @@ describe('find command — resolver-backed token-list flow', () => {
       'resolveTokenInfos'
     );
     const promptPath = testRequire.resolve('../src/commands/helpers/prompt');
-    const nftIndexerPath = testRequire.resolve('../src/utilities/nft-indexer');
+    const tokenSourcePath = testRequire.resolve('../src/utilities/token-source');
     const playlistBuilderPath = testRequire.resolve('../src/utilities/playlist-builder');
     const originalPromptCache = testRequire.cache[promptPath];
-    const originalNftIndexerCache = testRequire.cache[nftIndexerPath];
+    const originalTokenSourceCache = testRequire.cache[tokenSourcePath];
     const originalPlaylistBuilderCache = testRequire.cache[playlistBuilderPath];
 
     Object.defineProperty(sourceResolver, 'resolveTokenInfos', {
@@ -530,15 +566,28 @@ describe('find command — resolver-backed token-list flow', () => {
         },
       },
     };
-    testRequire.cache[nftIndexerPath] = {
-      id: nftIndexerPath,
-      filename: nftIndexerPath,
+    testRequire.cache[tokenSourcePath] = {
+      id: tokenSourcePath,
+      filename: tokenSourcePath,
       loaded: true,
       exports: {
-        getNFTTokenInfoBatch: async (tokens: unknown[]) => {
-          indexedBatches.push(tokens);
-          return [{ title: 'Indexed token', media: { uri: 'ipfs://token-1' } }];
-        },
+        getTokenSource: () => ({
+          name: 'raster',
+          resolveTokens: async (coords: unknown[]) => {
+            indexedBatches.push(coords);
+            return [
+              {
+                success: true,
+                coordinate: coords[0],
+                item: { title: 'Indexed token', source: 'https://example.com/token-1' },
+                still: '',
+              },
+            ];
+          },
+        }),
+        itemsOf: (results: Array<{ success: boolean; item?: unknown }>) =>
+          results.filter((result) => result.success).map((result) => result.item),
+        failureMessages: () => [],
       },
     };
     testRequire.cache[playlistBuilderPath] = {
@@ -589,7 +638,7 @@ describe('find command — resolver-backed token-list flow', () => {
       assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
       assert.match(promptQuestions[1], /^Next\? \[P\]lay on FF1/);
       assert.match(stdoutWrites.join(''), /Mock Objkt Collection/);
-      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
       assert.ok(existsSync(join(dir, 'mock-objkt-collection.json')));
       assert.equal(
         JSON.parse(readFileSync(join(dir, 'mock-objkt-collection.json'), 'utf8')).title,
@@ -622,7 +671,7 @@ describe('find command — resolver-backed token-list flow', () => {
       ]);
       assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
       assert.match(stdoutWrites.join(''), /Mock SuperRare Collection/);
-      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
 
       resolverCalls.length = 0;
       stderrWrites.length = 0;
@@ -672,7 +721,7 @@ describe('find command — resolver-backed token-list flow', () => {
       ]);
       assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
       assert.match(stdoutWrites.join(''), /Mock Feral File Show/);
-      assert.match(stdoutWrites.join(''), /Indexing 1 token via FF indexer/);
+      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
 
       resolverCalls.length = 0;
       stderrWrites.length = 0;
@@ -760,10 +809,10 @@ describe('find command — resolver-backed token-list flow', () => {
       } else {
         delete testRequire.cache[promptPath];
       }
-      if (originalNftIndexerCache) {
-        testRequire.cache[nftIndexerPath] = originalNftIndexerCache;
+      if (originalTokenSourceCache) {
+        testRequire.cache[tokenSourcePath] = originalTokenSourceCache;
       } else {
-        delete testRequire.cache[nftIndexerPath];
+        delete testRequire.cache[tokenSourcePath];
       }
       if (originalPlaylistBuilderCache) {
         testRequire.cache[playlistBuilderPath] = originalPlaylistBuilderCache;

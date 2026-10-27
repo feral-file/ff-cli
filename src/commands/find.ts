@@ -23,12 +23,23 @@ import {
   formatSummaryLine,
   RasterUnreachableError,
 } from '../utilities/raster-client';
-import type { RasterArtworkSummary, RasterArtworkRow } from '../utilities/raster-client';
+import type {
+  RasterArtworkSummary,
+  RasterArtworkRow,
+  RasterToken,
+} from '../utilities/raster-client';
 import { castPlaylist } from '../utilities/playlist-cast';
+import {
+  failureMessages,
+  getTokenSource,
+  itemsOf,
+  type ResolvedToken,
+  type TokenSource,
+} from '../utilities/token-source';
+import { itemsFromRasterTokens } from '../utilities/token-source-raster';
+import { getTokenSourceConfig } from '../config';
 
-// nft-indexer + playlist-builder are still CommonJS; require keeps interop simple.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const { getNFTTokenInfoBatch } = require('../utilities/nft-indexer');
+// playlist-builder is still CommonJS; require keeps interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { buildDP1Playlist, buildUrlItem } = require('../utilities/playlist-builder');
 
@@ -58,10 +69,10 @@ type PostBuildAction = 'play' | 'publish' | 'skip';
  *
  * `series` — Raster knows the artwork; we'll enumerate every token in it.
  * `single` — Raster doesn't index this token's series (returns 404); fall
- *   back to a one-item playlist using the FF indexer for the pasted token.
+ *   back to a one-item playlist for the pasted token.
  * `token-list` — the source-resolver library returned concrete token
  *   coordinates for a collection-like page, so no Raster series lookup is
- *   needed before handing tokens to the FF indexer.
+ *   needed before handing tokens to the token source.
  */
 type ResolvedTarget =
   | { kind: 'series'; summary: RasterArtworkSummary }
@@ -69,20 +80,39 @@ type ResolvedTarget =
   | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
 
 /**
- * A token to build into the playlist. `mediaUrl` is Raster's own playable
- * asset for the token when known — the find flow falls back to it to build
- * DP-1 items directly (off-chain provenance) when the FF indexer can't
- * resolve the tokens, e.g. Raster-minted series the indexer doesn't carry.
+ * A token to build into the playlist. `rasterToken` is the full Raster row
+ * when a series page already returned it, so the Raster token source can
+ * build the item without asking Raster again.
  */
-type BuildToken = TokenCoords & { mediaUrl: string | null; mediaType: string | null };
+type BuildToken = TokenCoords & { rasterToken: RasterToken | null };
 
 const RASTER_PAGE_SIZE = 100;
+
+/**
+ * FIND_NON_INTERACTIVE_HINT is what `find` tells a caller without a terminal
+ * when one of its questions comes up. `-y` answers every question with its
+ * default, and that default is Play, so the hint names `--no-play` in the same
+ * breath for a caller that only wants the file.
+ */
+const FIND_NON_INTERACTIVE_HINT =
+  'Re-run with -y to accept the defaults (it builds the playlist and plays it on your FF1); add --no-play to only save it.';
+
+/**
+ * playAPageHint points a caller who handed `find` a page it cannot resolve to
+ * the command that shows a page as it is.
+ *
+ * @param {string} input - The URL the caller gave `find`
+ * @returns {string} One line naming `ff-cli play --web`
+ */
+function playAPageHint(input: string): string {
+  return `To show this page itself on your FF1, run: ff-cli play --web "${input}"`;
+}
 
 export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address (picks one work by the artist at that address; for what a wallet owns, see `ff-cli build --help`)'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
@@ -113,6 +143,13 @@ export const findCommand = new Command('find')
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
         );
+        // A plain web page or media URL is not an artwork lookup at all; `play`
+        // casts those directly, so name it rather than leave the caller stuck.
+        if (/^https?:\/\//i.test(input.trim())) {
+          console.error(
+            chalk.dim(`To play a web page or media URL as it is, run: ff-cli play "${input}"`)
+          );
+        }
         process.exit(1);
       }
       if (parsed.kind === 'unsupported') {
@@ -122,10 +159,13 @@ export const findCommand = new Command('find')
           return;
         }
         console.error(chalk.red(parsed.reason));
+        // `play` sends unrecognized pages on these hosts here, so the way out
+        // of that loop has to be printed on this side too.
+        console.error(chalk.dim(playAPageHint(input)));
         process.exit(1);
       }
 
-      // Neort is off-chain; its items skip Raster + FF indexer entirely and
+      // Neort is off-chain; its items skip the token source entirely and
       // build a DP-1 entry directly from Neort's API response.
       if (parsed.kind === 'neort-art') {
         await runNeortFind(parsed.id, options);
@@ -171,13 +211,12 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   } else if (target.kind === 'token-list') {
     const allTokens = target.coords.map((coords) => ({
       ...coords,
-      mediaUrl: null,
-      mediaType: null,
+      rasterToken: null,
     }));
     tokens = allTokens.slice(0, limit);
     seriesHasMore = allTokens.length > limit || !!target.hasMore;
   } else {
-    tokens = [{ ...target.coords, mediaUrl: null, mediaType: null }];
+    tokens = [{ ...target.coords, rasterToken: null }];
   }
 
   if (tokens.length === 0) {
@@ -203,72 +242,28 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
     console.log(chalk.dim('Cancelled.'));
     return;
   }
+  const source = getTokenSource();
+  const label = source.name === 'raster' ? 'Raster' : 'FF indexer';
   console.log(
-    chalk.dim(`Indexing ${tokens.length} token${tokens.length === 1 ? '' : 's'} via FF indexer...`)
+    chalk.dim(`Resolving ${tokens.length} token${tokens.length === 1 ? '' : 's'} via ${label}...`)
   );
-
-  // Previously-unseen tokens make the indexer warm renditions by polling —
-  // minutes of wall time on a large series. Say so upfront (the --limit
-  // warming hint used to appear only after a failure) and render per-batch
-  // progress so a long index never reads as a hang.
-  if (tokens.length > 10) {
+  // The indexer warms previously-unseen tokens by polling, which
+  // takes minutes on a large series; Raster answers from its own index.
+  if (source.name === 'indexer' && tokens.length > 10) {
     console.log(
       chalk.dim(
         '  First-time tokens can take the indexer a while to warm; use `--limit 5` for a faster first pass.'
       )
     );
   }
-  // Second positional arg on getNFTTokenInfoBatch is `duration` (DP-1 item
-  // display seconds), not concurrency — concurrency is hardcoded inside.
-  // Omit it for auto timing: video/audio items carry no duration and play
-  // their natural length (DP-1 §4.1); static items get the config default.
-  let items = await getNFTTokenInfoBatch(
-    tokens.map((t) => ({
-      chain: t.chain,
-      contractAddress: t.contract,
-      tokenId: t.tokenId,
-    })),
-    undefined,
-    // Unconditional: suppressing the done===total call meant a one-batch
-    // index (including the recommended --limit 5 warm-up) printed nothing
-    // and multi-batch runs never showed completion. The final N/N line IS
-    // the "indexing finished" signal.
-    (done: number, total: number) => {
-      console.log(chalk.dim(`  ${done}/${total} tokens indexed...`));
-    }
-  );
+  const results = await resolveBuildTokens(source, tokens);
+  const items = itemsOf(results);
 
-  // FF-indexer bypass for Raster-minted tokens. The indexer doesn't carry
-  // Raster's tokens, so it returns nothing — but Raster handed us each
-  // token's playable `media.contentUrl`. Build DP-1 items straight from
-  // that (off-chain provenance, same shape as the Neort path), so the
-  // series still builds into a signable, verifiable playlist instead of
-  // failing the way it did before. The indexer is tried first so tokens
-  // it *can* resolve keep their richer on-chain provenance.
-  if (!Array.isArray(items) || items.length === 0) {
-    const rasterItems = buildRasterMediaItems(tokens, target);
-    if (rasterItems.length > 0) {
-      console.log(
-        chalk.dim(
-          `  FF indexer returned nothing; building ${rasterItems.length} item${
-            rasterItems.length === 1 ? '' : 's'
-          } directly from Raster media.`
-        )
-      );
-      items = rasterItems;
+  if (items.length === 0) {
+    console.error(chalk.red(`No tokens could be resolved via ${label}; cannot build playlist.`));
+    for (const message of failureMessages(results)) {
+      console.error(chalk.dim(`  ${message}`));
     }
-  }
-
-  if (!Array.isArray(items) || items.length === 0) {
-    console.error(chalk.red('No tokens could be indexed; cannot build playlist.'));
-    console.error(
-      chalk.dim(
-        '  The FF indexer may be under load when warming a series of previously-unseen tokens.'
-      )
-    );
-    console.error(
-      chalk.dim('  Try `--limit 5` first to warm the cache, then re-run without --limit.')
-    );
     process.exit(1);
   }
 
@@ -282,7 +277,10 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   console.log(chalk.dim(`  ${items.length} item${items.length === 1 ? '' : 's'}`));
   const dropped = tokens.length - items.length;
   if (dropped > 0) {
-    console.log(chalk.dim(`  ${dropped} token${dropped === 1 ? '' : 's'} dropped during indexing`));
+    console.log(chalk.dim(`  ${dropped} token${dropped === 1 ? '' : 's'} could not be resolved:`));
+    for (const message of failureMessages(results)) {
+      console.log(chalk.dim(`    ${message}`));
+    }
   }
   console.log();
 
@@ -397,6 +395,15 @@ async function resolveTarget(
     if (catalog.length === 0) {
       throw new Error('Artist has no artworks indexed on Raster.');
     }
+    // A wallet address reads naturally as "what this wallet owns", and this
+    // path builds something else: one work by the artist at the address. Say
+    // so every time, so neither a person nor an agent mistakes the result.
+    console.log(
+      chalk.dim(
+        'find on an address plays one work by the artist at that address. ' +
+          'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
+      )
+    );
     const picked = await pickFromCatalog(catalog, skipPrompt);
     return {
       kind: 'series',
@@ -470,7 +477,7 @@ async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
 
 /**
  * Build the playlist title. For series, "Artist — Series Title". For a
- * one-item fallback, use the indexer's token name (already in the item)
+ * one-item fallback, use the token source's name (already in the item)
  * with a fall-through to coords if name is missing.
  */
 function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string }>): string {
@@ -485,30 +492,38 @@ function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string 
 }
 
 /**
- * Build DP-1 items directly from Raster's per-token media, bypassing the FF
- * indexer. Used as a fallback when the indexer resolves nothing — tokens
- * without a Raster `mediaUrl` are dropped (nothing playable to point at).
+ * resolveBuildTokens turns the tokens to build into results, one per token.
  *
- * Item shape matches the Neort off-chain path (`buildUrlItem` →
- * `provenance.offChainURI`), so the resulting playlist signs and verifies
- * normally. Titles are "<Series> #<tokenId>" for series, falling back to the
- * series/coords title for a single token.
+ * When every token already carries its Raster row (a Raster series page) and
+ * Raster is the token source, the rows are mapped directly: the page already
+ * paid for every field, so asking again would double the requests. Any other
+ * mix goes through the token source by coordinate.
  */
-export function buildRasterMediaItems(tokens: BuildToken[], target: ResolvedTarget): unknown[] {
-  const seriesTitle = target.kind === 'series' ? target.summary.title : undefined;
-  const items: unknown[] = [];
-  for (const t of tokens) {
-    if (!t.mediaUrl) {
-      continue;
-    }
-    const title = seriesTitle ? `${seriesTitle} #${t.tokenId}` : `Token ${t.tokenId}`;
-    // No explicit duration: auto timing (video/audio play their natural
-    // length). `mediaType` carries Raster's type so an extensionless IPFS
-    // contentUrl is still classified correctly — otherwise a video would be
-    // stamped a fixed duration and play as a still.
-    items.push(buildUrlItem(t.mediaUrl, undefined, { title, mimeType: t.mediaType ?? undefined }));
+async function resolveBuildTokens(
+  source: TokenSource,
+  tokens: BuildToken[]
+): Promise<ResolvedToken[]> {
+  const rows = tokens.map((t) => t.rasterToken);
+  if (source.name === 'raster' && rows.every((row): row is RasterToken => row !== null)) {
+    const entries = tokens.map((t, i) => ({ token: rows[i], requested: coordinateOf(t) }));
+    return itemsFromRasterTokens(entries, getTokenSourceConfig().ipfsGateways);
   }
-  return items;
+  // Unconditional progress: the final N/N line IS the "resolution finished"
+  // signal, including for a single-batch run.
+  return source.resolveTokens(tokens.map(coordinateOf), {
+    onProgress: (done: number, total: number) => {
+      console.log(chalk.dim(`  ${done}/${total} tokens resolved...`));
+    },
+  });
+}
+
+/** coordinateOf converts a find token to the token source's coordinate shape. */
+function coordinateOf(token: BuildToken): {
+  chain: string;
+  contractAddress: string;
+  tokenId: string;
+} {
+  return { chain: token.chain, contractAddress: token.contract, tokenId: token.tokenId };
 }
 
 export function parseLimitOption(limitStr: string | undefined): number {
@@ -559,8 +574,7 @@ async function fetchTokens(
         chain: t.chain,
         contract: t.contractAddress,
         tokenId: t.tokenId,
-        mediaUrl: t.mediaUrl,
-        mediaType: t.mediaType,
+        rasterToken: t.token,
       });
     }
     if (hasMore || page.nextCursor === null) {
@@ -576,7 +590,7 @@ async function fetchTokens(
   if (skipped > 0) {
     console.log(
       chalk.yellow(
-        `  Skipped ${skipped} token${skipped === 1 ? '' : 's'} on unsupported chains (FF indexer covers eth + tezos mainnet only).`
+        `  Skipped ${skipped} token${skipped === 1 ? '' : 's'} on unsupported chains (ff-cli builds Ethereum and Tezos mainnet only).`
       )
     );
   }
@@ -596,7 +610,7 @@ async function pickFromCatalog(
     console.log(chalk.dim(`  ${i}: ${row.title}`));
   });
   console.log();
-  const prompt = createPrompt();
+  const prompt = createPrompt(FIND_NON_INTERACTIVE_HINT);
   const answer = await prompt.ask(`Pick one (0-${catalog.length - 1}, default 0): `);
   prompt.close();
   console.log();
@@ -612,7 +626,7 @@ async function pickFromCatalog(
 async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boolean> {
   const noun = count === 1 ? 'token' : 'tokens';
   const label = hasMore ? `the first ${count} ${noun}` : `${count} ${noun}`;
-  const prompt = createPrompt();
+  const prompt = createPrompt(FIND_NON_INTERACTIVE_HINT);
   const yes = await promptYesNo(prompt.ask, `Build playlist with ${label}?`, true);
   prompt.close();
   console.log();
@@ -659,7 +673,9 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
 export type { FindOptions, BuildToken, ResolvedTarget };
 
 async function promptNextAction(): Promise<PostBuildAction> {
-  const prompt = createPrompt();
+  const prompt = createPrompt(
+    'The playlist is saved. Pass --play to cast it, or --publish to publish it.'
+  );
   const answer = (
     await prompt.ask('Next? [P]lay on FF1 / just [S]ave / pub[L]ish to feed (default: Play): ')
   )
@@ -781,7 +797,7 @@ async function doPublish(
 
 /**
  * Neort flow. Off-chain platform with no on-chain coords, so we bypass
- * Raster + FF indexer and construct a single-item DP-1 playlist directly
+ * the token source and construct a single-item DP-1 playlist directly
  * from Neort's API response using the off-chain `provenance.offChainURI`
  * shape produced by `buildUrlItem`.
  */

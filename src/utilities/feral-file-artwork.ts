@@ -29,12 +29,12 @@ interface FeralFileArtworkResponse {
 }
 
 /**
- * resolveFeralFileArtwork resolves a public Feral File artwork id into indexer
+ * resolveFeralFileArtwork resolves a public Feral File artwork id into token
  * token coordinates using the self-describing artwork API response.
  *
  * @param artworkId - Public artwork id from Feral File.
  * @param fetchImpl - Fetch implementation, injected by tests.
- * @returns Token coordinates suitable for ff-indexer-v2 lookup.
+ * @returns Token coordinates for the configured token source.
  */
 export async function resolveFeralFileArtwork(
   artworkId: string,

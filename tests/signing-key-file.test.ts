@@ -937,13 +937,15 @@ describe('setup --key-file', () => {
     const viaFlag = await runCli(
       feed.baseUrl,
       configured.base64,
-      ['setup', '--non-interactive', '--key', provisioned.base64, ...deviceArgs],
+      // --force: this config already holds a different key, and setup refuses to replace a
+      // configured identity without it (tests/setup-key-replacement.test.ts).
+      ['setup', '--non-interactive', '--force', '--key', provisioned.base64, ...deviceArgs],
       {}
     );
     const viaFile = await runCli(
       feed.baseUrl,
       configured.base64,
-      ['setup', '--non-interactive', '--key-file', 'provision.key', ...deviceArgs],
+      ['setup', '--non-interactive', '--force', '--key-file', 'provision.key', ...deviceArgs],
       { 'provision.key': `${provisioned.base64}\n` }
     );
 

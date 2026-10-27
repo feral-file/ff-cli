@@ -7,6 +7,8 @@ import type {
   PlaylistConfig,
   FeedConfig,
   FF1DeviceConfig,
+  TokenSourceConfig,
+  TokenSourceName,
   ValidationResult,
 } from './types';
 import {
@@ -321,6 +323,104 @@ function resolveFF1RelayerConfig(config: Config): FF1RelayerSettings {
   };
 }
 
+const TOKEN_SOURCES: readonly TokenSourceName[] = ['raster', 'indexer'];
+const DEFAULT_TOKEN_SOURCE: TokenSourceName = 'indexer';
+const DEFAULT_IPFS_GATEWAY_FERAL_FILE = 'https://ipfs.feralfile.com/ipfs/';
+const DEFAULT_IPFS_GATEWAY = 'https://ipfs.filebase.io/ipfs/';
+
+/**
+ * Get the token source selection using repository config priority.
+ *
+ * `config.json` wins over environment variables, which win over the defaults.
+ * The Feral File indexer is the default vendor; `raster` is opt-in while
+ * Raster's data bugs (feral-file#3546) are open. There is no fallback between
+ * the two at runtime: one vendor answers a whole run.
+ */
+export function getTokenSourceConfig(): TokenSourceConfig {
+  return resolveTokenSourceConfig(getConfig());
+}
+
+/** Resolve and validate the effective token source configuration. */
+function resolveTokenSourceConfig(config: Config): TokenSourceConfig {
+  const source = resolveTokenSourceName(config);
+  const gateways = resolveIpfsGatewayFields(config);
+  return {
+    source,
+    ipfsGateways: {
+      feralFile: normalizeIpfsGateway(
+        gateways.feralFile ||
+          process.env.IPFS_GATEWAY_FERAL_FILE ||
+          DEFAULT_IPFS_GATEWAY_FERAL_FILE,
+        'ipfsGateways.feralFile'
+      ),
+      default: normalizeIpfsGateway(
+        gateways.default || process.env.IPFS_GATEWAY_DEFAULT || DEFAULT_IPFS_GATEWAY,
+        'ipfsGateways.default'
+      ),
+    },
+  };
+}
+
+/** resolveTokenSourceName picks the vendor name, rejecting anything outside TOKEN_SOURCES. */
+function resolveTokenSourceName(config: Config): TokenSourceName {
+  const configured = config.tokenSource as unknown;
+  if (configured !== undefined && typeof configured !== 'string') {
+    throw new Error(`tokenSource must be one of: ${TOKEN_SOURCES.join(', ')}`);
+  }
+  const candidate = ((configured as string | undefined) || process.env.FF_TOKEN_SOURCE || '')
+    .trim()
+    .toLowerCase();
+  if (!candidate) {
+    return DEFAULT_TOKEN_SOURCE;
+  }
+  if (!TOKEN_SOURCES.includes(candidate as TokenSourceName)) {
+    throw new Error(`tokenSource must be one of: ${TOKEN_SOURCES.join(', ')}`);
+  }
+  return candidate as TokenSourceName;
+}
+
+/** resolveIpfsGatewayFields type-checks the `ipfsGateways` block without resolving defaults. */
+function resolveIpfsGatewayFields(config: Config): { feralFile?: string; default?: string } {
+  const configured = config.ipfsGateways as unknown;
+  if (configured === undefined) {
+    return {};
+  }
+  if (configured === null || typeof configured !== 'object' || Array.isArray(configured)) {
+    throw new Error('ipfsGateways must be an object');
+  }
+  const fields = configured as Record<string, unknown>;
+  for (const key of ['feralFile', 'default']) {
+    if (fields[key] !== undefined && typeof fields[key] !== 'string') {
+      throw new Error(`ipfsGateways.${key} must be a string`);
+    }
+  }
+  return { feralFile: fields.feralFile as string, default: fields.default as string };
+}
+
+/**
+ * normalizeIpfsGateway validates a gateway and returns it in `https://host/ipfs/` form.
+ *
+ * A bare origin is accepted because that is how gateways are usually quoted;
+ * the `/ipfs/` path is what a CID is appended to, so it is added when absent
+ * and a trailing slash is guaranteed so callers can concatenate.
+ */
+function normalizeIpfsGateway(value: string, label: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(value.trim());
+  } catch {
+    throw new Error(`${label} must be a valid HTTP(S) URL`);
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error(`${label} must be a valid HTTP(S) URL`);
+  }
+  const path = parsed.pathname.replace(/\/+$/, '');
+  parsed.pathname = path.endsWith('/ipfs') ? `${path}/` : `${path}/ipfs/`;
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
 /**
  * resolveV2Endpoint picks the relay v2 origin (ffos-user docs/ff1-control-v1.md
  * §10). An explicit `ff1Relayer.v2Endpoint` or FF1_RELAY_V2_ENDPOINT wins; an
@@ -456,6 +556,12 @@ export function validateConfig(): ValidationResult {
 
     try {
       resolveFF1RelayerConfig(config);
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+
+    try {
+      resolveTokenSourceConfig(config);
     } catch (error) {
       errors.push((error as Error).message);
     }

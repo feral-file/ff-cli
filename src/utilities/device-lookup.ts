@@ -8,8 +8,9 @@ import { normalizeDeviceHost } from './device-normalize';
  *     so a stale row that happens to share the same IP cannot shadow the correct
  *     entry. Requires the stored entry to have been written with an id field.
  *  2. Exact URL match — normal case after ID (same host format, no migration).
- *  3. mDNS hostname component match — both URLs are parsed and only the hostname
- *     part is compared (same .local name, different underlying IP or port).
+ *  3. Hostname component match — both URLs are parsed and the hostname compared.
+ *     For a `.local` name, port and protocol are ignored (same device, stored a
+ *     different way); for any other host the port must match too.
  *  4a. Discovered IP → stored IP: the mDNS discovery reports a resolved IP that
  *     matches the IP in a stored entry. Bridges .local ↔ stored-IP migration for
  *     pre-id configs with no stored id.
@@ -47,18 +48,30 @@ export function findExistingDeviceEntry(
     return byHost;
   }
 
-  // 3. mDNS hostname component match (ignores port and protocol differences)
-  let newHostname = '';
+  // 3. Hostname component match. A `.local` name is the device itself, so port
+  //    and protocol differences are ignored. Any other host (an IP, a tunnel or
+  //    port-forwarding front) can serve several devices on different ports, so
+  //    the port must match as well: matching on the address alone made
+  //    `device add --host <same-ip>:<other-port> --name Kitchen` overwrite the
+  //    existing device while reporting "Added device: Kitchen".
+  let newUrl: URL | null = null;
   try {
-    newHostname = new URL(newHost).hostname;
+    newUrl = new URL(newHost);
   } catch {
     // not a valid URL — skip hostname matching
   }
 
-  if (newHostname) {
+  if (newUrl?.hostname) {
+    const candidate = newUrl;
     const byHostname = existingDevices.find((d) => {
       try {
-        return new URL(d.host || '').hostname === newHostname;
+        const stored = new URL(d.host || '');
+        if (stored.hostname !== candidate.hostname) {
+          return false;
+        }
+        return (
+          candidate.hostname.toLowerCase().endsWith('.local') || stored.port === candidate.port
+        );
       } catch {
         return false;
       }
@@ -83,8 +96,12 @@ export function findExistingDeviceEntry(
         return false; // different physical devices — do not conflate
       }
       try {
-        const storedIp = stripBrackets(new URL(d.host || '').hostname);
-        return discoveredAddresses.includes(storedIp);
+        const stored = new URL(d.host || '');
+        const storedIp = stripBrackets(stored.hostname);
+        // Same port rule as steps 3 and 4b: an address match on another port is
+        // another device. (A matching stable id already returned in step 1.)
+        const samePort = stored.port === (newUrl?.port ?? stored.port);
+        return discoveredAddresses.includes(storedIp) && samePort;
       } catch {
         return false;
       }
@@ -98,9 +115,20 @@ export function findExistingDeviceEntry(
   //     and a stored entry has that IP in its stored addresses list (populated from
   //     prior mDNS discoveries). This bridges --host <ip/ipv6> → existing .local entry.
   //     Strip IPv6 brackets before comparing (Node URL.hostname returns '[fe80::1]').
-  const rawHostname = stripBrackets(newHostname);
+  //     The port must match the stored entry's port, for the same reason as step 3:
+  //     another port at a remembered address is another device, not this one.
+  const rawHostname = stripBrackets(newUrl?.hostname ?? '');
   if (rawHostname && (/^[0-9.]+$/.test(rawHostname) || rawHostname.includes(':'))) {
-    const byStoredAddress = existingDevices.find((d) => d.addresses?.includes(rawHostname));
+    const samePort = (stored?: string) => {
+      try {
+        return new URL(stored || '').port === newUrl?.port;
+      } catch {
+        return false;
+      }
+    };
+    const byStoredAddress = existingDevices.find(
+      (d) => d.addresses?.includes(rawHostname) && samePort(d.host)
+    );
     if (byStoredAddress) {
       return byStoredAddress;
     }
