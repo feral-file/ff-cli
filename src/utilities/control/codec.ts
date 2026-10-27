@@ -72,8 +72,26 @@ const MAX_LABEL_CHARS = 64;
 export const CONTROL_PLATFORMS = ['ios', 'android', 'cli', 'other'] as const;
 export type ControlPlatform = (typeof CONTROL_PLATFORMS)[number];
 
-/** ControlRole is the grant role a device hands out (§5.5). */
-export type ControlRole = 'owner' | 'controller';
+/**
+ * ListedPlatform is a platform a device lists (§5.5): an enroll platform, or
+ * `web` for a display grant (§5.7), which no controller can enroll as.
+ */
+export type ListedPlatform = ControlPlatform | 'web';
+
+/**
+ * ControllerRole is the grant role a controller such as ff-cli can hold
+ * (§5.3, §5.5). The device's role parsers accept nothing else.
+ */
+export type ControllerRole = 'owner' | 'controller';
+
+/**
+ * ControlRole is every role a device lists (§5.5): a controller role, or
+ * `display` for a Play site's display grant (§5.7). A display grant is never
+ * ff-cli's own role: it is issued only through mint pairing, cannot be
+ * assigned by `approveController` or `registerController`, and may only
+ * cast and revoke itself.
+ */
+export type ControlRole = ControllerRole | 'display';
 
 /** DeviceProfile is the public device profile of §2. */
 export interface DeviceProfile {

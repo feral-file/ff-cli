@@ -1,0 +1,62 @@
+{
+  "name": "display-getDeviceStatus",
+  "kind": "request",
+  "description": "A display grant has no status read.",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "displayGrants": [
+      {
+        "name": "display"
+      }
+    ],
+    "randSeed": "JqPNQoW3eHtJcF2kxHT1uRiMcDbNJUKRQwJzdNszSKs"
+  },
+  "from": "display",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8\",\"rid\":\"rid-display-getDeviceStatus\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"IGZcRun_RkmbNc02GxvtwqLYaZLL8T-PCLSmHjivUIA\",\"cmd\":\"getDeviceStatus\",\"req\":{}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+    "rid": "rid-display-getDeviceStatus",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "IGZcRun_RkmbNc02GxvtwqLYaZLL8T-PCLSmHjivUIA",
+    "cmd": "getDeviceStatus",
+    "req": {}
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "AZ_z9MwNNNatkKmdWMuraC5MOmKBbC2mOFNIpAiR-oY",
+    "y": "D3tfgPve7s8Y10TUHGOcMkW6ukKnuB2MroG4ct21Yh0",
+    "d": "quB9BITZITSaN0yxR8z0lt65qpzAc_Q7p9EVDykCSE8"
+  },
+  "iv": "HPFMoyIupoYuRMwI",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlBOekh0ajltUGpPM2pmZUpHWTR1YnlXSjRvbDJmRzY2VjdCZkMycHBLQTgiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUE56SHRqOW1Qak8zamZlSkdZNHVieVdKNG9sMmZHNjZWN0JmQzJwcEtBOCIsInJpZCI6InJpZC1kaXNwbGF5LWdldERldmljZVN0YXR1cyIsImN0ciI6MSwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjU2NjAsIm9wIjoiY21kIiwicmsiOiJJR1pjUnVuX1JrbWJOYzAyR3h2dHdxTFlhWkxMOFQtUENMU21Iaml2VUlBIiwiY21kIjoiZ2V0RGV2aWNlU3RhdHVzIiwicmVxIjp7fX0.BELep0jdisdLVqY8mGGtx3HK_G-efNxsb9lrgm-kaqN6tcn3lAfE2S1JiE2LFPnNixODsPw6kuPGiAsAiG9AHg",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiQVpfejlNd05OTmF0a0ttZFdNdXJhQzVNT21LQmJDMm1PRk5JcEFpUi1vWSIsInkiOiJEM3RmZ1B2ZTdzOFkxMFRVSEdPY01rVzZ1a0tudUIyTXJvRzRjdDIxWWgwIn19..HPFMoyIupoYuRMwI.BNNYa-zkOVrhsYDT7ZOoGxbz2QheBlnrxjRqCeEWxl6E7zC1wjFbmdNDfgtTxIa3CPGLYxEJiwZAdboTxgysubsiy2RKpwWPGPFB4YWLKr7rZngMQDbSVp8opUpw9NwuPgeGhM3xTXpI1WKWnweFlZZEq3we-e-aW7NaY66FyhziM9twI-H41k76_U55wLoiVVCw7919Sn8DdwfC3IwIMDoLp0vVqJjN3y-vuWivIUN7p2ugdISj-xFmIzYYHJsQHGSj_8-yndZgTnkbIKgcRUI8AVfSAIH4c5H9orTtG6cocRlvv2UVLjhF-eJaSsOW22HR9lAVRejx-_Bie4eGAAWp4ZSGoM9aw31gzG99ksLYpFLd9CzvN0MS7NMrBwsnEQvUXTN-ZD1PFX5eAGfk24WnIPfMSd70BxVbEse82m5AApKiUq8DBCkhDbW5I5lABGAxlM_IT1OVsI8UFqnb8vOI1ih9lXHmKUEWfSl3beMZyoGsiT9-zMpHDeFrR27t3rDFPYDSkz9LRksNUtFxjQlmBbe-cw7a0VmpbZJlCDQTkLBpGUrgt0DZSp2cQIifl9iMOBR1McXRco3Jw1f_ZxS8VNpt_GDpBgy3BZhcBFYtnnGnXi8za1pWpMJDx0Vr_MRQCwOORlk-4211wNw1c2dKxX28Kl-Y3UmgL1TDmo_8CspPY0ACLxy-EOZ4j7Jiw9kROL1n3VGZoP2ynKaN9ybHOfVQCwFunUYYpYmifG4VeZXoW7cXKkT_-KM7CsllQXtUocUmBg.Vy2NVpFJUk-Lq7ivMGClCA",
+  "rk": "IGZcRun_RkmbNc02GxvtwqLYaZLL8T-PCLSmHjivUIA",
+  "expect": {
+    "replyCode": "permission_denied"
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..GVdiP0LtwYrkirW5.Zm6VmjZumbNCHPHoQTuXiTF2hH5Bmh9SnMtTX_ZUd3552zn8orgz4OqjdiCN1_sI_SjjBwYybbJYljxbbLCe1szB5aW8YzWdNNF_ac0duo3JYVK7257f_oBIw-tim3FSbpgAunLIJU2yRxc57rUkyYeDh0taZzlAcIT-vEAe23gM0DNrHiPJeGGS5Cmx8P4VE9t4_PIWXci_e0RgmMRmLyy2NppjOu1BhDlTS9pjP0hJsN-pL9m28sBCbGnvc_ArpF-EA9KxLR6UMPzMfpGrW_05SiRvvtL60kc7dU0F0dBpKhM4emnXkWnJGy92_Ukj2SK5Mi7q21x5sTzIY58NOih1ugkiP8_EaJWqw7kjdgYbNh167MOnKEtarDAskyMJCynl2I4iYDPovnENtLZlSuRsnsmVS11AedepeqZxm1PqsxLFhbdxt3CtVb4rPawT3iWSbiK9OQ0TVX5hA0rLjt8UmXuCxCCp99Jyp8HQokkmXGPYZNwT4OxZ4vxv2XU-TRIx3E_59SwCTV9HeQPCELr2l0_92mIZdgXJmT9R3AkEuV3b8Q5tiyMh4wTSuMDlWWLbPka1l8LNeebVyoLbD2J1Ae3LGyh3-Cho-QBTydhNmtoRlFs42K6D.ZTbjFQ7TFTLp301pUXsPgg",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+      "rid": "rid-display-getDeviceStatus",
+      "iat": 1767225600,
+      "ok": false,
+      "code": "permission_denied"
+    }
+  }
+}

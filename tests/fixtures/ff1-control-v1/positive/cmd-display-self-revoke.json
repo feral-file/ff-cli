@@ -1,0 +1,65 @@
+{
+  "name": "cmd-display-self-revoke",
+  "kind": "request",
+  "description": "A display grant revokes itself (the site's unpair), the one control command it may send (§5.7).",
+  "setup": {
+    "now": 1767225600,
+    "grants": [
+      "owner",
+      "controller",
+      "revoked"
+    ],
+    "displayGrants": [
+      {
+        "name": "display"
+      }
+    ],
+    "randSeed": "g63SOBrg__pGE0jHP872uLfTocvwgbUeSyb1OJlaY-o"
+  },
+  "from": "display",
+  "payload": "{\"v\":1,\"dev\":\"FF1-FIXTURE1\",\"gen\":\"772x9uI4OcVjB0inn2MHLA\",\"ctl\":\"PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8\",\"rid\":\"rid-cmd-display-self-revoke\",\"ctr\":1,\"iat\":1767225600,\"exp\":1767225660,\"op\":\"cmd\",\"rk\":\"dLtcA970AzOyGziZ9SDW-wU9uXpcY9THQtSZ-bb53wE\",\"cmd\":\"revokeController\",\"req\":{\"ctl\":\"PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8\"}}",
+  "claims": {
+    "v": 1,
+    "dev": "FF1-FIXTURE1",
+    "gen": "772x9uI4OcVjB0inn2MHLA",
+    "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+    "rid": "rid-cmd-display-self-revoke",
+    "ctr": 1,
+    "iat": 1767225600,
+    "exp": 1767225660,
+    "op": "cmd",
+    "rk": "dLtcA970AzOyGziZ9SDW-wU9uXpcY9THQtSZ-bb53wE",
+    "cmd": "revokeController",
+    "req": {
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8"
+    }
+  },
+  "ephemeralKey": {
+    "kty": "EC",
+    "crv": "P-256",
+    "x": "5wQnY4SUbIr_b6EpW6mfLhwVOcLaaKKkrwUVHZYjt6g",
+    "y": "TUAEvdogQJzMdpm0sNX-32X_GAl97yBe8o5_m4-0tW4",
+    "d": "XHkBy-Ezloezn3fSn7LwkSv0zKzs7Sv_MMLHmFIUymU"
+  },
+  "iv": "0LZGsMndu7yGNhdG",
+  "jws": "eyJhbGciOiJFUzI1NiIsImtpZCI6IlBOekh0ajltUGpPM2pmZUpHWTR1YnlXSjRvbDJmRzY2VjdCZkMycHBLQTgiLCJ0eXAiOiJmZjEtcmVxK2p3cyJ9.eyJ2IjoxLCJkZXYiOiJGRjEtRklYVFVSRTEiLCJnZW4iOiI3NzJ4OXVJNE9jVmpCMGlubjJNSExBIiwiY3RsIjoiUE56SHRqOW1Qak8zamZlSkdZNHVieVdKNG9sMmZHNjZWN0JmQzJwcEtBOCIsInJpZCI6InJpZC1jbWQtZGlzcGxheS1zZWxmLXJldm9rZSIsImN0ciI6MSwiaWF0IjoxNzY3MjI1NjAwLCJleHAiOjE3NjcyMjU2NjAsIm9wIjoiY21kIiwicmsiOiJkTHRjQTk3MEF6T3lHemlaOVNEVy13VTl1WHBjWTlUSFF0U1otYmI1M3dFIiwiY21kIjoicmV2b2tlQ29udHJvbGxlciIsInJlcSI6eyJjdGwiOiJQTnpIdGo5bVBqTzNqZmVKR1k0dWJ5V0o0b2wyZkc2NlY3QmZDMnBwS0E4In19.0JOQx1amBanmNUCDR5bGzliL4NVnr_gwX6111iiBoH1bAJBSUVr5piHhE134XLjnj29_VEqZWwghoKYrU8CePw",
+  "compact": "eyJhbGciOiJFQ0RILUVTIiwiZW5jIjoiQTI1NkdDTSIsImtpZCI6InpjdnU5Z1MtWkNsNWJWOWlLZFBhTGZSQW9YVzZ4d1Z0Mjd5MU5ucG1jbXciLCJ0eXAiOiJmZjEtcmVxK2p3ZSIsImN0eSI6ImZmMS1yZXErandzIiwiZXBrIjp7ImNydiI6IlAtMjU2Iiwia3R5IjoiRUMiLCJ4IjoiNXdRblk0U1ViSXJfYjZFcFc2bWZMaHdWT2NMYWFLS2tyd1VWSFpZanQ2ZyIsInkiOiJUVUFFdmRvZ1FKek1kcG0wc05YLTMyWF9HQWw5N3lCZThvNV9tNC0wdFc0In19..0LZGsMndu7yGNhdG.oGwYloe4uLtA0Lhwev-cJpeo8kWhm9fb4oFtKLIJAp3i5EQEcwc054k7owhCqA7_xH1QS-UlNnwZcdOF-AIMatxwqaKjU0F3cGPHf38QxNfpFo-4pJpXQPhvy_r4AIhDfEWWPnwrCLsEg9us44hU22IOb4wmIk3vXUaqNSpGfjOn2SY0SEDZt7iuwGp4RdGsgl_SE8ehXkxqhC-H-5c15hwTaC-1IBAdjXH0KddvpkOGp88dJtNqNkBmUFtydGxKxNVXzYxKR3lqm6JfhNy392xcjHKjlzoN13kPCCJYjEa8z7qyOzk6asdgvfKQQT-4iS-EqBc1ESix89mAYNd1z0dZr6g_EHxHiPbh1NMkGS2_x1NF_fAEGXwAHcKn2186vz6h0jM3UWqcod3IaSnivx1LiHgU1vAfSFOS4pW8D7dhWszD5Q8pJODIP6ErXBP2rQzQhRzHFjffo6kjzpSYUIyVhOYnZelVTrqugZDzlWEqnK7FMNWXhU5S32B2n8VQA6vYNob8ogTbpCxlXFnbFbR8kWAlCMUR0ziEPq8ZRfX6I1YKL6zMypcveogoW8cMll1DEFrDM3HJZRPrOLF_pEh46KN3sI9DF21--0D0Y6cd9S8xgSNQf4vyJ7cekxKU9eGsyVw1OEnPJni-TqOzKtNYTImaxXE-jC_Yiml1ZuPmrLwDTAQZiLjg7nPum8gT2hpwxJ8txpOyJTchqR0MAl12kya9eDemTleTa6NXi8jfnDBMsE2Z8vRSBjb8qVe5GmS281FyexwuS1fJtwNU7LDOyx14FZuCFSgKLgLSMpK8WOgTTb2OhYlR1ML3cjZRAoh3JN5ZirZqlW0aKlTayZrwFAs-cGMVElpGbQ.75lY2p_tXTpMneuOQkHxBQ",
+  "rk": "dLtcA970AzOyGziZ9SDW-wU9uXpcY9THQtSZ-bb53wE",
+  "expect": {
+    "command": "revokeController",
+    "replyOk": true
+  },
+  "reply": {
+    "compact": "eyJhbGciOiJkaXIiLCJlbmMiOiJBMjU2R0NNIiwidHlwIjoiZmYxLXJlcytqd2UiLCJjdHkiOiJmZjEtcmVzK2p3cyJ9..MsmEdBbpiQRqTci_.LQg7zlaCrOcpn0Sf7OwIcW7OA4gdV4ZGIPELHT7R916enU1hFhcEZaZYZdcnwkU94giuO_VB2X3lbxkN5HZ7ji826Lhx2exVv1nXKpAdZ55CU7pSSEJxR7ttUS8ckkC-7E6sjXA6EMwwVSYDoD1KBChVHMQnY_WLvspiuugqy-3kZ9oGFq90y37cxTbB-Sw6EV2UzQEpwYLp9Jtqaeyq55n1kSXTcUAibuC6uuTSIcaUMu4urSCTsm1-NtF76wep4svnF22HftMX6J0BcPbPT6KLjRxLl3pLaX90walxdi0wWkpu1OOeVnRJljKmKdUy06SCmxHz5mr2x6LnEggba0qKRc4IbGWl9t6VryQ8DEaKCulP9Xfg1wVUk0OEFcMn7qiH6lXxHzgIoSFN30sperZqWxhifINTCnI5WcYCDF2bUY0oE6fn3_t15PRV72rTrgNbkDiUrx3gnKof5u2sUwIUc3mKtwNX2uvFbCBaRg6To_QAys2m2_GiZQ6Kp3xe-5BAhFhl8riJ_yJ6zGPiyonfVQRdULLOODFomIisgpiU4alUjWFlvl3kElTzfEsqWWnYCUwbyAuP4SWBIf0zxw.6jr248p4CuwqGCDHFqeSuw",
+    "claims": {
+      "v": 1,
+      "dev": "FF1-FIXTURE1",
+      "gen": "772x9uI4OcVjB0inn2MHLA",
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+      "rid": "rid-cmd-display-self-revoke",
+      "iat": 1767225600,
+      "ok": true,
+      "res": {}
+    }
+  }
+}

@@ -52,6 +52,7 @@ import {
   type PairDeps,
   confirmCorruptReplacement,
   noteReplacement,
+  type ListControllersResult,
   formatControllerTable,
   pairDevice,
   parseLabel,
@@ -855,6 +856,10 @@ describe('controller store for owner-initiated pairing', () => {
     const obj = JSON.parse(text);
     for (const bad of [
       { ...obj, registration: { ...obj.registration, role: 'admin' } },
+      // The display role exists only in a device's display store (§5.7); it is
+      // never a role ff-cli holds, so a file or registration claiming it is corrupt.
+      { ...obj, registration: { ...obj.registration, role: 'display' } },
+      { ...obj, role: 'display' },
       { ...obj, registration: { ...obj.registration, extra: 1 } },
       { ...obj, expiresAt: 'soon' },
     ]) {
@@ -1073,6 +1078,37 @@ describe('controllers table', () => {
     assert.match(text, /revoked 2025-12-31 23:50/);
     assert.match(text, /359 263/);
     assert.ok(text.includes(keys.controllers.owner.ctl));
+  });
+
+  test('prints display rows (§5.5, §5.7) by origin, unverified when unattested, never as self', () => {
+    const fixture = JSON.parse(
+      fs.readFileSync(
+        path.join(FIXTURES, 'positive', 'cmd-owner-listControllers-display.json'),
+        'utf8'
+      )
+    );
+    const res = fixture.reply.claims.res as ListControllersResult;
+    const display = res.controllers!.find((row) => row.role === 'display')!;
+    assert.equal(display.platform, 'web');
+    assert.equal(display.self, undefined);
+    const lines = formatControllerTable(res, keys.now);
+    const text = lines.join('\n');
+    assert.match(text, /\*\s+owner\s+Owner phone/);
+    assert.match(
+      text,
+      / {3}display\s+https:\/\/artblocks\.io\s+web\s+2026-01-01 00:00\s+active\s+/
+    );
+    assert.ok(text.includes(keys.controllers.display.ctl));
+    assert.doesNotMatch(text, /unverified/);
+
+    const asserted = formatControllerTable(
+      { controllers: [{ ...display, originAttested: false, expiresAt: keys.now - 1 }] },
+      keys.now
+    );
+    assert.match(
+      asserted.join('\n'),
+      /https:\/\/artblocks\.io \(unverified\)\s+web\s+\S+ \S+\s+expired/
+    );
   });
 });
 

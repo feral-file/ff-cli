@@ -28,7 +28,7 @@ import os from 'node:os';
 import type { FF1Device } from '../../types';
 import { fetchWithTimeout } from '../http';
 import {
-  type ControlRole,
+  type ControllerRole,
   type ControllerKeys,
   type DeviceProfile,
   type EnrollObject,
@@ -274,7 +274,7 @@ function enrollObject(record: ControllerRecord): EnrollObject {
   };
 }
 
-function asRole(value: unknown): ControlRole | undefined {
+function asRole(value: unknown): ControllerRole | undefined {
   return value === 'owner' || value === 'controller' ? value : undefined;
 }
 
@@ -302,7 +302,7 @@ export interface EnrollOptions {
 function parseGrant(
   res: unknown,
   pinned: DeviceProfile
-): { role: ControlRole; nk: string; expiresAt?: number } | string {
+): { role: ControllerRole; nk: string; expiresAt?: number } | string {
   if (!isPlainObject(res)) {
     return 'enroll reply has no grant';
   }
@@ -326,7 +326,7 @@ function parseGrant(
   ) {
     return 'enroll reply carries a different FF1 profile than the one the owner sent';
   }
-  const grant: { role: ControlRole; nk: string; expiresAt?: number } = {
+  const grant: { role: ControllerRole; nk: string; expiresAt?: number } = {
     role,
     nk: res.nk as string,
   };

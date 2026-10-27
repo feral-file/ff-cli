@@ -29,7 +29,7 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { getConfigPaths } from '../../config';
 import {
-  type ControlRole,
+  type ControllerRole,
   type ControllerKeys,
   type DeviceProfile,
   controllerIdOf,
@@ -62,7 +62,7 @@ export interface RegistrationRecord {
   /** The FF1's name as the owner's app sent it. */
   deviceName: string;
   /** The role the owner registered; the enroll reply is authoritative. */
-  role: ControlRole;
+  role: ControllerRole;
   expiresAt?: number;
   receivedAt: number;
 }
@@ -76,7 +76,7 @@ export interface ControllerRecord {
   keys: ControllerKeys;
   label: string;
   /** Absent until enrollment completes. */
-  role?: ControlRole;
+  role?: ControllerRole;
   /** Notification key, b64u(32); absent until enrollment completes. */
   nk?: string;
   /** Grant expiry from the last enroll reply; absent for a grant that never expires. */
@@ -1046,7 +1046,7 @@ export function skipCounterAhead(
  */
 export function markEnrolled(
   deviceId: string,
-  grant: { role: ControlRole; nk: string; expiresAt?: number; now?: number },
+  grant: { role: ControllerRole; nk: string; expiresAt?: number; now?: number },
   options: ControllerStoreOptions = {}
 ): ControllerRecord {
   const file = controllerFilePath(deviceId, options);
@@ -1103,7 +1103,7 @@ export function describeController(record: ControllerRecord): {
   gen: string;
   sigPin: string;
   encPin: string;
-  role?: ControlRole;
+  role?: ControllerRole;
 } {
   return {
     controllerId: controllerIdOf(record.keys),

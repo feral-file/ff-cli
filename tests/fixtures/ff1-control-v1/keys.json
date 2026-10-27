@@ -63,6 +63,28 @@
       "nk": "9NFsIXizsJ8J2FuC4LeFNkN0iyPiJlq7y2PQqWnMiaU",
       "createdAt": 1767222000
     },
+    "display": {
+      "ctl": "PNzHtj9mPjO3jfeJGY4ubyWJ4ol2fG66V7BfC2ppKA8",
+      "sig": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "pVMpTD3VBLIzZ6W9HChCUOmASX_LVShnVCQgmb5V6BQ",
+        "y": "E6hkcOqjeFl3nCcNYMAvaydP1RfnHpCXwp1jC0QaFP0",
+        "d": "o85wLHn9b8S01SHWmoqikMfX0B86WYhfMB1Xlo59WJ4"
+      },
+      "enc": {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": "bgWq044evlj3SMfdfXmoyi-LS83MOpuqsXjtviKphyQ",
+        "y": "VKtcnW96iZ8mmQAH4xPsdHdzycSDPHHHFONsIefjLvs",
+        "d": "-SXmUdfvQ2D5smozVyNP_1KtnWLCt9RZkQk8iR6R-5k"
+      },
+      "label": "artblocks.io",
+      "platform": "web",
+      "role": "display",
+      "origin": "https://artblocks.io",
+      "createdAt": 1767225600
+    },
     "owner": {
       "ctl": "zQolPwCWX2XA4dbqMKFtXvd-PbPj1pakwTK2iXdkYTg",
       "sig": {

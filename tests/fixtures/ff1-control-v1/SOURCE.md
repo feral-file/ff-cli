@@ -2,11 +2,12 @@
 
 These files are a verbatim copy of
 `components/feral-controld/control/testdata/fixtures/` from
-`feral-file/ffos-user` at commit `a02cca04092cd5df3dff089dce422a8bae8195d7`.
-74 JSON files: keys.json, 16 positive and 57 negative.
+`feral-file/ffos-user` branch `feat/3551-display-grants` at commit
+`25d776c` (ffos-user#414). 85 JSON files: keys.json, 20 positive and 64 negative.
 
 The normative spec is `docs/ff1-control-v1.md` in the same commit; §12 defines
-the fixture format. The Go generator is
+the fixture format and §5.7 the display-grant vectors (`setup.displayGrants`,
+`keys.controllers.display`). The Go generator is
 `components/feral-controld/control/internal/fixturegen`.
 
 Do not edit these files by hand. To update them, regenerate them in ffos-user
