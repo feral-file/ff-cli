@@ -264,12 +264,25 @@ const DEFAULT_FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.wo
  * per-device credential; it exists only for deployments that retain a separate
  * cloud-edge compatibility gate.
  */
-export function getFF1RelayerConfig(): { baseUrl: string; apiKey?: string } {
+export function getFF1RelayerConfig(): FF1RelayerSettings {
   return resolveFF1RelayerConfig(getConfig());
 }
 
+/**
+ * FF1RelayerSettings is the resolved relayer configuration. `v2Explicit` is
+ * set only when the v2 endpoint was configured rather than derived: commands
+ * use a derived endpoint only for an FF1 whose verified status advertises
+ * relay v2, while pairing always may (see resolveV2Endpoint).
+ */
+export interface FF1RelayerSettings {
+  baseUrl: string;
+  apiKey?: string;
+  v2Endpoint?: string;
+  v2Explicit?: boolean;
+}
+
 /** Resolve and validate the effective FF1 relayer configuration. */
-function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: string } {
+function resolveFF1RelayerConfig(config: Config): FF1RelayerSettings {
   const configured = config.ff1Relayer as unknown;
   if (
     configured !== undefined &&
@@ -300,10 +313,13 @@ function resolveFF1RelayerConfig(config: Config): { baseUrl: string; apiKey?: st
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error('ff1Relayer.baseUrl must be a valid HTTP(S) URL');
   }
+  const v2 = resolveV2Endpoint(fields.v2Endpoint, parsed);
   const apiKey = ((fields.apiKey as string | undefined) || process.env.FF1_RELAYER_API_KEY)?.trim();
   return {
     baseUrl,
     apiKey: apiKey || undefined,
+    ...(v2.endpoint ? { v2Endpoint: v2.endpoint } : {}),
+    ...(v2.endpoint && v2.explicit ? { v2Explicit: true } : {}),
   };
 }
 
@@ -403,6 +419,67 @@ function normalizeIpfsGateway(value: string, label: string): string {
   parsed.search = '';
   parsed.hash = '';
   return parsed.toString();
+}
+
+/**
+ * resolveV2Endpoint picks the relay v2 origin (ffos-user docs/ff1-control-v1.md
+ * §10). An explicit `ff1Relayer.v2Endpoint` or FF1_RELAY_V2_ENDPOINT wins; an
+ * empty string turns v2 off. Otherwise v2 uses the legacy relayer's own
+ * origin when that is an HTTPS origin: the same relay Worker serves the
+ * legacy `/api` routes and `/v2/channels/…`, so the production default needs
+ * no second constant. A custom plain-HTTP or path-bearing legacy relayer gets
+ * no v2 unless one is configured.
+ *
+ * The derived default is only a pairing default for commands: during the
+ * rollout most FF1s are not on v2, and a stranger's ACK on the device channel
+ * would turn a command that the legacy topic could have delivered into an
+ * ambiguous one. secure-transport therefore sends commands on a derived
+ * endpoint only to an FF1 that advertised `relayV2` in a verified status.
+ *
+ * @param configured - The `ff1Relayer.v2Endpoint` value, if any
+ * @param baseUrl - The validated legacy relayer URL
+ * @returns The v2 origin (undefined when v2 is off) and whether it was configured
+ * @throws {Error} When a configured endpoint is not an acceptable origin
+ */
+function resolveV2Endpoint(
+  configured: unknown,
+  baseUrl: URL
+): { endpoint?: string; explicit: boolean } {
+  const value = configured ?? process.env.FF1_RELAY_V2_ENDPOINT;
+  if (value === undefined) {
+    const bare = !baseUrl.username && !baseUrl.password && !baseUrl.search && !baseUrl.hash;
+    const derived = baseUrl.protocol === 'https:' && bare && ['', '/'].includes(baseUrl.pathname);
+    return { endpoint: derived ? baseUrl.origin : undefined, explicit: false };
+  }
+  if (typeof value !== 'string') {
+    throw new Error('ff1Relayer.v2Endpoint must be a string');
+  }
+  if (value.trim() === '') {
+    return { explicit: true };
+  }
+  let endpoint: URL;
+  try {
+    endpoint = new URL(value);
+  } catch {
+    throw new Error('Invalid ff1Relayer.v2Endpoint');
+  }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(endpoint.hostname);
+  if (
+    !['https:', 'wss:'].includes(endpoint.protocol) &&
+    !(['http:', 'ws:'].includes(endpoint.protocol) && loopback)
+  ) {
+    throw new Error('ff1Relayer.v2Endpoint requires WSS/HTTPS outside loopback');
+  }
+  if (
+    endpoint.username ||
+    endpoint.password ||
+    endpoint.search ||
+    endpoint.hash ||
+    !['', '/'].includes(endpoint.pathname)
+  ) {
+    throw new Error('Invalid ff1Relayer.v2Endpoint');
+  }
+  return { endpoint: value, explicit: true };
 }
 
 /**

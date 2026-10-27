@@ -10,6 +10,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
+import { encodeRelayFrame } from '../src/utilities/relay-client';
+import { sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { parseProfile } from '../src/utilities/control/codec';
 import { parsePrivateJwk } from '../src/utilities/control/jwk';
 import {
@@ -25,6 +27,7 @@ import {
 } from '../src/utilities/control/controller-store';
 import {
   REPLAY_COUNTER_JUMP,
+  type SecureTransportDeps,
   findEnvelopeAnswer,
   sendSecureRequest,
 } from '../src/utilities/control/secure-transport';
@@ -109,7 +112,8 @@ beforeEach(() => {
   fs.writeFileSync(
     path.join(tmp, 'config.json'),
     JSON.stringify({
-      ff1Relayer: { baseUrl: 'https://relayer.example' },
+      // v2 off: these tests pin the legacy topic route; the carrier tests below set it.
+      ff1Relayer: { baseUrl: 'https://relayer.example', v2Endpoint: '' },
       ff1Devices: { devices: [{ name: 'Office', id: DEVICE_ID, host: HOST }] },
     })
   );
@@ -910,6 +914,384 @@ describe('secure sshAccess', () => {
     );
     assert.equal(result.success, false);
     assert.ok(urls.every((u) => u.startsWith(HOST)));
+  });
+});
+
+// These exercise the existing endpoint fixture through the new carrier; no
+// registration contract or crypto is implemented by the transport tests.
+describe('secure generic carrier integration', () => {
+  type Mode = 'verified' | 'empty-channel' | 'never-admitted' | 'lost-command-reply' | 'no-receipt';
+
+  /**
+   * carrierSocket is a relay with a stranger and the FF1 on the device
+   * channel. The stranger ACKs everything and answers with a forgery.
+   */
+  function carrierSocket(device: FakeFF1, mode: Mode, sent: string[]) {
+    return class Socket extends EventTarget {
+      binaryType = '';
+      constructor(url: string, protocol: string) {
+        super();
+        assert.equal(protocol, 'ff-relay.v2');
+        assert.match(url, /\/v2\/channels\//);
+        queueMicrotask(() => {
+          if (mode === 'never-admitted') {
+            this.dispatchEvent(new Event('error'));
+            return;
+          }
+          const peers = mode === 'empty-channel' ? [] : ['stranger', 'ff1'];
+          this.message(JSON.stringify({ type: 'hello', connectionId: 'cli', peers }));
+        });
+      }
+      message(data: unknown) {
+        this.dispatchEvent(new MessageEvent('message', { data }));
+      }
+      close() {
+        /* No actual network socket. */
+      }
+      send(data: unknown) {
+        if (!(data instanceof Uint8Array)) {
+          return;
+        }
+        const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
+        const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
+        const body = JSON.parse(new TextDecoder().decode(data.slice(2 + length)));
+        sent.push(header.to);
+        queueMicrotask(() => this.deliver(header, body));
+      }
+      deliver(header: { id: string; to: string }, body: { messageID: string; message: unknown }) {
+        if (mode === 'empty-channel') {
+          this.control({ type: 'error', code: 'peer_unavailable', id: header.id, to: 'peers' });
+          return;
+        }
+        if (mode === 'no-receipt') {
+          // Written, but no ACK or refusal before the deadline.
+          return;
+        }
+        this.control({ type: 'ack', from: 'stranger', id: header.id });
+        this.control({ type: 'ack', from: 'ff1', id: header.id });
+        this.reply('stranger', body.messageID, { v: 1, jwe: 'forged-candidate' });
+        const answer = device.handle(body.message as Record<string, unknown>).json;
+        if (mode === 'lost-command-reply') {
+          this.dispatchEvent(new Event('close'));
+          return;
+        }
+        this.reply('ff1', body.messageID, answer);
+      }
+      control(event: Record<string, unknown>) {
+        this.message(JSON.stringify(event));
+      }
+      reply(from: string, messageID: string, message: unknown) {
+        const frame = encodeRelayFrame(
+          { v: 2, id: crypto.randomUUID(), from, to: 'cli' },
+          new TextEncoder().encode(JSON.stringify({ type: 'RPC', messageID, message }))
+        );
+        this.message(frame.buffer);
+      }
+    };
+  }
+
+  async function sendOverCarrier(
+    mode: Mode,
+    overrides: { v2TimeoutMs?: number } = {},
+    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true }
+  ) {
+    const record = enrolledRecord('owner');
+    if (route.relayV2 !== undefined) {
+      record.relayV2 = route.relayV2;
+      saveController(record, { dir: storeDir });
+    }
+    const device = fakeDevice();
+    const previous = globalThis.WebSocket;
+    const sent: string[] = [];
+    let legacyCalls = 0;
+    globalThis.WebSocket = carrierSocket(device, mode, sent) as unknown as typeof WebSocket;
+    try {
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'next',
+          req: {},
+          retry: false,
+          relayerFallback: true,
+        },
+        record,
+        {
+          ...overrides,
+          controllerStore: { dir: storeDir },
+          nowFn: () => NOW,
+          getRelayerConfigFn: () => ({
+            baseUrl: 'https://legacy.test',
+            v2Endpoint: 'wss://v2.test',
+            ...(route.v2Explicit ? { v2Explicit: true } : {}),
+          }),
+          getTopicIdFn: () => 'optional-topic',
+          noticeFn: () => undefined,
+          fetchFn: async (input, init) => {
+            if (new URL(input.toString()).origin === HOST) {
+              throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+            }
+            legacyCalls++;
+            return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
+          },
+        }
+      );
+      return { outcome, device, sent, legacyCalls };
+    } finally {
+      globalThis.WebSocket = previous;
+    }
+  }
+
+  test('a verified reply over a fan-out settles the command; no status probe precedes it', async () => {
+    const { outcome, device, sent, legacyCalls } = await sendOverCarrier('verified');
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 0);
+    assert.deepEqual(sent, ['peers']);
+    assert.deepEqual(
+      device.seen.map((c) => c.cmd),
+      ['next']
+    );
+  });
+
+  for (const mode of ['empty-channel', 'never-admitted'] as const) {
+    test(`proven undelivered (${mode}) falls back to the legacy topic with a fresh request`, async () => {
+      const { outcome, device, legacyCalls } = await sendOverCarrier(mode);
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(outcome.transport, 'relayer');
+      assert.equal(legacyCalls, 1);
+      assert.deepEqual(
+        device.seen.map((c) => c.cmd),
+        ['next']
+      );
+    });
+  }
+
+  test('a lost reply after delivery is outcome unknown and never falls back', async () => {
+    const { outcome, device, legacyCalls } = await sendOverCarrier('lost-command-reply');
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal((outcome as { unreachable?: boolean }).unreachable, undefined);
+    assert.equal(legacyCalls, 0, 'ambiguous execution must never fall back');
+    assert.equal(device.seen.length, 1);
+  });
+
+  test('a deadline while a written frame awaits its receipt is ambiguous, never a fallback', async () => {
+    const { outcome, legacyCalls } = await sendOverCarrier('no-receipt', { v2TimeoutMs: 300 });
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0, 'a written frame may have reached the FF1');
+  });
+
+  /**
+   * sendWithTwoCopies runs one v2 command through a fake relay client that
+   * delivers the sealed request to the FF1 twice (a fan-out plus a
+   * late-joiner copy): the first copy runs, the second is answered with a
+   * verified `replay`. Both replies are verified, strictly one after the
+   * other and in the given order, and the request settles with
+   * `settleWith`. No timers: the order is fixed on every platform.
+   */
+  async function sendWithTwoCopies(order: 'ok-first' | 'replay-first', settleWith: 0 | 1) {
+    const record = enrolledRecord('owner');
+    const device = fakeDevice();
+    let legacyCalls = 0;
+    const relayClientFn = () => ({
+      close: () => undefined,
+      requestPrepared: async (
+        prepare: () => Promise<{
+          command: string;
+          request: Record<string, unknown>;
+          verify: (value: Record<string, unknown>) => Promise<boolean>;
+        }>
+      ) => {
+        const prepared = await prepare();
+        const message = { command: prepared.command, request: prepared.request };
+        const ok = device.handle(message).json;
+        const replay = device.handle(message).json;
+        const replies = (order === 'ok-first' ? [ok, replay] : [replay, ok]).map((answer) => ({
+          type: 'RPC',
+          messageID: 'm',
+          message: answer,
+        }));
+        for (const reply of replies) {
+          assert.equal(await prepared.verify(reply), true);
+        }
+        return replies[settleWith];
+      },
+    });
+    const outcome = await sendSecureRequest(
+      {
+        device: { id: DEVICE_ID, host: HOST },
+        op: 'cmd',
+        cmd: 'next',
+        req: {},
+        retry: false,
+        relayerFallback: true,
+      },
+      record,
+      {
+        relayClientFn: relayClientFn as unknown as SecureTransportDeps['relayClientFn'],
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        getRelayerConfigFn: () => ({
+          baseUrl: 'https://legacy.test',
+          v2Endpoint: 'wss://v2.test',
+          v2Explicit: true,
+        }),
+        getTopicIdFn: () => 'optional-topic',
+        noticeFn: () => undefined,
+        fetchFn: async (input, init) => {
+          if (new URL(input.toString()).origin === HOST) {
+            throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+          }
+          legacyCalls++;
+          return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
+        },
+      }
+    );
+    return { outcome, device, legacyCalls };
+  }
+
+  test('a verified replay on v2 is an unknown outcome: no counter jump, no resend', async () => {
+    const before = loadController(DEVICE_ID, { dir: storeDir })?.ctr ?? 0;
+    const { outcome, device, legacyCalls } = await sendWithTwoCopies('replay-first', 0);
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0);
+    assert.equal(device.seen.length, 2, 'only the two relay copies, nothing resent');
+    const after = loadController(DEVICE_ID, { dir: storeDir })!.ctr;
+    assert.ok(after - before < REPLAY_COUNTER_JUMP, 'the counter did not jump');
+  });
+
+  test('the reply that settled the request is the answer, not a later one that also verified', async () => {
+    // The ok reply settles the request; the replay to the second copy
+    // verifies afterwards and must not replace it.
+    const { outcome, legacyCalls } = await sendWithTwoCopies('ok-first', 0);
+    assert.equal(outcome.kind, 'reply');
+    assert.equal((outcome as { reply: { ok: boolean } }).reply.ok, true);
+    assert.equal(legacyCalls, 0);
+  });
+
+  test('an ambiguous failure on the cached route keeps relayV2 and is not resent', async () => {
+    // One blip (a socket drop, the deadline) must not strand a v2-only FF1
+    // until the next LAN preflight: the flag stays, only a verified status
+    // changes it.
+    const { outcome, legacyCalls } = await sendOverCarrier(
+      'no-receipt',
+      { v2TimeoutMs: 300 },
+      { relayV2: true }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.match((outcome as { error: string }).error, /Outcome unknown/);
+    assert.equal(legacyCalls, 0, 'an ambiguous outcome is never resent on the legacy topic');
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('a derived endpoint is not used for an FF1 that has not advertised relay v2', async () => {
+    for (const relayV2 of [undefined, false]) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier('verified', {}, { relayV2 });
+      assert.equal(outcome.kind, 'reply');
+      assert.deepEqual(sent, [], 'no v2 attempt');
+      assert.equal(legacyCalls, 1);
+    }
+  });
+
+  test('a derived endpoint is used for an FF1 whose verified status advertised relay v2', async () => {
+    const { outcome, sent, legacyCalls } = await sendOverCarrier('verified', {}, { relayV2: true });
+    assert.equal(outcome.kind, 'reply');
+    assert.deepEqual(sent, ['peers']);
+    assert.equal(legacyCalls, 0);
+  });
+
+  test('a verified getDeviceStatus records whether the FF1 advertises relay v2', async () => {
+    for (const [control, expected] of [
+      [{ state: 'secured', transports: ['lan', 'relayer', 'relayV2'] }, true],
+      [{ state: 'secured' }, false],
+    ] as const) {
+      const record = enrolledRecord('owner');
+      const device = fakeDevice(() => ({ ok: true, res: { installedVersion: '2.0.0', control } }));
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'getDeviceStatus',
+          req: {},
+          retry: false,
+          relayerFallback: false,
+        },
+        record,
+        { controllerStore: { dir: storeDir }, nowFn: () => NOW, fetchFn: lanFetch(device) }
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(record.relayV2, expected);
+      assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, expected);
+    }
+  });
+
+  test('the v2 deadline bounds a command the FF1 never answers', async () => {
+    const started = Date.now();
+    const record = enrolledRecord('owner');
+    const previous = globalThis.WebSocket;
+    globalThis.WebSocket = class extends EventTarget {
+      binaryType = '';
+      constructor() {
+        super();
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({ type: 'hello', connectionId: 'cli', peers: ['ff1'] }),
+            })
+          )
+        );
+      }
+      send(data: unknown) {
+        if (!(data instanceof Uint8Array)) {
+          return;
+        }
+        const length = new DataView(data.buffer, data.byteOffset).getUint16(0);
+        const header = JSON.parse(new TextDecoder().decode(data.slice(2, 2 + length)));
+        queueMicrotask(() =>
+          this.dispatchEvent(
+            new MessageEvent('message', {
+              data: JSON.stringify({ type: 'ack', from: 'ff1', id: header.id }),
+            })
+          )
+        );
+      }
+      close() {
+        /* No actual network socket. */
+      }
+    } as unknown as typeof WebSocket;
+    try {
+      const outcome = await sendSecureRequest(
+        {
+          device: { id: DEVICE_ID, host: HOST },
+          op: 'cmd',
+          cmd: 'revokeController',
+          req: {},
+          retry: false,
+          relayerFallback: true,
+        },
+        record,
+        {
+          v2TimeoutMs: 300,
+          controllerStore: { dir: storeDir },
+          nowFn: () => NOW,
+          getRelayerConfigFn: () => ({
+            baseUrl: 'https://legacy.test',
+            v2Endpoint: 'wss://v2.test',
+          }),
+          getTopicIdFn: () => 'optional-topic',
+          noticeFn: () => undefined,
+          fetchFn: async () => {
+            throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
+          },
+        }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.ok(Date.now() - started < 2000, 'the default 30 s deadline was used');
+    } finally {
+      globalThis.WebSocket = previous;
+    }
   });
 });
 

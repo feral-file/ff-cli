@@ -485,10 +485,14 @@ async function waitForOwner(
       if (signal.aborted) {
         return stopped();
       }
+      if (error instanceof PairingTransportUnavailableError) {
+        throw new CommandFailure(
+          `Pairing is not available: ${error.message}.`,
+          'Remove an empty ff1Relayer.v2Endpoint or FF1_RELAY_V2_ENDPOINT, or set an HTTPS or WSS relay v2 origin (see docs/CONFIGURATION.md, Relay v2).'
+        );
+      }
       throw new CommandFailure(
-        error instanceof PairingTransportUnavailableError
-          ? `Pairing is not available in this build of ff-cli: ${error.message}.`
-          : `Could not open the pairing channel: ${(error as Error).message}`,
+        `Could not open the pairing channel: ${(error as Error).message}`,
         'Pairing needs an internet connection to the Feral File relay. Check the connection and try again.'
       );
     }
@@ -1090,6 +1094,7 @@ async function selfRevoke(
         fetchFn:
           deps.fetchFn ??
           ((input, init) => fetchWithTimeout(input, init ?? {}, UNPAIR_REVOKE_TIMEOUT_MS)),
+        v2TimeoutMs: deps.v2TimeoutMs ?? UNPAIR_REVOKE_TIMEOUT_MS,
         noticeFn: () => undefined,
       }
     );

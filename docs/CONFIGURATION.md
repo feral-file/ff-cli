@@ -46,7 +46,6 @@ Used for signing DP‑1 playlists.
 - `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` or `--key-file <path>` to override it for a single run — see [Where the signing key can come from](#where-the-signing-key-can-come-from). The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
   **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) accept the private key in any of these encodings:
-
   - **base64 PKCS#8 DER** — recommended; what `ff-cli setup` generates.
   - **32-byte raw Ed25519 seed** as **hex** (optional `0x`) or **base64**.
   - **PEM** (`-----BEGIN PRIVATE KEY-----`).
@@ -90,7 +89,7 @@ delivery mechanism rather than a fourth key format.
 
 **Prefer `--key-file` to `--key`.** `--key` writes your private key into your shell history file and
 exposes it in the process list, where any local user can read it for as long as the command runs.
-Neither disclosure can be undone: an Ed25519 signing key *is* the identity it asserts, and a playlist's
+Neither disclosure can be undone: an Ed25519 signing key _is_ the identity it asserts, and a playlist's
 `curators[]` owner set is immutable, so a leaked key cannot be rotated out of a document that already
 names it. `--key-file` keeps the material in a file you control:
 
@@ -116,7 +115,7 @@ The rules on both flags:
   something a publish or a delete can be taken back from.
 - **A `--key-file` argument is always opened, whatever it looks like.** A directory really can be
   called `BEGIN`, and a key file really can be named after a content hash. What is gated is not the
-  open but the *message*: a failure names the path only when it is short and no part of it is a
+  open but the _message_: a failure names the path only when it is short and no part of it is a
   complete key encoding, and otherwise says it could not be read without repeating it. Typing the key
   where the path goes — one keystroke from `--key` — is reported as that mistake, by name, with the
   value withheld.
@@ -149,8 +148,8 @@ If you need a different role, set `playlist.role` to one of the DP-1 signing rol
 ### Signing role and ownership
 
 A feed decides who owns a playlist from the document itself: the keys in `curators[]` are the owner set.
-Under **role-aware ownership**, a key counts as an owner only when that same key *also signed in the
-`curator` role* — being named is a claim, signing as `curator` is the proof.
+Under **role-aware ownership**, a key counts as an owner only when that same key _also signed in the
+`curator` role_ — being named is a claim, signing as `curator` is the proof.
 
 `ff-cli publish` requires that role. **This is ff-cli's check, not every feed's answer today**: a feed that
 does not yet enforce roles accepts an `agent`-signed document, so a manual upload of the same file can
@@ -289,7 +288,7 @@ Configure devices you want to play content on.
 - `ff1Devices.devices` (array of objects):
   - `name` (string): Friendly device label. Free‑form; pick anything memorable.
   - `id` (string): Stable physical ID discovered from FF1 (for example
-    `FF1-SKYZ2E3A`). Relayer pairing stores the topic under this ID in the OS
+    `FF1-ABCD1234`). Relayer pairing stores the topic under this ID in the OS
     credential vault, and controller pairing names the controller key file after it.
   - `host` (string): Device base URL. For LAN devices, use `http://<ip>:1111`. The device typically listens on port `1111`.
 
@@ -329,6 +328,7 @@ You can also manage devices independently with:
   it, and never chooses the one-time code when it already holds controller
   keys for the FF1 (a controller file, a pending replacement or the keys of
   an unfinished pairing); only `--topic-handoff` does then.
+
 - `ff-cli device controllers [name]` – List the controllers paired with an FF1
   and any pending requests (owner only).
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
@@ -397,6 +397,50 @@ The default relayer is
 need no additional key. Deployments that retain the cloud-edge compatibility
 gate may receive `ff1Relayer.apiKey` or `FF1_RELAYER_API_KEY`; ff-cli never
 bundles that shared key.
+
+#### Relay v2
+
+Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
+carries only sealed envelopes: a reply counts only when it verifies under the
+FF1 profile pinned at pairing. `device pair` uses it for its pairing channel.
+
+The v2 endpoint is the relayer's own origin (`ff1Relayer.baseUrl` when it is a
+bare HTTPS origin), so pairing needs no setting. Override it with
+`ff1Relayer.v2Endpoint` or `FF1_RELAY_V2_ENDPOINT`: an HTTPS or WSS origin
+(plain HTTP only on loopback), with no credentials, path or query. An empty
+value turns v2 off; `device pair` then reports that pairing is unavailable.
+
+When ff-cli is paired as a controller, a command that cannot reach the FF1 on
+the LAN goes over relay v2 first when the v2 endpoint is set explicitly, or
+when the FF1's last verified status listed `relayV2` in its control
+transports (ff-cli remembers this in the controller file). Otherwise it uses
+the topic relayer.
+
+```json
+{
+  "ff1Relayer": {
+    "v2Endpoint": "https://relay.example"
+  }
+}
+```
+
+- The stored topic is used only when relay v2 proves the command was not
+  delivered: it could not connect, or the relay refused it for every peer and
+  no part of it was acknowledged. The topic route then carries a newly sealed
+  request.
+- When the command may have reached the FF1 (it was acknowledged, or the
+  connection dropped after sending, or no verified reply came in time), ff-cli
+  reports "Outcome unknown" and does not send it again. Check the FF1 before
+  running the command again.
+- Relay refusals while connecting, and relay backpressure, are retried with
+  backoff.
+- Enrollment never uses relay v2: anyone can join the device channel, so a v2
+  reply proves nothing until the FF1 profile is confirmed.
+- The owner's sealed pairing result must fit one relay frame (32 KiB; results
+  are about 1 KiB). If the relay connection drops while `device pair` waits,
+  pairing stops; run it again to show a new code.
+- On relay v2 a `replay` answer is reported as an unknown outcome, never
+  retried: the FF1 may have received two copies of the same request.
 
 On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
@@ -520,19 +564,19 @@ including every retry, is a new request with a new counter. FF1s on older FF OS
 
 Errors and what to do:
 
-| Message | Cause | Fix |
-|---|---|---|
-| "This FF1 is secured and only accepts requests from paired controllers." | The FF1 refuses plaintext and ff-cli is not paired | `ff-cli device pair <name>`; an owner scans the code with **Add controller** |
-| "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys | `ff-cli device pair <name>` (or `--resume`); an owner scans the code with **Add controller** |
-| "Pairing was not completed: no owner answered…" | No verified answer reached ff-cli before `--timeout` | Run `ff-cli device pair <name>` again (needs internet) |
-| "Pairing is not available in this build of ff-cli…" | This build has no relay pairing channel yet | Update ff-cli |
-| "This command needs owner access…" | `ssh` or controller management with a controller grant | An owner grants the owner role in the app |
-| "The FF1 could not open the request." / "…rejected the request signature." | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is finished). Do not unpair |
-| "The reply did not verify against the paired FF1 identity…" | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply) | Check the device host; if the FF1 was reset, `ff-cli device pair <name>`. Do not unpair |
-| "The FF1 is busy; try again." | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request) | Run the command again |
-| "The FF1 has no grant for ff-cli, although an owner's Feral File app reported adding it." | An owner removed ff-cli again before it enrolled | `ff-cli device pair <name>` |
-| "The FF1 rejected the request counter as already used." | The counter is still behind after ff-cli moved it ahead once (another computer uses a copy of the file) | Stop the other copy; run the command again. Do not unpair |
-| "The FF1 rejected the request as malformed." | Usually a clock more than 5 minutes ahead of the FF1's | Fix the clock on this computer (or let the FF1 finish setting its time), then retry |
+| Message                                                                                                                         | Cause                                                                                                                                                                                     | Fix                                                                                                                                                                |
+| ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| "This FF1 is secured and only accepts requests from paired controllers."                                                        | The FF1 refuses plaintext and ff-cli is not paired                                                                                                                                        | `ff-cli device pair <name>`; an owner scans the code with **Add controller**                                                                                       |
+| "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys                                                                                                                                                            | `ff-cli device pair <name>` (or `--resume`); an owner scans the code with **Add controller**                                                                       |
+| "Pairing was not completed: no owner answered…"                                                                                 | No verified answer reached ff-cli before `--timeout`                                                                                                                                      | Run `ff-cli device pair <name>` again (needs internet)                                                                                                             |
+| "Pairing is not available: … relay v2 is turned off"                                                                            | Relay v2 is off: `ff1Relayer.v2Endpoint`/`FF1_RELAY_V2_ENDPOINT` is empty, the relayer settings are invalid, or `ff1Relayer.baseUrl` is not a bare HTTPS origin and no v2 endpoint is set | Remove the empty override, or set an HTTPS/WSS origin (see [Relay v2](#relay-v2))                                                                                  |
+| "This command needs owner access…"                                                                                              | `ssh` or controller management with a controller grant                                                                                                                                    | An owner grants the owner role in the app                                                                                                                          |
+| "The FF1 could not open the request." / "…rejected the request signature."                                                      | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one     | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is finished). Do not unpair |
+| "The reply did not verify against the paired FF1 identity…"                                                                     | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply)                                                                                                            | Check the device host; if the FF1 was reset, `ff-cli device pair <name>`. Do not unpair                                                                            |
+| "The FF1 is busy; try again."                                                                                                   | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request)                                                              | Run the command again                                                                                                                                              |
+| "The FF1 has no grant for ff-cli, although an owner's Feral File app reported adding it."                                       | An owner removed ff-cli again before it enrolled                                                                                                                                          | `ff-cli device pair <name>`                                                                                                                                        |
+| "The FF1 rejected the request counter as already used."                                                                         | The counter is still behind after ff-cli moved it ahead once (another computer uses a copy of the file)                                                                                   | Stop the other copy; run the command again. Do not unpair                                                                                                          |
+| "The FF1 rejected the request as malformed."                                                                                    | Usually a clock more than 5 minutes ahead of the FF1's                                                                                                                                    | Fix the clock on this computer (or let the FF1 finish setting its time), then retry                                                                                |
 
 Troubleshooting note:
 

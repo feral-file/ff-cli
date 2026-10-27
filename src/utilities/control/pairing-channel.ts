@@ -5,10 +5,12 @@
  * the sealed registration result.
  *
  * ff-cli only consumes this interface. The relay v2 carrier
- * (`/v2/channels/{channelId}/connections`) is implemented by the relay
- * adapter (ff-cli#134), which plugs in with setPairingChannelOpener. Until
- * then the default opener fails with PairingTransportUnavailableError, so a
- * build without the adapter says so instead of waiting on nothing.
+ * (`/v2/channels/{channelId}/connections`) is implemented by
+ * relay-pairing-channel.ts, which plugs in with setPairingChannelOpener at
+ * startup when a v2 endpoint is configured. Without one (or with invalid
+ * relayer settings) the default opener
+ * fails with PairingTransportUnavailableError, so the CLI says so instead of
+ * waiting on nothing.
  *
  * The channel is untrusted: anyone who saw the QR can join it and send bytes.
  * Every message is opened and checked by registration.ts before it means
@@ -37,11 +39,11 @@ export type PairingChannelOpener = (
   signal: AbortSignal
 ) => Promise<PairingChannel>;
 
-/** PairingTransportUnavailableError is thrown when no relay pairing channel is built in. */
+/** PairingTransportUnavailableError is thrown when relay v2 is off, so no pairing channel is installed. */
 export class PairingTransportUnavailableError extends Error {
   constructor() {
     super(
-      'owner-initiated pairing needs the relay v2 pairing channel, which this build does not include yet'
+      'owner-initiated pairing needs the relay v2 pairing channel, and relay v2 is turned off (check ff1Relayer.v2Endpoint, FF1_RELAY_V2_ENDPOINT and ff1Relayer.baseUrl)'
     );
     this.name = 'PairingTransportUnavailableError';
   }

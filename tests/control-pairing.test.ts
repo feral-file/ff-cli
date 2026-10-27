@@ -418,12 +418,12 @@ describe('device pair (owner-initiated registration)', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
   });
 
-  test('without the relay adapter, pairing says it is not available in this build', async () => {
+  test('without the relay adapter, pairing says it is not available because relay v2 is off', async () => {
     setPairingChannelOpener(undefined);
     const world = ownerWorld(approve());
     await assert.rejects(
       pairDevice(device, options, { ...world.deps, openChannel: undefined }),
-      /not available in this build.*relay v2 pairing channel/
+      /Pairing is not available: .*relay v2 is turned off/
     );
     // No private key file is left behind by a run that could not open the channel.
     assert.equal(fs.existsSync(path.join(storeDir, 'pairing', `${DEVICE_ID}.keys.json`)), false);
