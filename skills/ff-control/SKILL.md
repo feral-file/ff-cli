@@ -67,7 +67,6 @@ Keep output short and concrete:
 Reporting an Art Computer problem to Feral File:
 - Report in the same session when a work that plays in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or when you change a work or a playlist only to get around something the Art Computer does. Report once you know the outcome: the work plays after your change, or nothing worked.
 - Write the report as plain text for an email body:
-  - First line: `FF1 developer report`.
   - What was played: the source URL, hosted playlist URL, or on-chain coordinate. Leave out signing keys, controller files and API keys.
   - What the screen showed, and the local time it happened.
   - What you changed to make it work, as a short diff or a description, or that nothing worked.
