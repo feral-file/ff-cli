@@ -8,7 +8,6 @@ import { getFF1RelayerConfig, validateConfig } from '../src/config';
 const originalCwd = process.cwd();
 const originalUrl = process.env.FF1_RELAYER_URL;
 const originalKey = process.env.FF1_RELAYER_API_KEY;
-const originalV2 = process.env.FF1_RELAY_V2_ENDPOINT;
 let fixtureDir: string;
 
 describe('FF1 relayer configuration', () => {
@@ -17,7 +16,6 @@ describe('FF1 relayer configuration', () => {
     process.chdir(fixtureDir);
     delete process.env.FF1_RELAYER_URL;
     delete process.env.FF1_RELAYER_API_KEY;
-    delete process.env.FF1_RELAY_V2_ENDPOINT;
   });
 
   afterEach(() => {
@@ -31,11 +29,6 @@ describe('FF1 relayer configuration', () => {
       delete process.env.FF1_RELAYER_API_KEY;
     } else {
       process.env.FF1_RELAYER_API_KEY = originalKey;
-    }
-    if (originalV2 === undefined) {
-      delete process.env.FF1_RELAY_V2_ENDPOINT;
-    } else {
-      process.env.FF1_RELAY_V2_ENDPOINT = originalV2;
     }
     rmSync(fixtureDir, { recursive: true, force: true });
   });
@@ -74,37 +67,39 @@ describe('FF1 relayer configuration', () => {
     );
   });
 
-  test('a plain-HTTP or path-bearing relayer gets no default v2 endpoint', () => {
-    for (const baseUrl of ['http://relay.lan:8080', 'https://relay.example/legacy']) {
+  test('a relayer URL that is not a bare HTTPS origin turns v2 off', () => {
+    for (const baseUrl of [
+      'http://relay.lan:8080',
+      'https://relay.example/legacy',
+      'https://user:pass@relay.example',
+      'https://relay.example/?q=1',
+      'https://relay.example/#frag',
+    ]) {
       process.env.FF1_RELAYER_URL = baseUrl;
       assert.equal(getFF1RelayerConfig().v2Endpoint, undefined, baseUrl);
     }
   });
 
-  test('an explicit v2 endpoint wins and an empty one turns v2 off', () => {
-    assert.equal(getFF1RelayerConfig().v2Explicit, undefined, 'a derived endpoint is not explicit');
-    process.env.FF1_RELAY_V2_ENDPOINT = 'wss://v2.example';
-    assert.equal(getFF1RelayerConfig().v2Endpoint, 'wss://v2.example');
-    assert.equal(getFF1RelayerConfig().v2Explicit, true);
-    writeFileSync(
-      join(fixtureDir, 'config.json'),
-      JSON.stringify({ ff1Relayer: { v2Endpoint: '' } })
-    );
-    assert.equal(getFF1RelayerConfig().v2Endpoint, undefined);
+  test('a bare HTTPS relayer origin with a port derives its own origin', () => {
+    process.env.FF1_RELAYER_URL = 'https://relay.example:8443/';
+    assert.equal(getFF1RelayerConfig().v2Endpoint, 'https://relay.example:8443');
   });
 
-  test('rejects a v2 endpoint that is not a secure bare origin', () => {
-    for (const v2Endpoint of [
-      'http://v2.example',
-      'https://v2.example/path',
-      'https://user@v2.example',
-      'not a url',
-    ]) {
-      process.env.FF1_RELAY_V2_ENDPOINT = v2Endpoint;
-      assert.throws(getFF1RelayerConfig, /v2Endpoint/, v2Endpoint);
+  test('there is no separate v2 setting: a v2Endpoint key or env var is ignored', () => {
+    process.env.FF1_RELAY_V2_ENDPOINT = 'wss://other.example';
+    writeFileSync(
+      join(fixtureDir, 'config.json'),
+      JSON.stringify({ ff1Relayer: { baseUrl: 'https://relay.example', v2Endpoint: '' } })
+    );
+    try {
+      assert.deepEqual(getFF1RelayerConfig(), {
+        baseUrl: 'https://relay.example',
+        apiKey: undefined,
+        v2Endpoint: 'https://relay.example',
+      });
+    } finally {
+      delete process.env.FF1_RELAY_V2_ENDPOINT;
     }
-    process.env.FF1_RELAY_V2_ENDPOINT = 'http://127.0.0.1:8787';
-    assert.equal(getFF1RelayerConfig().v2Endpoint, 'http://127.0.0.1:8787');
   });
 
   test('rejects malformed relayer configuration during validation and use', () => {
