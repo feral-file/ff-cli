@@ -159,7 +159,8 @@ function pairingChannel(
 
 /**
  * installRelayPairingChannel installs the relay opener when a v2 endpoint is
- * derived from the relayer URL (a bare HTTPS `ff1Relayer.baseUrl`). Without one, or with an invalid relayer config,
+ * configured (ff1Relayer.v2Endpoint, FF1_RELAY_V2_ENDPOINT, or the default
+ * derived from the relayer). Without one, or with an invalid relayer config,
  * `device pair` keeps the default opener, which says pairing is unavailable.
  *
  * @param getConfig - Relayer config source (tests inject one)

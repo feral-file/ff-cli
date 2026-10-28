@@ -43,7 +43,7 @@ export type PairingChannelOpener = (
 export class PairingTransportUnavailableError extends Error {
   constructor() {
     super(
-      'owner-initiated pairing needs the relay v2 pairing channel, and relay v2 is turned off (ff1Relayer.baseUrl or FF1_RELAYER_URL is not a bare HTTPS origin)'
+      'owner-initiated pairing needs the relay v2 pairing channel, and relay v2 is turned off (check ff1Relayer.v2Endpoint, FF1_RELAY_V2_ENDPOINT and ff1Relayer.baseUrl)'
     );
     this.name = 'PairingTransportUnavailableError';
   }

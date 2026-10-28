@@ -51,7 +51,11 @@ export interface FF1DeviceConfig {
 }
 
 export interface FF1RelayerConfig {
-  /** Legacy relayer URL; a bare HTTPS origin also serves relay v2 (deriveV2Endpoint in config.ts). */
+  /**
+   * Relay v2 origin for paired controllers. Absent: the relayer's own HTTPS
+   * origin; empty string: v2 off (see resolveV2Endpoint in config.ts).
+   */
+  v2Endpoint?: string;
   baseUrl?: string;
   /** Optional deployment compatibility gate; never required by the topic credential model. */
   apiKey?: string;
