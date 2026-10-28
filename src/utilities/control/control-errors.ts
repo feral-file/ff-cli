@@ -88,10 +88,20 @@ export function describeControlCode(code: string, deviceLabel: string): ControlF
   const headline = HEADLINES[code] ?? `The FF1 refused the request (${code}).`;
   const pair = pairCommand(deviceLabel);
   if (PAIRING_CODES.has(code)) {
+    const details = `Run \`${pair}\` and have an owner scan the code it shows with Add controller in the Feral File app.`;
+    if (code !== 'access_revoked') {
+      return { code, error: headline, details };
+    }
+    // access_revoked has two causes: an owner revoked this controller (the
+    // FF1 still has an owner, so pairing again is the fix), or the owner
+    // released the FF1 (Forget I exist, spec §5.5) and nobody is left to add
+    // it. A released FF1 is legacy and takes plaintext, so unpair is what
+    // works until someone sets it up again; after that, pair does. Unpair
+    // is offered beside pair, never instead of it.
     return {
       code,
       error: headline,
-      details: `Run \`${pair}\` and have an owner scan the code it shows with Add controller in the Feral File app.`,
+      details: `${details} If the FF1 shows a setup code on its own screen, or no one has set it up since its owner gave it up, there is no owner to add this controller: run \`${unpairCommand(deviceLabel)}\` to use it without pairing, or set it up in the Feral File app and then pair with that owner.`,
     };
   }
   return { code, error: headline, details: followUp(code, pair) };

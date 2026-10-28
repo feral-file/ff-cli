@@ -1147,6 +1147,19 @@ describe('pairing copy', () => {
     assert.match(failure.details!, /ff-cli device pair Office/);
     assert.match(failure.details!, /Add controller/);
   });
+
+  test('access_revoked offers unpair beside pair, tied to the setup code on the FF1 screen', () => {
+    // A released FF1 (spec §5.5) has no owner to add this controller again.
+    const failure = describeControlCode('access_revoked', 'Living Room');
+    assert.match(failure.details!, /ff-cli device pair "Living Room"/);
+    assert.match(failure.details!, /setup code on its own screen/);
+    assert.match(failure.details!, /to use it without pairing/);
+    assert.match(failure.details!, /run `ff-cli device unpair "Living Room"`/);
+    // Only access_revoked: the other pairing codes keep pair alone.
+    for (const code of ['enrollment_required', 'unknown_controller', 'not_approved', 'pending']) {
+      assert.doesNotMatch(describeControlCode(code, 'Office').details!, /unpair/);
+    }
+  });
 });
 
 describe('unpair', () => {
