@@ -494,7 +494,7 @@ async function waitForOwner(
       if (error instanceof PairingTransportUnavailableError) {
         throw new CommandFailure(
           `Pairing is not available: ${error.message}.`,
-          'Set ff1Relayer.baseUrl (or FF1_RELAYER_URL) to a bare HTTPS relayer origin, or remove it to use the default (see docs/CONFIGURATION.md, Relay v2).'
+          'Remove an empty ff1Relayer.v2Endpoint or FF1_RELAY_V2_ENDPOINT, or set an HTTPS or WSS relay v2 origin (see docs/CONFIGURATION.md, Relay v2).'
         );
       }
       throw new CommandFailure(

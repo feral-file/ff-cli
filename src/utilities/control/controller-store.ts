@@ -86,8 +86,8 @@ export interface ControllerRecord {
   /**
    * Whether the FF1's last verified getDeviceStatus listed `relayV2` in
    * `control.transports` (absent field: lan and relayer only). Absent until a
-   * verified status is seen. Commands go over relay v2 only when this is
-   * true (secure-transport; config.ts deriveV2Endpoint).
+   * verified status is seen. Commands use a derived relay v2 endpoint only
+   * when this is true (config.ts resolveV2Endpoint).
    */
   relayV2?: boolean;
   /** Last counter allocated; the next request uses ctr + 1. */

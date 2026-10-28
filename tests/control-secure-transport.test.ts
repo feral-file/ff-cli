@@ -112,10 +112,8 @@ beforeEach(() => {
   fs.writeFileSync(
     path.join(tmp, 'config.json'),
     JSON.stringify({
-      // These tests pin the legacy topic route: their records never advertised
-      // relayV2, so commands skip the derived v2 endpoint. The carrier tests
-      // below set relayV2 and inject a v2 endpoint.
-      ff1Relayer: { baseUrl: 'https://relayer.example' },
+      // v2 off: these tests pin the legacy topic route; the carrier tests below set it.
+      ff1Relayer: { baseUrl: 'https://relayer.example', v2Endpoint: '' },
       ff1Devices: { devices: [{ name: 'Office', id: DEVICE_ID, host: HOST }] },
     })
   );
@@ -995,7 +993,7 @@ describe('secure generic carrier integration', () => {
   async function sendOverCarrier(
     mode: Mode,
     overrides: { v2TimeoutMs?: number } = {},
-    route: { relayV2?: boolean } = { relayV2: true }
+    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true }
   ) {
     const record = enrolledRecord('owner');
     if (route.relayV2 !== undefined) {
@@ -1025,6 +1023,7 @@ describe('secure generic carrier integration', () => {
           getRelayerConfigFn: () => ({
             baseUrl: 'https://legacy.test',
             v2Endpoint: 'wss://v2.test',
+            ...(route.v2Explicit ? { v2Explicit: true } : {}),
           }),
           getTopicIdFn: () => 'optional-topic',
           noticeFn: () => undefined,
@@ -1093,7 +1092,6 @@ describe('secure generic carrier integration', () => {
    */
   async function sendWithTwoCopies(order: 'ok-first' | 'replay-first', settleWith: 0 | 1) {
     const record = enrolledRecord('owner');
-    record.relayV2 = true;
     const device = fakeDevice();
     let legacyCalls = 0;
     const relayClientFn = () => ({
@@ -1137,6 +1135,7 @@ describe('secure generic carrier integration', () => {
         getRelayerConfigFn: () => ({
           baseUrl: 'https://legacy.test',
           v2Endpoint: 'wss://v2.test',
+          v2Explicit: true,
         }),
         getTopicIdFn: () => 'optional-topic',
         noticeFn: () => undefined,
@@ -1231,7 +1230,6 @@ describe('secure generic carrier integration', () => {
   test('the v2 deadline bounds a command the FF1 never answers', async () => {
     const started = Date.now();
     const record = enrolledRecord('owner');
-    record.relayV2 = true;
     const previous = globalThis.WebSocket;
     globalThis.WebSocket = class extends EventTarget {
       binaryType = '';
