@@ -994,7 +994,8 @@ describe('secure generic carrier integration', () => {
     mode: Mode,
     overrides: { v2TimeoutMs?: number } = {},
     route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true },
-    shape: { enroll?: { inv?: string }; registration?: boolean } = {}
+    shape: { enroll?: { inv?: string }; registration?: boolean } = {},
+    legacy: { topic?: string | null; answer?: () => Response } = {}
   ) {
     const record = enrolledRecord('owner');
     if (shape.registration) {
@@ -1050,13 +1051,16 @@ describe('secure generic carrier integration', () => {
             v2Endpoint: 'wss://v2.test',
             ...(route.v2Explicit ? { v2Explicit: true } : {}),
           }),
-          getTopicIdFn: () => 'optional-topic',
+          getTopicIdFn: () => (legacy.topic === undefined ? 'optional-topic' : legacy.topic),
           noticeFn: () => undefined,
           fetchFn: async (input, init) => {
             if (new URL(input.toString()).origin === HOST) {
               throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
             }
             legacyCalls++;
+            if (legacy.answer) {
+              return legacy.answer();
+            }
             return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
           },
         }
@@ -1234,10 +1238,61 @@ describe('secure generic carrier integration', () => {
       'verified',
       {},
       {},
-      { enroll: {}, registration: true }
+      { enroll: {}, registration: true },
+      { topic: null }
     );
     assert.deepEqual(sent, ['peers'], 'v2 is tried');
     assert.equal(legacyCalls, 0);
+  });
+
+  test('a registration enroll tries the topic held before pairing first (§10)', async () => {
+    // A forger holding the QR's ps could answer on the LAN or the public v2
+    // channel; the held topic reaches the real FF1, which cannot open it.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true }
+    );
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 1);
+    assert.deepEqual(sent, [], 'neither the LAN fallback nor v2 runs after the topic answered');
+  });
+
+  test('only the relayer’s 1003 or 410 for the held topic lets the enroll go on to v2', async () => {
+    const gone = [
+      () => json(404, { error: { id: 1003, message: 'no device socket' } }),
+      () => json(410, { error: 'legacy_api_retired' }),
+      () => json(410, { error: 'legacy_controller_api_retired' }),
+    ];
+    for (const answer of gone) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier(
+        'verified',
+        {},
+        {},
+        { enroll: {}, registration: true },
+        { answer }
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(legacyCalls, 1, 'the dead topic is not tried again after the LAN');
+      assert.deepEqual(sent, ['peers']);
+    }
+    const notEvidence = [
+      () => json(502, {}),
+      () => json(410, { error: 'something_else' }),
+      () => json(404, { error: { id: 1004 } }),
+    ];
+    for (const answer of notEvidence) {
+      const { outcome, sent } = await sendOverCarrier(
+        'verified',
+        {},
+        {},
+        { enroll: {}, registration: true },
+        { answer }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.deepEqual(sent, [], 'no LAN or v2 enroll without the relayer’s own answer');
+    }
   });
 
   test('an enroll never goes over v2 without a registration-pinned profile, or with an invitation', async () => {

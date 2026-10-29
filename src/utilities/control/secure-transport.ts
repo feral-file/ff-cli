@@ -18,7 +18,9 @@
  *   an HTTP or protocol answer, exactly like the legacy fallback. With a
  *   configured v2 endpoint, or for an FF1 whose verified status advertised
  *   relay v2, the v2 device channel is tried first; the legacy topic follows
- *   only when v2 proves the command undelivered (§10).
+ *   only when v2 proves the command undelivered (§10). One exception: a
+ *   registration enroll tries a topic held from before the pairing first,
+ *   and moves on only on the relayer's 1003 or 410 (sendOnce).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
  *   only, and retrying would hand an attacker a free oracle.
@@ -148,6 +150,8 @@ export type SecureOutcome =
       code?: string;
       /** The LAN could not be reached (and no relayer route was taken). */
       unreachable?: boolean;
+      /** HTTP status of the relayer's own non-2xx answer (see heldTopicGone). */
+      relayerStatus?: number;
       /**
        * The LAN request hit its deadline: it may or may not have reached the
        * FF1, so only an idempotent request (the enroll poll) may treat it as
@@ -460,6 +464,19 @@ async function sendOnce(
   record: ControllerRecord,
   deps: ResolvedDeps
 ): Promise<SecureOutcome> {
+  // §10 newcomer order: a topic held from BEFORE the pairing goes first. It
+  // reaches the real FF1's authenticated legacy socket, which cannot open an
+  // enroll sealed to a profile forged by someone holding the QR's ps, so a
+  // forgery fails there; over the LAN or the public v2 channel the forger
+  // could answer it. Only the relayer's own 1003 (no device on the topic) or
+  // 410 (legacy retired) lets the enroll go on to the LAN and v2.
+  const heldTopic = registrationHeldTopic(request, record, deps);
+  if (heldTopic) {
+    const viaTopic = await sendViaRelayer(request, record, deps, heldTopic);
+    if (!heldTopicGone(viaTopic)) {
+      return viaTopic;
+    }
+  }
   const attempts = request.retry ? RETRY_ATTEMPTS : 1;
   let last: SecureOutcome | undefined;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
@@ -488,7 +505,7 @@ async function sendOnce(
         await deps.waitFn(RETRY_BASE_DELAY_MS * attempt);
         continue;
       }
-      return fallbackOrUnreachable(request, record, deps, error as Error);
+      return fallbackOrUnreachable(request, record, deps, error as Error, heldTopic !== null);
     }
     const retryable = result.kind === 'retryable' || retryableReply(result);
     if (!retryable) {
@@ -531,7 +548,8 @@ async function fallbackOrUnreachable(
   request: SecureRequest,
   record: ControllerRecord,
   deps: ResolvedDeps,
-  lanError: Error
+  lanError: Error,
+  topicTried = false
 ): Promise<SecureOutcome> {
   const label = request.device.name || request.device.host;
   const unreachable: SecureOutcome = {
@@ -571,6 +589,10 @@ async function fallbackOrUnreachable(
       details: (error as Error).message,
     };
   }
+  if (topicTried) {
+    // The held topic already answered 1003/410 in sendOnce.
+    return unreachable;
+  }
   let topicId: string | null;
   try {
     topicId = deps.getTopicIdFn(request.device.id);
@@ -587,6 +609,67 @@ async function fallbackOrUnreachable(
     } as SecureOutcome;
   }
   return sendViaRelayer(request, record, deps, topicId);
+}
+
+/**
+ * registrationHeldTopic returns the keyring topic for a §5.6 registration
+ * enroll (no `inv`, profile from a verified result), or null. The keyring
+ * topic predates the pairing: the result's own topic is stored only after
+ * the enroll verifies (device-control.ts). An unreadable keyring counts as
+ * no topic held, as it does for the pairing itself.
+ */
+function registrationHeldTopic(
+  request: SecureRequest,
+  record: ControllerRecord,
+  deps: ResolvedDeps
+): string | null {
+  if (
+    request.op !== 'enroll' ||
+    request.enroll?.inv ||
+    record.registration === undefined ||
+    !request.relayerFallback
+  ) {
+    return null;
+  }
+  try {
+    return deps.getTopicIdFn(request.device.id) || null;
+  } catch (error) {
+    logger.debug(`Secure topic storage is unavailable: ${(error as Error).message}`);
+    return null;
+  }
+}
+
+/** RELAYER_NO_DEVICE_SOCKET is ff-relayer's `/api/cast` error id for "no device on this topic". */
+const RELAYER_NO_DEVICE_SOCKET = 1003;
+/** ff-relayer's 410 error strings for a retired legacy route. */
+const RELAYER_LEGACY_RETIRED = new Set(['legacy_controller_api_retired', 'legacy_api_retired']);
+
+/**
+ * heldTopicGone reports whether a topic cast failed with the relayer's own
+ * answer that the topic leads nowhere: 1003 (no device socket on it) or 410
+ * (the legacy route is retired). Both are given over TLS before anything
+ * reaches a device. Anything else (no answer, a timeout, a 5xx) is not
+ * evidence: someone able to cut this machine's internet could force it.
+ */
+function heldTopicGone(outcome: SecureOutcome): boolean {
+  if (outcome.kind !== 'failed' || outcome.relayerStatus === undefined) {
+    return false;
+  }
+  let body: unknown;
+  try {
+    body = JSON.parse(outcome.details ?? '');
+  } catch {
+    return false;
+  }
+  const error = (body as { error?: unknown } | null)?.error;
+  if (outcome.relayerStatus === 410) {
+    return typeof error === 'string' && RELAYER_LEGACY_RETIRED.has(error);
+  }
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { id?: unknown }).id === RELAYER_NO_DEVICE_SOCKET
+  );
 }
 
 /**
@@ -744,7 +827,13 @@ async function sendViaRelayer(
     fetchFn: deps.fetchFn,
   });
   if (!result.success) {
-    return { kind: 'failed', error: result.error!, details: result.details, transport: 'relayer' };
+    return {
+      kind: 'failed',
+      error: result.error!,
+      details: result.details,
+      transport: 'relayer',
+      ...(result.status !== undefined ? { relayerStatus: result.status } : {}),
+    };
   }
   const answer = findEnvelopeAnswer(result.response);
   if (!answer) {
