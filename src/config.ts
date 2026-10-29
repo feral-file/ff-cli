@@ -257,6 +257,13 @@ export function getFF1DeviceConfig(): FF1DeviceConfig {
 const DEFAULT_FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.workers.dev';
 
 /**
+ * The production relay v2 origin. Relay v2 runs on its own Worker, not on the
+ * legacy relayer's origin, and must keep working after the legacy host is
+ * retired (ffos-user docs/relay-v2-only-g3.md §5.2).
+ */
+const DEFAULT_FF1_RELAY_V2_ENDPOINT = 'wss://relayer.feralfile.io';
+
+/**
  * Get the FF1 relayer endpoint using repository config priority.
  *
  * `config.json` wins over environment variables, which win over the production
@@ -424,11 +431,12 @@ function normalizeIpfsGateway(value: string, label: string): string {
 /**
  * resolveV2Endpoint picks the relay v2 origin (ffos-user docs/ff1-control-v1.md
  * §10). An explicit `ff1Relayer.v2Endpoint` or FF1_RELAY_V2_ENDPOINT wins; an
- * empty string turns v2 off. Otherwise v2 uses the legacy relayer's own
- * origin when that is an HTTPS origin: the same relay Worker serves the
- * legacy `/api` routes and `/v2/channels/…`, so the production default needs
- * no second constant. A custom plain-HTTP or path-bearing legacy relayer gets
- * no v2 unless one is configured.
+ * empty string turns v2 off. Otherwise the production legacy relayer maps to
+ * the production relay v2 Worker (DEFAULT_FF1_RELAY_V2_ENDPOINT), which lives
+ * on its own origin. A custom HTTPS legacy relayer (a development Worker that
+ * serves both `/api` and `/v2/channels/…`) still uses its own origin. A
+ * custom plain-HTTP or path-bearing legacy relayer gets no v2 unless one is
+ * configured.
  *
  * The derived default is only a pairing default for commands: during the
  * rollout most FF1s are not on v2, and a stranger's ACK on the device channel
@@ -447,6 +455,9 @@ function resolveV2Endpoint(
 ): { endpoint?: string; explicit: boolean } {
   const value = configured ?? process.env.FF1_RELAY_V2_ENDPOINT;
   if (value === undefined) {
+    if (baseUrl.origin === new URL(DEFAULT_FF1_RELAYER_URL).origin) {
+      return { endpoint: DEFAULT_FF1_RELAY_V2_ENDPOINT, explicit: false };
+    }
     const bare = !baseUrl.username && !baseUrl.password && !baseUrl.search && !baseUrl.hash;
     const derived = baseUrl.protocol === 'https:' && bare && ['', '/'].includes(baseUrl.pathname);
     return { endpoint: derived ? baseUrl.origin : undefined, explicit: false };

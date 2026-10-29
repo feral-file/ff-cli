@@ -408,8 +408,10 @@ Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
 carries only sealed envelopes: a reply counts only when it verifies under the
 FF1 profile pinned at pairing. `device pair` uses it for its pairing channel.
 
-The v2 endpoint is the relayer's own origin (`ff1Relayer.baseUrl` when it is a
-bare HTTPS origin), so pairing needs no setting. Override it with
+With the default relayer, the v2 endpoint is the production relay v2 Worker,
+`wss://relayer.feralfile.io`, which keeps working after the legacy relayer is
+retired. A custom `ff1Relayer.baseUrl` that is a bare HTTPS origin is used as
+its own v2 endpoint. Either way pairing needs no setting. Override it with
 `ff1Relayer.v2Endpoint` or `FF1_RELAY_V2_ENDPOINT`: an HTTPS or WSS origin
 (plain HTTP only on loopback), with no credentials, path or query. An empty
 value turns v2 off; `device pair` then reports that pairing is unavailable.
