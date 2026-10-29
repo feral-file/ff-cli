@@ -995,7 +995,7 @@ describe('secure generic carrier integration', () => {
     overrides: { v2TimeoutMs?: number } = {},
     route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true },
     shape: { enroll?: { inv?: string }; registration?: boolean } = {},
-    legacy: { topic?: string | null; answer?: () => Response } = {}
+    legacy: { topic?: string | null; topicThrows?: boolean; answer?: () => Response } = {}
   ) {
     const record = enrolledRecord('owner');
     if (shape.registration) {
@@ -1051,7 +1051,12 @@ describe('secure generic carrier integration', () => {
             v2Endpoint: 'wss://v2.test',
             ...(route.v2Explicit ? { v2Explicit: true } : {}),
           }),
-          getTopicIdFn: () => (legacy.topic === undefined ? 'optional-topic' : legacy.topic),
+          getTopicIdFn: () => {
+            if (legacy.topicThrows) {
+              throw new Error('keychain locked');
+            }
+            return legacy.topic === undefined ? 'optional-topic' : legacy.topic;
+          },
           noticeFn: () => undefined,
           fetchFn: async (input, init) => {
             if (new URL(input.toString()).origin === HOST) {
@@ -1243,6 +1248,25 @@ describe('secure generic carrier integration', () => {
     );
     assert.deepEqual(sent, ['peers'], 'v2 is tried');
     assert.equal(legacyCalls, 0);
+    // The FF1 answered over v2 under the pinned profile: its later commands
+    // may use v2 without a status read (PR #146 review F2).
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('an unreadable keyring keeps a registration enroll off v2 (§10)', async () => {
+    // A topic it may hold would have to go first; the public channel is
+    // where a forged profile is answered from anywhere.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true },
+      { topicThrows: true }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.deepEqual(sent, [], 'no v2 enroll');
+    assert.equal(legacyCalls, 0);
+    assert.notEqual(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
   });
 
   test('a registration enroll tries the topic held before pairing first (§10)', async () => {

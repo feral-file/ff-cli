@@ -445,7 +445,9 @@ the topic relayer.
   which cannot answer an enroll sealed to a forged profile. Only when the
   relayer answers that the topic has no device (1003) or is retired (410), or
   no topic is held, does it go to the LAN and then relay v2; any other
-  relayer failure (offline, a timeout, a 5xx) stops there. Relay v2 lets a
+  relayer failure (offline, a timeout, a 5xx) stops there. When the
+  credential vault cannot be read, whether a topic is held is unknown, so the
+  enroll uses the LAN only, never relay v2. Relay v2 lets a
   controller be added remotely: the FF1 profile comes from the owner's sealed
   pairing result, so a reply on the public device channel has to verify under
   it. A first-owner enroll with a screen invitation never uses relay v2.
