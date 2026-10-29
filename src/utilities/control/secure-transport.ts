@@ -20,7 +20,9 @@
  *   relay v2, the v2 device channel is tried first; the legacy topic follows
  *   only when v2 proves the command undelivered (§10). One exception: a
  *   registration enroll tries a topic held from before the pairing first,
- *   and moves on only on the relayer's 1003 or 410 (sendOnce).
+ *   and moves on only on the relayer's 1003, 410 or 404 (sendOnce). And an
+ *   ordinary command whose topic is gone may still try v2 (C2,
+ *   fallbackOrUnreachable).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
  *   only, and retrying would hand an attacker a free oracle.
@@ -468,8 +470,9 @@ async function sendOnce(
   // reaches the real FF1's authenticated legacy socket, which cannot open an
   // enroll sealed to a profile forged by someone holding the QR's ps, so a
   // forgery fails there; over the LAN or the public v2 channel the forger
-  // could answer it. Only the relayer's own 1003 (no device on the topic) or
-  // 410 (legacy retired) lets the enroll go on to the LAN and v2.
+  // could answer it. Only the relayer's own 1003 (no device on the topic),
+  // 410 (legacy retired) or 404 (legacy host shut down) lets the enroll go
+  // on to the LAN and v2 (heldTopicGone).
   const held = registrationHeldTopic(request, record, deps);
   const heldTopic = held === UNKNOWN_HELD_TOPIC ? null : held;
   if (heldTopic) {
@@ -568,14 +571,17 @@ async function fallbackOrUnreachable(
   if (!request.relayerFallback) {
     return unreachable;
   }
+  let v2Endpoint: string | undefined;
+  let v2Tried = false;
   try {
     const relay = deps.getRelayerConfigFn();
+    v2Endpoint = relay.v2Endpoint;
     // A derived endpoint is used only for an FF1 whose verified status
     // advertised relay v2; otherwise a stranger's ACK on the device channel
     // could strand a command the topic would have delivered (config.ts).
-    // The flag changes only with a verified status, never on a failed
-    // send: one ambiguous v2 failure must not cut a v2-only FF1 off until
-    // the next LAN visit. The cost is the other way round: an FF1 that
+    // The flag changes only with a verified status or a verified v2 reply
+    // (noteV2Reply), never on a failed send: one ambiguous v2 failure must
+    // not cut a v2-only FF1 off until the next LAN visit. The cost is the other way round: an FF1 that
     // really left v2 is reached as "outcome unknown" (never resent) until
     // its next verified status clears the flag.
     // A registration enroll whose held topic could not be read stays off
@@ -586,8 +592,9 @@ async function fallbackOrUnreachable(
       !held.heldTopicUnknown &&
       v2Allowed(request, record, relay.v2Explicit === true)
     ) {
+      v2Tried = true;
       const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
-      noteV2Enroll(request, record, outcome, deps);
+      noteV2Reply(request, record, outcome, deps);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
       }
@@ -602,7 +609,7 @@ async function fallbackOrUnreachable(
     };
   }
   if (held.topicTried) {
-    // The held topic already answered 1003/410 in sendOnce.
+    // The held topic already answered 1003/410/404 in sendOnce.
     return unreachable;
   }
   let topicId: string | null;
@@ -620,7 +627,23 @@ async function fallbackOrUnreachable(
       details: `${unreachable.details} The relayer route needs the topic the Feral File app sends during \`ff-cli device pair\`.`,
     } as SecureOutcome;
   }
-  return sendViaRelayer(request, record, deps, topicId);
+  const viaTopic = await sendViaRelayer(request, record, deps, topicId);
+  if (request.op === 'cmd' && !v2Tried && v2Endpoint && heldTopicGone(viaTopic)) {
+    // The topic leads nowhere (the legacy host is gone, or no device is on
+    // it) and v2 was not tried because no verified status has listed
+    // relayV2 yet. The "v2 only when listed" rule exists to avoid an
+    // ambiguous v2 send INSTEAD of a working topic; with the topic gone
+    // there is nothing left to lose, and without this a CLI paired before
+    // its FF1 listed relayV2 and used off the LAN would stay on the dead
+    // topic forever (G3 fix handoff C2). The topic answer proved this
+    // request undelivered, so it may go out again, freshly sealed.
+    const outcome = await sendViaV2(request, record, deps, v2Endpoint);
+    noteV2Reply(request, record, outcome, deps);
+    if (outcome.kind !== 'failed' || !outcome.unreachable) {
+      return outcome;
+    }
+  }
+  return viaTopic;
 }
 
 /** The keyring could not be read: whether a topic is held is unknown. */
@@ -661,19 +684,20 @@ function registrationHeldTopic(
 }
 
 /**
- * noteV2Enroll records relay v2 for the FF1 after an enroll whose reply
- * verified under the pinned profile arrived over v2: the FF1 itself answered
- * there, which is what a status listing relayV2 stands for. A newcomer
- * paired off the LAN after legacy retirement has no other way to read one,
- * and without it its commands would never try v2 (v2Allowed).
+ * noteV2Reply records relay v2 for the FF1 after a reply that verified under
+ * the pinned profile arrived over v2 (an enroll's only when it succeeded):
+ * the FF1 itself answered there, which is what a status listing relayV2
+ * stands for. A newcomer paired off the LAN after legacy retirement, or a
+ * CLI whose topic died before it saw such a status, has no other way to
+ * learn it, and without it its commands would never try v2 (v2Allowed).
  */
-function noteV2Enroll(
+function noteV2Reply(
   request: SecureRequest,
   record: ControllerRecord,
   outcome: SecureOutcome,
   deps: ResolvedDeps
 ): void {
-  if (request.op !== 'enroll' || outcome.kind !== 'reply' || !outcome.reply.ok) {
+  if (outcome.kind !== 'reply' || (request.op === 'enroll' && !outcome.reply.ok)) {
     return;
   }
   if (record.relayV2 === true) {
@@ -694,14 +718,22 @@ const RELAYER_LEGACY_RETIRED = new Set(['legacy_controller_api_retired', 'legacy
 
 /**
  * heldTopicGone reports whether a topic cast failed with the relayer's own
- * answer that the topic leads nowhere: 1003 (no device socket on it) or 410
- * (the legacy route is retired). Both are given over TLS before anything
- * reaches a device. Anything else (no answer, a timeout, a 5xx) is not
- * evidence: someone able to cut this machine's internet could force it.
+ * answer that the topic leads nowhere: 1003 (no device socket on it), 410
+ * (the legacy route is retired) or 404 (the legacy host is shut down: a
+ * deleted workers.dev worker answers `404 error code: 1042`, while a live
+ * relayer never 404s `/api/cast`). All are given over TLS before anything
+ * reaches a device. Anything else (no answer, a timeout, a 5xx, a DNS
+ * failure) is not evidence: someone able to cut this machine's internet or
+ * spoof its DNS could force it. A legacy host whose zone is removed answers
+ * NXDOMAIN and so is never read as gone; a CLI release with the legacy
+ * relayer off covers that case.
  */
 function heldTopicGone(outcome: SecureOutcome): boolean {
   if (outcome.kind !== 'failed' || outcome.relayerStatus === undefined) {
     return false;
+  }
+  if (outcome.relayerStatus === 404) {
+    return true;
   }
   let body: unknown;
   try {

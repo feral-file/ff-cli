@@ -443,14 +443,21 @@ the topic relayer.
 - `device pair` finishes its enroll over a relayer topic this machine held
   from before the pairing, when it has one: that topic reaches the real FF1,
   which cannot answer an enroll sealed to a forged profile. Only when the
-  relayer answers that the topic has no device (1003) or is retired (410), or
-  no topic is held, does it go to the LAN and then relay v2; any other
-  relayer failure (offline, a timeout, a 5xx) stops there. When the
+  relayer answers that the topic has no device (1003) or is retired (410),
+  or the legacy host answers 404 (it was shut down), or no topic is held,
+  does it go to the LAN and then relay v2; any other relayer failure
+  (offline, a timeout, a 5xx, a DNS failure) stops there. When the
   credential vault cannot be read, whether a topic is held is unknown, so the
   enroll uses the LAN only, never relay v2. Relay v2 lets a
   controller be added remotely: the FF1 profile comes from the owner's sealed
   pairing result, so a reply on the public device channel has to verify under
   it. A first-owner enroll with a screen invitation never uses relay v2.
+- A command that reaches the relayer topic only to hear that the topic leads
+  nowhere (the same 1003, 410 or 404) also tries relay v2, even before a
+  verified status has said the FF1 is on v2, and a verified reply there
+  records that it is. If the legacy host's name stops resolving instead,
+  ff-cli cannot tell that from an offline network; update ff-cli to a
+  release without the legacy relayer.
 - The owner's sealed pairing result must fit one relay frame (32 KiB; results
   are about 1 KiB). If the relay connection drops while `device pair` waits,
   pairing stops; run it again to show a new code.

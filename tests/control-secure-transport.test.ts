@@ -1253,6 +1253,42 @@ describe('secure generic carrier integration', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
   });
 
+  test('a command whose held topic is gone tries v2 and records relayV2 (C2)', async () => {
+    // Paired before the FF1 listed relayV2, used off the LAN: no verified
+    // status says relayV2, the endpoint is the default, and the legacy host
+    // is shut down.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      { relayV2: false },
+      {},
+      { answer: () => new Response('error code: 1042', { status: 404 }) }
+    );
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 1);
+    assert.deepEqual(sent, ['peers']);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('a command whose topic only failed (5xx, DNS) stays off v2 (C2)', async () => {
+    for (const answer of [
+      () => json(502, {}),
+      (): Response => {
+        throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
+      },
+    ]) {
+      const { outcome, sent } = await sendOverCarrier(
+        'verified',
+        {},
+        { relayV2: false },
+        {},
+        { answer }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.deepEqual(sent, []);
+    }
+  });
+
   test('an unreadable keyring keeps a registration enroll off v2 (§10)', async () => {
     // A topic it may hold would have to go first; the public channel is
     // where a forged profile is answered from anywhere.
@@ -1283,9 +1319,13 @@ describe('secure generic carrier integration', () => {
     assert.deepEqual(sent, [], 'neither the LAN fallback nor v2 runs after the topic answered');
   });
 
-  test('only the relayer’s 1003 or 410 for the held topic lets the enroll go on to v2', async () => {
+  test('only the relayer’s 1003, 410 or 404 for the held topic lets the enroll go on to v2', async () => {
     const gone = [
-      () => json(404, { error: { id: 1003, message: 'no device socket' } }),
+      // The relayer answers 1003 with HTTP 400 (PortalRelayer handleCast).
+      () => json(400, { error: { id: 1003, message: 'not found' } }),
+      // A shut-down workers.dev worker (G3 decision: the legacy host is
+      // deleted, never flag-retired).
+      () => new Response('error code: 1042', { status: 404 }),
       () => json(410, { error: 'legacy_api_retired' }),
       () => json(410, { error: 'legacy_controller_api_retired' }),
     ];
@@ -1303,8 +1343,12 @@ describe('secure generic carrier integration', () => {
     }
     const notEvidence = [
       () => json(502, {}),
+      // A DNS failure is never evidence: it can be spoofed on the LAN.
+      (): Response => {
+        throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
+      },
       () => json(410, { error: 'something_else' }),
-      () => json(404, { error: { id: 1004 } }),
+      () => json(400, { error: { id: 1004 } }),
     ];
     for (const answer of notEvidence) {
       const { outcome, sent } = await sendOverCarrier(
