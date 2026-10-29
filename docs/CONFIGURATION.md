@@ -440,8 +440,11 @@ the topic relayer.
   running the command again.
 - Relay refusals while connecting, and relay backpressure, are retried with
   backoff.
-- Enrollment never uses relay v2: anyone can join the device channel, so a v2
-  reply proves nothing until the FF1 profile is confirmed.
+- `device pair` finishes its enroll over the LAN first and over relay v2
+  when the LAN is out of reach, so a controller can be added remotely: the
+  FF1 profile comes from the owner's sealed pairing result, so a reply on the
+  public device channel has to verify under it. A first-owner enroll with a
+  screen invitation never uses relay v2.
 - The owner's sealed pairing result must fit one relay frame (32 KiB; results
   are about 1 KiB). If the relay connection drops while `device pair` waits,
   pairing stops; run it again to show a new code.

@@ -556,7 +556,7 @@ async function fallbackOrUnreachable(
     // the next LAN visit. The cost is the other way round: an FF1 that
     // really left v2 is reached as "outcome unknown" (never resent) until
     // its next verified status clears the flag.
-    if (relay.v2Endpoint && request.op === 'cmd' && (relay.v2Explicit || record.relayV2)) {
+    if (relay.v2Endpoint && v2Allowed(request, record, relay.v2Explicit === true)) {
       const outcome = await sendViaV2(request, record, deps, relay.v2Endpoint);
       if (outcome.kind !== 'failed' || !outcome.unreachable) {
         return outcome;
@@ -587,6 +587,25 @@ async function fallbackOrUnreachable(
     } as SecureOutcome;
   }
   return sendViaRelayer(request, record, deps, topicId);
+}
+
+/**
+ * v2Allowed is the §10 route rule for relay v2. A command goes there on an
+ * explicit endpoint or to an FF1 whose verified status advertised relayV2.
+ * An enroll goes there only without `inv` and only when the profile was
+ * pinned from an owner's verified §5.6 registration result (record.registration):
+ * that result is sealed under `ps`, so the profile is the owner's verified view
+ * of the FF1, and a stranger on the public device channel cannot answer under
+ * it. Such an enroll is tried on v2 even before any status has advertised
+ * relayV2, since a newcomer has never read one; an ambiguous outcome is safe
+ * because enroll is idempotent (§5.3). A first-owner enroll with `inv` never
+ * goes over v2 (the FF1 refuses it there, §5.1).
+ */
+function v2Allowed(request: SecureRequest, record: ControllerRecord, explicit: boolean): boolean {
+  if (request.op === 'cmd') {
+    return explicit || record.relayV2 === true;
+  }
+  return request.op === 'enroll' && !request.enroll?.inv && record.registration !== undefined;
 }
 
 /**

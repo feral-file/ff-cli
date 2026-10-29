@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { encodeRelayFrame } from '../src/utilities/relay-client';
 import { sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { parseProfile } from '../src/utilities/control/codec';
-import { parsePrivateJwk } from '../src/utilities/control/jwk';
+import { parsePrivateJwk, publicOf } from '../src/utilities/control/jwk';
 import {
   type ControllerRecord,
   controllerFilePath,
@@ -993,11 +993,22 @@ describe('secure generic carrier integration', () => {
   async function sendOverCarrier(
     mode: Mode,
     overrides: { v2TimeoutMs?: number } = {},
-    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true }
+    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true },
+    shape: { enroll?: { inv?: string }; registration?: boolean } = {}
   ) {
     const record = enrolledRecord('owner');
-    if (route.relayV2 !== undefined) {
-      record.relayV2 = route.relayV2;
+    if (shape.registration) {
+      record.registration = {
+        channelId: 'ch-test',
+        deviceName: 'FF1',
+        role: 'controller',
+        receivedAt: NOW,
+      };
+    }
+    if (route.relayV2 !== undefined || shape.registration) {
+      if (route.relayV2 !== undefined) {
+        record.relayV2 = route.relayV2;
+      }
       saveController(record, { dir: storeDir });
     }
     const device = fakeDevice();
@@ -1007,14 +1018,28 @@ describe('secure generic carrier integration', () => {
     globalThis.WebSocket = carrierSocket(device, mode, sent) as unknown as typeof WebSocket;
     try {
       const outcome = await sendSecureRequest(
-        {
-          device: { id: DEVICE_ID, host: HOST },
-          op: 'cmd',
-          cmd: 'next',
-          req: {},
-          retry: false,
-          relayerFallback: true,
-        },
+        shape.enroll
+          ? {
+              device: { id: DEVICE_ID, host: HOST },
+              op: 'enroll',
+              enroll: {
+                sig: publicOf(record.keys.sig),
+                enc: publicOf(record.keys.enc),
+                label: 'test',
+                platform: 'cli',
+                ...shape.enroll,
+              },
+              retry: false,
+              relayerFallback: true,
+            }
+          : {
+              device: { id: DEVICE_ID, host: HOST },
+              op: 'cmd',
+              cmd: 'next',
+              req: {},
+              retry: false,
+              relayerFallback: true,
+            },
         record,
         {
           ...overrides,
@@ -1200,6 +1225,26 @@ describe('secure generic carrier integration', () => {
     assert.equal(outcome.kind, 'reply');
     assert.deepEqual(sent, ['peers']);
     assert.equal(legacyCalls, 0);
+  });
+
+  test('an enroll pinned from a registration result goes over v2 before any status advertised it', async () => {
+    // The newcomer of owner registration (§5.6) has never read a status, and
+    // off the LAN v2 may be its only route once the legacy relayer is gone.
+    const { sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true }
+    );
+    assert.deepEqual(sent, ['peers'], 'v2 is tried');
+    assert.equal(legacyCalls, 0);
+  });
+
+  test('an enroll never goes over v2 without a registration-pinned profile, or with an invitation', async () => {
+    for (const shape of [{ enroll: {} }, { enroll: { inv: 'invitation' }, registration: true }]) {
+      const { sent } = await sendOverCarrier('verified', {}, { v2Explicit: true }, shape);
+      assert.deepEqual(sent, [], `no v2 attempt for ${JSON.stringify(shape)}`);
+    }
   });
 
   test('a verified getDeviceStatus records whether the FF1 advertises relay v2', async () => {
