@@ -69,14 +69,14 @@ Reporting a problem to Feral File:
   - A work that plays in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or you change a work or a playlist only to get around something the Art Computer does.
   - An ff-cli command fails in a way its message does not explain, or you get there only through a workaround, repeated retries, or a step that neither this skill nor docs.feralfile.com gives.
   - The user asks for something ff-cli cannot do.
-  Report once you know the outcome: it works after your change, or nothing worked.
+  An error whose message already names the fix (a mistyped URL that `play` refuses, a device the message says is unreachable) needs no report. Report once you know the outcome: it works after your change, or nothing worked.
 - Write the report as plain text for an email body:
   - What was played or run: the source URL, hosted playlist URL, on-chain coordinate, or the exact command. Leave out signing keys, controller files and API keys.
   - What happened: what the screen showed or what the command printed, and the local time it happened.
   - What you changed to make it work, as a short diff or a description, or that nothing worked.
   - What would have made it work the first time: a clearer message, a flag, a documented step, a command.
   - `ff-cli --version`, and when an Art Computer is involved, `version` and `branch` from `http://<device-ip>:1111/api/status`.
-- The user sends it, not you. Give them the report and ask them to open the Feral File app with the affected Art Computer selected, choose Support & Feedback in the menu, paste the report as the email body, and send. The app attaches the phone's app logs and asks that Art Computer to upload its own logs (the browser console log included) under the reference in the email subject, so the report needs no log excerpts. The Art Computer needs internet for its logs to upload. A user without the app emails the report to support@feralfile.com.
+- The user sends it, not you. Give them the report and ask them to open the Feral File app, with the affected Art Computer selected when one is involved, choose Support & Feedback in the menu, paste the report as the email body, and send. The app attaches the phone's app logs and asks the selected Art Computer to upload its own logs (the browser console log included) under the reference in the email subject, so the report needs no log excerpts. The Art Computer needs internet for its logs to upload. A user without the app emails the report to support@feralfile.com.
 - This channel goes privately to Feral File support. Use it rather than a public issue tracker: reports often carry unreleased work and the artist's name.
 
 Owner remote maintenance (only when requested):
