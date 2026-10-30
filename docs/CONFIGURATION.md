@@ -455,7 +455,9 @@ the topic relayer.
 - A command that reaches the relayer topic only to hear that the topic leads
   nowhere (the same 1003, 410 or 404) also tries relay v2, even before a
   verified status has said the FF1 is on v2, and a verified reply there
-  records that it is. If the legacy host's name stops resolving instead,
+  records that it is. So does a command when ff-cli holds no topic for the
+  FF1, or cannot read its credential vault: with no topic route there is
+  nothing a relay v2 attempt could cost. If the legacy host's name stops resolving instead,
   ff-cli cannot tell that from an offline network; update ff-cli to a
   release without the legacy relayer.
 - The owner's sealed pairing result must fit one relay frame (32 KiB; results

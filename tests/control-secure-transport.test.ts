@@ -1289,6 +1289,51 @@ describe('secure generic carrier integration', () => {
     }
   });
 
+  test('a command with no topic tries v2 and records relayV2', async () => {
+    // Paired on the LAN with no topic (none held, or a G3 FF1 that never got
+    // one), then used off the LAN before any verified status said relayV2.
+    for (const legacy of [{ topic: null }, { topicThrows: true }]) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier(
+        'verified',
+        {},
+        { relayV2: false },
+        {},
+        legacy
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.deepEqual(sent, ['peers']);
+      assert.equal(legacyCalls, 0);
+      assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+    }
+  });
+
+  test('a command with no topic that v2 proves undelivered still says unreachable', async () => {
+    const { outcome, legacyCalls } = await sendOverCarrier(
+      'empty-channel',
+      {},
+      { relayV2: false },
+      {},
+      { topic: null }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.equal(outcome.kind === 'failed' && outcome.unreachable, true);
+    assert.match(outcome.kind === 'failed' ? (outcome.details ?? '') : '', /needs the topic/);
+    assert.equal(legacyCalls, 0);
+    assert.notEqual(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('an enroll with no topic and no registration never goes to v2', async () => {
+    const { outcome, sent } = await sendOverCarrier(
+      'verified',
+      {},
+      { relayV2: false },
+      { enroll: {} },
+      { topic: null }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.deepEqual(sent, []);
+  });
+
   test('an unreadable keyring keeps a registration enroll off v2 (§10)', async () => {
     // A topic it may hold would have to go first; the public channel is
     // where a forged profile is answered from anywhere.

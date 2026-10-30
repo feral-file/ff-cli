@@ -21,7 +21,8 @@
  *   only when v2 proves the command undelivered (§10). One exception: a
  *   registration enroll tries a topic held from before the pairing first,
  *   and moves on only on the relayer's 1003, 410 or 404 (sendOnce). And an
- *   ordinary command whose topic is gone may still try v2
+ *   ordinary command with no working topic (none held, the store
+ *   unreadable, or the topic is gone) may still try v2
  *   (fallbackOrUnreachable).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
@@ -612,38 +613,41 @@ async function fallbackOrUnreachable(
     // The held topic already answered 1003/410/404 in sendOnce.
     return unreachable;
   }
+  // A command that has no working topic may still try v2 even though no
+  // verified status has listed relayV2 yet. The "v2 only when listed" rule
+  // exists to avoid an ambiguous v2 send INSTEAD of a working topic; with no
+  // topic (none held, the store unreadable, or the topic leads nowhere) there
+  // is nothing left to lose, and without this a CLI paired before its FF1
+  // listed relayV2, or paired on the LAN with no topic at all, and then used
+  // off the LAN would never reach it. Enroll keeps its own rule (v2Allowed).
+  const tryV2WithoutTopic = async (noTopic: SecureOutcome): Promise<SecureOutcome> => {
+    if (request.op !== 'cmd' || v2Tried || !v2Endpoint) {
+      return noTopic;
+    }
+    const outcome = await sendViaV2(request, record, deps, v2Endpoint);
+    noteV2Reply(request, record, outcome, deps);
+    return outcome.kind !== 'failed' || !outcome.unreachable ? outcome : noTopic;
+  };
   let topicId: string | null;
   try {
     topicId = deps.getTopicIdFn(request.device.id);
   } catch (error) {
-    return {
+    return tryV2WithoutTopic({
       ...unreachable,
       details: `${unreachable.details} Secure topic storage is unavailable: ${(error as Error).message}`,
-    } as SecureOutcome;
+    } as SecureOutcome);
   }
   if (!topicId) {
-    return {
+    return tryV2WithoutTopic({
       ...unreachable,
       details: `${unreachable.details} The relayer route needs the topic the Feral File app sends during \`ff-cli device pair\`.`,
-    } as SecureOutcome;
+    } as SecureOutcome);
   }
   const viaTopic = await sendViaRelayer(request, record, deps, topicId);
-  if (request.op === 'cmd' && !v2Tried && v2Endpoint && heldTopicGone(viaTopic)) {
-    // The topic leads nowhere (the legacy host is gone, or no device is on
-    // it) and v2 was not tried because no verified status has listed
-    // relayV2 yet. The "v2 only when listed" rule exists to avoid an
-    // ambiguous v2 send INSTEAD of a working topic; with the topic gone
-    // there is nothing left to lose, and without this a CLI paired before
-    // its FF1 listed relayV2 and used off the LAN would stay on the dead
-    // topic forever. The topic answer proved this
-    // request undelivered, so it may go out again, freshly sealed.
-    const outcome = await sendViaV2(request, record, deps, v2Endpoint);
-    noteV2Reply(request, record, outcome, deps);
-    if (outcome.kind !== 'failed' || !outcome.unreachable) {
-      return outcome;
-    }
-  }
-  return viaTopic;
+  // The topic leads nowhere (the legacy host is gone, or no device is on
+  // it): the answer proved this request undelivered, so it may go out
+  // again over v2, freshly sealed.
+  return heldTopicGone(viaTopic) ? tryV2WithoutTopic(viaTopic) : viaTopic;
 }
 
 /** The keyring could not be read: whether a topic is held is unknown. */
