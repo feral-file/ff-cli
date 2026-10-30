@@ -21,8 +21,8 @@
  *   only when v2 proves the command undelivered (§10). One exception: a
  *   registration enroll tries a topic held from before the pairing first,
  *   and moves on only on the relayer's 1003, 410 or 404 (sendOnce). And an
- *   ordinary command whose topic is gone may still try v2 (C2,
- *   fallbackOrUnreachable).
+ *   ordinary command whose topic is gone may still try v2
+ *   (fallbackOrUnreachable).
  * - A reply that fails §4.2 verification is discarded whole and not retried:
  *   on the relayer a forged "first reply wins" answer costs availability
  *   only, and retrying would hand an attacker a free oracle.
@@ -635,7 +635,7 @@ async function fallbackOrUnreachable(
     // ambiguous v2 send INSTEAD of a working topic; with the topic gone
     // there is nothing left to lose, and without this a CLI paired before
     // its FF1 listed relayV2 and used off the LAN would stay on the dead
-    // topic forever (G3 fix handoff C2). The topic answer proved this
+    // topic forever. The topic answer proved this
     // request undelivered, so it may go out again, freshly sealed.
     const outcome = await sendViaV2(request, record, deps, v2Endpoint);
     noteV2Reply(request, record, outcome, deps);

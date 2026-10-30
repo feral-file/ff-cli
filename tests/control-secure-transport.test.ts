@@ -1253,7 +1253,7 @@ describe('secure generic carrier integration', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
   });
 
-  test('a command whose held topic is gone tries v2 and records relayV2 (C2)', async () => {
+  test('a command whose held topic is gone tries v2 and records relayV2', async () => {
     // Paired before the FF1 listed relayV2, used off the LAN: no verified
     // status says relayV2, the endpoint is the default, and the legacy host
     // is shut down.
@@ -1270,7 +1270,7 @@ describe('secure generic carrier integration', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
   });
 
-  test('a command whose topic only failed (5xx, DNS) stays off v2 (C2)', async () => {
+  test('a command whose topic only failed (5xx, DNS) stays off v2', async () => {
     for (const answer of [
       () => json(502, {}),
       (): Response => {

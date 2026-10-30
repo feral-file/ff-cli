@@ -259,7 +259,7 @@ const DEFAULT_FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.wo
 /**
  * The production relay v2 origin. Relay v2 runs on its own Worker, not on the
  * legacy relayer's origin, and must keep working after the legacy host is
- * retired (ffos-user docs/relay-v2-only-g3.md §5.2).
+ * retired (ffos-user docs/ff1-control-v1.md §15.3, §15.4).
  */
 const DEFAULT_FF1_RELAY_V2_ENDPOINT = 'wss://relayer.feralfile.io';
 
