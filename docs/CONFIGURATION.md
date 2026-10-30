@@ -408,8 +408,10 @@ Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
 carries only sealed envelopes: a reply counts only when it verifies under the
 FF1 profile pinned at pairing. `device pair` uses it for its pairing channel.
 
-The v2 endpoint is the relayer's own origin (`ff1Relayer.baseUrl` when it is a
-bare HTTPS origin), so pairing needs no setting. Override it with
+With the default relayer, the v2 endpoint is the production relay v2 Worker,
+`wss://relayer.feralfile.io`, which keeps working after the legacy relayer is
+retired. A custom `ff1Relayer.baseUrl` that is a bare HTTPS origin is used as
+its own v2 endpoint. Either way pairing needs no setting. Override it with
 `ff1Relayer.v2Endpoint` or `FF1_RELAY_V2_ENDPOINT`: an HTTPS or WSS origin
 (plain HTTP only on loopback), with no credentials, path or query. An empty
 value turns v2 off; `device pair` then reports that pairing is unavailable.
@@ -438,8 +440,26 @@ the topic relayer.
   running the command again.
 - Relay refusals while connecting, and relay backpressure, are retried with
   backoff.
-- Enrollment never uses relay v2: anyone can join the device channel, so a v2
-  reply proves nothing until the FF1 profile is confirmed.
+- `device pair` finishes its enroll over a relayer topic this machine held
+  from before the pairing, when it has one: that topic reaches the real FF1,
+  which cannot answer an enroll sealed to a forged profile. Only when the
+  relayer answers that the topic has no device (1003) or is retired (410),
+  or the legacy host answers 404 (it was shut down), or no topic is held,
+  does it go to the LAN and then relay v2; any other relayer failure
+  (offline, a timeout, a 5xx, a DNS failure) stops there. When the
+  credential vault cannot be read, whether a topic is held is unknown, so the
+  enroll uses the LAN only, never relay v2. Relay v2 lets a
+  controller be added remotely: the FF1 profile comes from the owner's sealed
+  pairing result, so a reply on the public device channel has to verify under
+  it. A first-owner enroll with a screen invitation never uses relay v2.
+- A command that reaches the relayer topic only to hear that the topic leads
+  nowhere (the same 1003, 410 or 404) also tries relay v2, even before a
+  verified status has said the FF1 is on v2, and a verified reply there
+  records that it is. So does a command when ff-cli holds no topic for the
+  FF1, or cannot read its credential vault: with no topic route there is
+  nothing a relay v2 attempt could cost. If the legacy host's name stops resolving instead,
+  ff-cli cannot tell that from an offline network; update ff-cli to a
+  release without the legacy relayer.
 - The owner's sealed pairing result must fit one relay frame (32 KiB; results
   are about 1 KiB). If the relay connection drops while `device pair` waits,
   pairing stops; run it again to show a new code.

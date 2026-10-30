@@ -67,11 +67,12 @@ describe('FF1 relayer configuration', () => {
     });
   });
 
-  test('relay v2 defaults to the production relayer origin', () => {
-    assert.equal(
-      getFF1RelayerConfig().v2Endpoint,
-      'https://tv-cast-coordination.autonomy-system.workers.dev'
-    );
+  test('relay v2 defaults to the production relay v2 Worker, not the legacy origin', () => {
+    // The legacy host will be retired; v2 must not die with it.
+    assert.equal(getFF1RelayerConfig().v2Endpoint, 'wss://relayer.feralfile.io');
+    assert.equal(getFF1RelayerConfig().v2Explicit, undefined, 'the default is not explicit');
+    process.env.FF1_RELAYER_URL = 'https://tv-cast-coordination.autonomy-system.workers.dev/';
+    assert.equal(getFF1RelayerConfig().v2Endpoint, 'wss://relayer.feralfile.io');
   });
 
   test('a plain-HTTP or path-bearing relayer gets no default v2 endpoint', () => {

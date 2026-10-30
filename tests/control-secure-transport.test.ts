@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { encodeRelayFrame } from '../src/utilities/relay-client';
 import { sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { parseProfile } from '../src/utilities/control/codec';
-import { parsePrivateJwk } from '../src/utilities/control/jwk';
+import { parsePrivateJwk, publicOf } from '../src/utilities/control/jwk';
 import {
   type ControllerRecord,
   controllerFilePath,
@@ -993,11 +993,23 @@ describe('secure generic carrier integration', () => {
   async function sendOverCarrier(
     mode: Mode,
     overrides: { v2TimeoutMs?: number } = {},
-    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true }
+    route: { v2Explicit?: boolean; relayV2?: boolean } = { v2Explicit: true },
+    shape: { enroll?: { inv?: string }; registration?: boolean } = {},
+    legacy: { topic?: string | null; topicThrows?: boolean; answer?: () => Response } = {}
   ) {
     const record = enrolledRecord('owner');
-    if (route.relayV2 !== undefined) {
-      record.relayV2 = route.relayV2;
+    if (shape.registration) {
+      record.registration = {
+        channelId: 'ch-test',
+        deviceName: 'FF1',
+        role: 'controller',
+        receivedAt: NOW,
+      };
+    }
+    if (route.relayV2 !== undefined || shape.registration) {
+      if (route.relayV2 !== undefined) {
+        record.relayV2 = route.relayV2;
+      }
       saveController(record, { dir: storeDir });
     }
     const device = fakeDevice();
@@ -1007,14 +1019,28 @@ describe('secure generic carrier integration', () => {
     globalThis.WebSocket = carrierSocket(device, mode, sent) as unknown as typeof WebSocket;
     try {
       const outcome = await sendSecureRequest(
-        {
-          device: { id: DEVICE_ID, host: HOST },
-          op: 'cmd',
-          cmd: 'next',
-          req: {},
-          retry: false,
-          relayerFallback: true,
-        },
+        shape.enroll
+          ? {
+              device: { id: DEVICE_ID, host: HOST },
+              op: 'enroll',
+              enroll: {
+                sig: publicOf(record.keys.sig),
+                enc: publicOf(record.keys.enc),
+                label: 'test',
+                platform: 'cli',
+                ...shape.enroll,
+              },
+              retry: false,
+              relayerFallback: true,
+            }
+          : {
+              device: { id: DEVICE_ID, host: HOST },
+              op: 'cmd',
+              cmd: 'next',
+              req: {},
+              retry: false,
+              relayerFallback: true,
+            },
         record,
         {
           ...overrides,
@@ -1025,13 +1051,21 @@ describe('secure generic carrier integration', () => {
             v2Endpoint: 'wss://v2.test',
             ...(route.v2Explicit ? { v2Explicit: true } : {}),
           }),
-          getTopicIdFn: () => 'optional-topic',
+          getTopicIdFn: () => {
+            if (legacy.topicThrows) {
+              throw new Error('keychain locked');
+            }
+            return legacy.topic === undefined ? 'optional-topic' : legacy.topic;
+          },
           noticeFn: () => undefined,
           fetchFn: async (input, init) => {
             if (new URL(input.toString()).origin === HOST) {
               throw new Error('fetch failed', { cause: { code: 'ECONNREFUSED' } });
             }
             legacyCalls++;
+            if (legacy.answer) {
+              return legacy.answer();
+            }
             return json(200, { message: device.handle(JSON.parse(String(init?.body))).json });
           },
         }
@@ -1200,6 +1234,185 @@ describe('secure generic carrier integration', () => {
     assert.equal(outcome.kind, 'reply');
     assert.deepEqual(sent, ['peers']);
     assert.equal(legacyCalls, 0);
+  });
+
+  test('an enroll pinned from a registration result goes over v2 before any status advertised it', async () => {
+    // The newcomer of owner registration (§5.6) has never read a status, and
+    // off the LAN v2 may be its only route once the legacy relayer is gone.
+    const { sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true },
+      { topic: null }
+    );
+    assert.deepEqual(sent, ['peers'], 'v2 is tried');
+    assert.equal(legacyCalls, 0);
+    // The FF1 answered over v2 under the pinned profile: its later commands
+    // may use v2 without a status read (PR #146 review F2).
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('a command whose held topic is gone tries v2 and records relayV2', async () => {
+    // Paired before the FF1 listed relayV2, used off the LAN: no verified
+    // status says relayV2, the endpoint is the default, and the legacy host
+    // is shut down.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      { relayV2: false },
+      {},
+      { answer: () => new Response('error code: 1042', { status: 404 }) }
+    );
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 1);
+    assert.deepEqual(sent, ['peers']);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('a command whose topic only failed (5xx, DNS) stays off v2', async () => {
+    for (const answer of [
+      () => json(502, {}),
+      (): Response => {
+        throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
+      },
+    ]) {
+      const { outcome, sent } = await sendOverCarrier(
+        'verified',
+        {},
+        { relayV2: false },
+        {},
+        { answer }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.deepEqual(sent, []);
+    }
+  });
+
+  test('a command with no topic tries v2 and records relayV2', async () => {
+    // Paired on the LAN with no topic (none held, or a G3 FF1 that never got
+    // one), then used off the LAN before any verified status said relayV2.
+    for (const legacy of [{ topic: null }, { topicThrows: true }]) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier(
+        'verified',
+        {},
+        { relayV2: false },
+        {},
+        legacy
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.deepEqual(sent, ['peers']);
+      assert.equal(legacyCalls, 0);
+      assert.equal(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+    }
+  });
+
+  test('a command with no topic that v2 proves undelivered still says unreachable', async () => {
+    const { outcome, legacyCalls } = await sendOverCarrier(
+      'empty-channel',
+      {},
+      { relayV2: false },
+      {},
+      { topic: null }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.equal(outcome.kind === 'failed' && outcome.unreachable, true);
+    assert.match(outcome.kind === 'failed' ? (outcome.details ?? '') : '', /needs the topic/);
+    assert.equal(legacyCalls, 0);
+    assert.notEqual(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('an enroll with no topic and no registration never goes to v2', async () => {
+    const { outcome, sent } = await sendOverCarrier(
+      'verified',
+      {},
+      { relayV2: false },
+      { enroll: {} },
+      { topic: null }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.deepEqual(sent, []);
+  });
+
+  test('an unreadable keyring keeps a registration enroll off v2 (§10)', async () => {
+    // A topic it may hold would have to go first; the public channel is
+    // where a forged profile is answered from anywhere.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true },
+      { topicThrows: true }
+    );
+    assert.equal(outcome.kind, 'failed');
+    assert.deepEqual(sent, [], 'no v2 enroll');
+    assert.equal(legacyCalls, 0);
+    assert.notEqual(loadController(DEVICE_ID, { dir: storeDir })?.relayV2, true);
+  });
+
+  test('a registration enroll tries the topic held before pairing first (§10)', async () => {
+    // A forger holding the QR's ps could answer on the LAN or the public v2
+    // channel; the held topic reaches the real FF1, which cannot open it.
+    const { outcome, sent, legacyCalls } = await sendOverCarrier(
+      'verified',
+      {},
+      {},
+      { enroll: {}, registration: true }
+    );
+    assert.equal(outcome.kind, 'reply');
+    assert.equal(legacyCalls, 1);
+    assert.deepEqual(sent, [], 'neither the LAN fallback nor v2 runs after the topic answered');
+  });
+
+  test('only the relayer’s 1003, 410 or 404 for the held topic lets the enroll go on to v2', async () => {
+    const gone = [
+      // The relayer answers 1003 with HTTP 400 (PortalRelayer handleCast).
+      () => json(400, { error: { id: 1003, message: 'not found' } }),
+      // A shut-down workers.dev worker (G3 decision: the legacy host is
+      // deleted, never flag-retired).
+      () => new Response('error code: 1042', { status: 404 }),
+      () => json(410, { error: 'legacy_api_retired' }),
+      () => json(410, { error: 'legacy_controller_api_retired' }),
+    ];
+    for (const answer of gone) {
+      const { outcome, sent, legacyCalls } = await sendOverCarrier(
+        'verified',
+        {},
+        {},
+        { enroll: {}, registration: true },
+        { answer }
+      );
+      assert.equal(outcome.kind, 'reply');
+      assert.equal(legacyCalls, 1, 'the dead topic is not tried again after the LAN');
+      assert.deepEqual(sent, ['peers']);
+    }
+    const notEvidence = [
+      () => json(502, {}),
+      // A DNS failure is never evidence: it can be spoofed on the LAN.
+      (): Response => {
+        throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
+      },
+      () => json(410, { error: 'something_else' }),
+      () => json(400, { error: { id: 1004 } }),
+    ];
+    for (const answer of notEvidence) {
+      const { outcome, sent } = await sendOverCarrier(
+        'verified',
+        {},
+        {},
+        { enroll: {}, registration: true },
+        { answer }
+      );
+      assert.equal(outcome.kind, 'failed');
+      assert.deepEqual(sent, [], 'no LAN or v2 enroll without the relayer’s own answer');
+    }
+  });
+
+  test('an enroll never goes over v2 without a registration-pinned profile, or with an invitation', async () => {
+    for (const shape of [{ enroll: {} }, { enroll: { inv: 'invitation' }, registration: true }]) {
+      const { sent } = await sendOverCarrier('verified', {}, { v2Explicit: true }, shape);
+      assert.deepEqual(sent, [], `no v2 attempt for ${JSON.stringify(shape)}`);
+    }
   });
 
   test('a verified getDeviceStatus records whether the FF1 advertises relay v2', async () => {

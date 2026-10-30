@@ -6,6 +6,8 @@ export interface RelayerCastResult {
   response?: Record<string, unknown>;
   error?: string;
   details?: string;
+  /** HTTP status of a non-2xx relayer answer (details then holds its body). */
+  status?: number;
 }
 
 function nestedOk(value: unknown): boolean | undefined {
@@ -123,6 +125,7 @@ export async function sendCastViaRelayer(input: {
     return {
       success: false,
       error: `FF1 relayer returned HTTP ${response.status}`,
+      status: response.status,
       details: needsCompatibilityKey
         ? 'This relayer deployment still requires its optional FF1_RELAYER_API_KEY compatibility gate.'
         : bodyText || response.statusText,
