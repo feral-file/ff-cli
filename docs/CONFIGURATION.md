@@ -31,6 +31,8 @@ npm run dev -- config show
   - Which service `find`, `build`, and `enrich` read token data from. Defaults to `indexer`. See [tokenSource](#tokensource).
 - **ipfsGateways** (object)
   - Gateways used to turn bare `ipfs://` sources into HTTPS URLs. See [ipfsGateways](#ipfsgateways).
+- **supportLogs** (object)
+  - Where `ff-cli report` sends a problem report. See [supportLogs](#supportlogs).
 
 ## browser
 
@@ -266,6 +268,24 @@ Environment variable alternative:
 ```env
 IPFS_GATEWAY_FERAL_FILE=https://ipfs.feralfile.com/ipfs/
 IPFS_GATEWAY_DEFAULT=https://ipfs.filebase.io/ipfs/
+```
+
+## supportLogs
+
+`ff-cli report` posts to Feral File's support-logs service, `https://support-logs.feralfile.com` by default. No configuration or key is needed; set `supportLogs.baseUrl` only to point at a staging or test service. It does not move an Art Computer's log upload, which goes to the support-logs its FF OS names.
+
+```json
+{
+  "supportLogs": {
+    "baseUrl": "https://support-logs.feralfile.com"
+  }
+}
+```
+
+Environment variable alternative:
+
+```env
+FF_SUPPORT_LOGS_URL=https://support-logs.feralfile.com
 ```
 
 ## Raster API

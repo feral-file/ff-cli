@@ -13,4 +13,7 @@
 
 import pkg from '../../package.json';
 
-export const USER_AGENT = `ff-cli/${pkg.version}`;
+/** CLI_VERSION is this build's package.json version, the value `ff-cli --version` prints. */
+export const CLI_VERSION: string = pkg.version;
+
+export const USER_AGENT = `ff-cli/${CLI_VERSION}`;

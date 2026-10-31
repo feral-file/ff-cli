@@ -487,7 +487,7 @@ async function sendPlaylistSecurely(
  * @param body - Response text
  * @returns The code, or undefined
  */
-function publicControlCode(status: number, body: string): string | undefined {
+export function publicControlCode(status: number, body: string): string | undefined {
   if (status !== 401 && status !== 403) {
     return undefined;
   }

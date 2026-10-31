@@ -330,6 +330,52 @@ function resolveFF1RelayerConfig(config: Config): FF1RelayerSettings {
   };
 }
 
+const DEFAULT_SUPPORT_LOGS_URL = 'https://support-logs.feralfile.com';
+
+/**
+ * getSupportLogsConfig returns the support-logs origin `ff-cli report` posts to.
+ *
+ * `config.json` (`supportLogs.baseUrl`) wins over FF_SUPPORT_LOGS_URL, which
+ * wins over the production default, the same order as `ff1Relayer.baseUrl`.
+ * The override is for tests and staging. It does not move the Art Computer's
+ * log upload: FF OS posts its logs to the support-logs its firmware names.
+ */
+export function getSupportLogsConfig(): { baseUrl: string } {
+  return resolveSupportLogsConfig(getConfig());
+}
+
+/** Resolve and validate the effective support-logs configuration. */
+function resolveSupportLogsConfig(config: Config): { baseUrl: string } {
+  const configured = config.supportLogs as unknown;
+  if (
+    configured !== undefined &&
+    (configured === null || typeof configured !== 'object' || Array.isArray(configured))
+  ) {
+    throw new Error('supportLogs must be an object');
+  }
+  const baseUrl = (configured as { baseUrl?: unknown } | undefined)?.baseUrl;
+  if (baseUrl !== undefined && typeof baseUrl !== 'string') {
+    throw new Error('supportLogs.baseUrl must be a string');
+  }
+  const value = (
+    (baseUrl as string | undefined) ||
+    process.env.FF_SUPPORT_LOGS_URL ||
+    DEFAULT_SUPPORT_LOGS_URL
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('supportLogs.baseUrl must be a valid HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('supportLogs.baseUrl must be a valid HTTP(S) URL');
+  }
+  return { baseUrl: value };
+}
+
 const TOKEN_SOURCES: readonly TokenSourceName[] = ['raster', 'indexer'];
 const DEFAULT_TOKEN_SOURCE: TokenSourceName = 'indexer';
 const DEFAULT_IPFS_GATEWAY_FERAL_FILE = 'https://ipfs.feralfile.com/ipfs/';
@@ -573,6 +619,12 @@ export function validateConfig(): ValidationResult {
 
     try {
       resolveTokenSourceConfig(config);
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+
+    try {
+      resolveSupportLogsConfig(config);
     } catch (error) {
       errors.push((error as Error).message);
     }
