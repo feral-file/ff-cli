@@ -13,7 +13,16 @@ import { parseProfile } from '../src/utilities/control/codec';
 import { parsePrivateJwk } from '../src/utilities/control/jwk';
 import { type ControllerRecord, saveController } from '../src/utilities/control/controller-store';
 import { getSupportLogsConfig, validateConfig } from '../src/config';
-import { containsSigningKey, requestLogUpload } from '../src/utilities/support-report';
+import {
+  MAX_REPORT_BYTES,
+  MAX_REQUEST_BYTES,
+  buildReportPayload,
+  containsSigningKey,
+  isBareAddress,
+  postReport,
+  readDeviceStatus,
+  requestLogUpload,
+} from '../src/utilities/support-report';
 import { FakeFF1, type Jwk } from './helpers/control-device';
 
 const FIXTURES = path.join(__dirname, 'fixtures', 'ff1-control-v1');
@@ -149,6 +158,88 @@ describe('requestLogUpload over secure control', () => {
       urls.some((u) => u.startsWith('https://relayer.example/')),
       'the relayer was tried'
     );
+  });
+});
+
+describe('isBareAddress', () => {
+  test('accepts a normal address and the other atext a local part may carry', () => {
+    for (const address of ['name@example.com', 'first.last+tag@mail.example.co', "o'brien@x.co"]) {
+      assert.equal(isBareAddress(address), true, address);
+    }
+  });
+
+  test('refuses what support-logs or support-intake would refuse', () => {
+    for (const address of [
+      '<a@b.co>',
+      'Name <a@b.co>',
+      '"x"@b.co',
+      'user@bücher.de',
+      'üser@x.co',
+      'a b@x.co',
+      'a\u0001b@x.co',
+      'a..b@x.co',
+      '.a@x.co',
+      'a.@x.co',
+      'a@b',
+      'a@[127.0.0.1]',
+      'a@x_y.co',
+      `${'a'.repeat(245)}@example.co`,
+    ]) {
+      assert.equal(isBareAddress(address), false, address);
+    }
+    assert.equal(isBareAddress(`${'a'.repeat(243)}@example.co`), true, 'exactly 254 characters');
+  });
+});
+
+describe('report body size', () => {
+  test('the worst-case body for a 32768-byte report stays under the 256 KiB request cap', () => {
+    // Every report byte a control character JSON escapes as \u00XX (6 bytes),
+    // the longest reply address, and every device field at the 256-byte cap,
+    // also all control characters.
+    const control = '\u0001';
+    const body = JSON.stringify(
+      buildReportPayload({
+        report: control.repeat(MAX_REPORT_BYTES),
+        ffCliVersion: '3.0.0',
+        email: `${'a'.repeat(243)}@example.co`,
+        device: {
+          device_id: control.repeat(256),
+          version: control.repeat(256),
+          branch: control.repeat(256),
+        },
+      }),
+      null,
+      2
+    );
+    const bytes = Buffer.byteLength(body, 'utf8');
+    assert.ok(bytes < 202_000, `worst case is ${bytes} bytes`);
+    assert.ok(bytes < MAX_REQUEST_BYTES);
+  });
+
+  test('postReport refuses a body over the cap without sending it', async () => {
+    let calls = 0;
+    const result = await postReport(
+      'http://127.0.0.1:9',
+      'x'.repeat(MAX_REQUEST_BYTES + 1),
+      async () => {
+        calls += 1;
+        return new Response('{}', { status: 201 });
+      }
+    );
+    assert.equal(result.ok, false);
+    assert.equal(calls, 0);
+    assert.match((result as { error: string }).error, /at most 262144/);
+  });
+
+  test('a device field over the 256-byte field cap is left out', async () => {
+    const result = await readDeviceStatus(
+      { name: 'Office', id: 'FF1-CONFIG01', host: HOST },
+      async () =>
+        new Response(
+          JSON.stringify({ device_id: 'FF1-X', version: 'v'.repeat(257), branch: 'release' })
+        )
+    );
+    assert.deepEqual(result.device, { device_id: 'FF1-X', branch: 'release' });
   });
 });
 

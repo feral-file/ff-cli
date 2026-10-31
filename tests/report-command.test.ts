@@ -237,7 +237,29 @@ describe('ff-cli report: text sources', () => {
     {
       name: 'an --email that is not an address',
       args: ['--message', 'a', '--email', 'not-an-address'],
-      match: /is not an email address/,
+      match: /is not an address Feral File support can reply to[\s\S]*bare ASCII address/,
+    },
+    // support-logs answers these with a 400 or support-intake drops them as a
+    // reply address, so they are refused before anything is sent.
+    {
+      name: 'an --email in angle brackets',
+      args: ['--message', 'a', '--email', '<a@b.co>'],
+      match: /"<a@b\.co>" is not an address Feral File support can reply to/,
+    },
+    {
+      name: 'an --email with a quoted local part',
+      args: ['--message', 'a', '--email', '"x"@b.co'],
+      match: /is not an address Feral File support can reply to/,
+    },
+    {
+      name: 'an --email with a non-ASCII domain',
+      args: ['--message', 'a', '--email', 'user@bücher.de'],
+      match: /"user@bücher\.de" is not an address Feral File support can reply to/,
+    },
+    {
+      name: "support's own address as --email",
+      args: ['--message', 'a', '--email', 'Support@FeralFile.com'],
+      match: /Feral File support's own address/,
     },
     {
       name: 'an unknown -d',

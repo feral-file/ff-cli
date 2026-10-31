@@ -10,7 +10,8 @@ import {
   MAX_REPORT_BYTES,
   buildReportPayload,
   containsSigningKey,
-  isEmailAddress,
+  isBareAddress,
+  isSupportAddress,
   postReport,
   readDeviceStatus,
   requestLogUpload,
@@ -59,7 +60,10 @@ export const reportCommand = new Command('report')
   )
   .option('--message <text>', 'The report text')
   .option('--file <path>', 'Read the report text from this file')
-  .option('--email <address>', 'Where Feral File support may reply')
+  .option(
+    '--email <address>',
+    'Where Feral File support may reply: a bare address, name@example.com'
+  )
   .option(
     '-d, --device <name>',
     'The Art Computer involved: adds its device ID, version and branch, and asks it to upload its logs'
@@ -174,8 +178,18 @@ function checkReport(report: string, email: string | undefined): void {
         "Shorten it. With -d the Art Computer's logs travel separately, so leave log excerpts out.",
     });
   }
-  if (email !== undefined && !isEmailAddress(email)) {
-    exitWith({ error: `--email "${email}" is not an email address.` });
+  if (email !== undefined && !isBareAddress(email)) {
+    exitWith({
+      error: `--email "${email}" is not an address Feral File support can reply to.`,
+      details:
+        'Give a bare ASCII address such as name@example.com, at most 254 characters: no display name, angle brackets, quotes, spaces, or non-ASCII characters.',
+    });
+  }
+  if (email !== undefined && isSupportAddress(email)) {
+    exitWith({
+      error: "--email is Feral File support's own address.",
+      details: 'Give the address where you want the reply, or leave --email out.',
+    });
   }
   if (containsSigningKey(report, getPlaylistConfig().privateKey)) {
     exitWith({

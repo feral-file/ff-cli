@@ -40,6 +40,30 @@ import type { FF1Device } from '../types';
 /** MAX_REPORT_BYTES is support-logs' cap on `report`, in UTF-8 bytes. */
 export const MAX_REPORT_BYTES = 32_768;
 
+/**
+ * MAX_REQUEST_BYTES is support-logs' cap on the whole request body. A
+ * 32768-byte report of control characters escapes to 6 bytes each (`\u0001`),
+ * 196608 bytes, and every other field is capped at MAX_FIELD_BYTES, so a body
+ * stays near 202 KB; postReport still checks, so no future field can cross it.
+ */
+export const MAX_REQUEST_BYTES = 256 * 1024;
+
+/** MAX_FIELD_BYTES is support-logs' cap on every metadata field (the device's included). */
+const MAX_FIELD_BYTES = 256;
+
+/** MAX_EMAIL_LENGTH is the longest reply address support-intake will use (RFC 5321 path limit). */
+const MAX_EMAIL_LENGTH = 254;
+
+/**
+ * BARE_ADDRESS is the reply-address form both readers accept: an ASCII
+ * dot-atom local part (no quotes; no leading, trailing or double dot, as Go's
+ * net/mail requires in support-logs) and a domain of letters, digits and
+ * hyphens with at least one dot (support-intake's cli_reports.py). No display
+ * name, angle brackets, whitespace, control or non-ASCII characters.
+ */
+const ATEXT = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
+const BARE_ADDRESS = new RegExp(`^${ATEXT}(?:\\.${ATEXT})*@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$`);
+
 /** STATUS_TIMEOUT_MS bounds the LAN status read, so an absent FF1 delays a report only briefly. */
 const STATUS_TIMEOUT_MS = 5_000;
 
@@ -114,14 +138,29 @@ export function buildReportPayload(input: {
 }
 
 /**
- * isEmailAddress is a syntax check only: one `@`, no spaces, a dot in the
- * domain. support-logs checks again.
+ * isBareAddress reports whether `value` is a reply address that support-logs
+ * stores and support-intake uses: BARE_ADDRESS, at most 254 characters (ASCII,
+ * so characters are bytes). Anything looser is refused here because
+ * support-logs answers it with a 400, or intake drops it and the reporter
+ * gets no reply.
  *
- * @param value - Candidate address
- * @returns Whether it looks like an address
+ * @param value - Candidate address, already trimmed
+ * @returns Whether both readers accept it
  */
-export function isEmailAddress(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+export function isBareAddress(value: string): boolean {
+  return value.length <= MAX_EMAIL_LENGTH && BARE_ADDRESS.test(value);
+}
+
+/**
+ * isSupportAddress reports whether `value` is Feral File support's own
+ * address, which intake never uses as a reply address (it would read the
+ * report as support's own mail).
+ *
+ * @param value - Candidate address, already trimmed
+ * @returns Whether it is support's address
+ */
+export function isSupportAddress(value: string): boolean {
+  return value.toLowerCase() === SUPPORT_EMAIL;
 }
 
 /**
@@ -168,7 +207,9 @@ function signingKeyForms(material: string): string[] {
  * `GET /api/status` (FF OS hub/status.go: `device_id`, `version` and `branch`
  * among other fields). The route is open on every FF OS, secured or not, so no
  * controller is involved. A failed read is returned in `error`, never thrown:
- * the report then goes with the device ID configured for it, if any.
+ * the report then goes with the device ID configured for it, if any. A value
+ * over support-logs' 256-byte field cap is left out, since one would make it
+ * refuse the whole report.
  *
  * @param device - Configured Art Computer
  * @param fetchFn - Fetch (tests); defaults to a short deadline
@@ -178,7 +219,8 @@ export async function readDeviceStatus(
   device: FF1Device,
   fetchFn: typeof fetch = (input, init) => fetchWithTimeout(input, init ?? {}, STATUS_TIMEOUT_MS)
 ): Promise<{ device: ReportDevice; error?: string }> {
-  const fallback: ReportDevice = device.id ? { device_id: device.id } : {};
+  const configuredId = fieldValue(device.id);
+  const fallback: ReportDevice = configuredId ? { device_id: configuredId } : {};
   let body: unknown;
   try {
     const response = await fetchFn(`${device.host}/api/status`, { headers: deviceHeaders(device) });
@@ -192,9 +234,9 @@ export async function readDeviceStatus(
   const status = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
   const read: ReportDevice = {};
   for (const key of ['device_id', 'version', 'branch'] as const) {
-    const value = status[key];
-    if (typeof value === 'string' && value.trim()) {
-      read[key] = value.trim();
+    const value = fieldValue(status[key]);
+    if (value) {
+      read[key] = value;
     }
   }
   if (Object.keys(read).length === 0) {
@@ -203,11 +245,18 @@ export async function readDeviceStatus(
   return { device: { ...fallback, ...read } };
 }
 
+/** fieldValue returns a trimmed, non-empty string within MAX_FIELD_BYTES, else undefined. */
+function fieldValue(value: unknown): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed && Buffer.byteLength(trimmed, 'utf8') <= MAX_FIELD_BYTES ? trimmed : undefined;
+}
+
 /**
  * postReport sends the report body to `<baseUrl>/v2/cli/reports`, once.
  *
- * The endpoint is public by design; its bounds are the size cap and the
- * service's per-IP and global rate limits. Errors are the service's
+ * The endpoint is public by design; its bounds are the size caps and the
+ * service's per-IP and global rate limits. A body over MAX_REQUEST_BYTES is
+ * refused here, before anything is sent. Errors are the service's
  * `{code, message}` JSON.
  *
  * @param baseUrl - support-logs origin
@@ -220,6 +269,15 @@ export async function postReport(
   body: string,
   fetchFn: typeof fetch = defaultDeadlineFetch
 ): Promise<PostResult> {
+  const bytes = Buffer.byteLength(body, 'utf8');
+  if (bytes > MAX_REQUEST_BYTES) {
+    return {
+      ok: false,
+      error: `The report is ${bytes} bytes once encoded; Feral File support takes at most ${MAX_REQUEST_BYTES}.`,
+      details:
+        'Shorten it. Control characters take six bytes each once encoded, so remove any the text carries.',
+    };
+  }
   let response: Response;
   let text: string;
   try {

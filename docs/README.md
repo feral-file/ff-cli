@@ -143,7 +143,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the signing key to be an owner of the stored playlist, and confirms before deleting
   - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation), `-k, --key <privateKey>` (signs the delete authorization), `--key-file <path>` (the same key, read from a file)
 - `report` – Send a problem report privately to Feral File support and print its reference, `Support [<id>]`. The text comes from `--message` or `--file`, or from stdin when neither is given
-  - Options: `--message <text>`, `--file <path>`, `--email <address>` (where support may reply), `-d, --device <name>` (adds the Art Computer's device ID, FF OS version and branch, and asks it to upload its logs under the same reference), `--dry-run` (print the JSON and send nothing)
+  - Options: `--message <text>`, `--file <path>`, `--email <address>` (where support may reply: a bare ASCII address such as `name@example.com`, no display name or angle brackets), `-d, --device <name>` (adds the Art Computer's device ID, FF OS version and branch, and asks it to upload its logs under the same reference), `--dry-run` (print the JSON and send nothing)
   - Exits 1 only when the report did not reach support. See [Report a problem to Feral File support](#report-a-problem-to-feral-file-support)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
