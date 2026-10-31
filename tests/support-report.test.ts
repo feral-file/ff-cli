@@ -259,6 +259,23 @@ describe('report body size', () => {
   });
 });
 
+/** keyWithSlash returns a base64 PKCS#8 Ed25519 key that contains a `/`, the character JSON may escape. */
+function keyWithSlash(): string {
+  for (;;) {
+    const der = generateKeyPairSync('ed25519')
+      .privateKey.export({ format: 'der', type: 'pkcs8' })
+      .toString('base64');
+    if (der.includes('/')) {
+      return der;
+    }
+  }
+}
+
+/** pemWrapped wraps a base64 DER body as PEM, 16 characters a line. */
+function pemWrapped(der: string): string {
+  return `-----BEGIN PRIVATE KEY-----\n${der.match(/.{1,16}/g)!.join('\n')}\n-----END PRIVATE KEY-----\n`;
+}
+
 describe('containsSigningKey', () => {
   const key = generateKeyPairSync('ed25519').privateKey;
   const der = key.export({ format: 'der', type: 'pkcs8' });
@@ -282,6 +299,22 @@ describe('containsSigningKey', () => {
   test('finds a configured PEM key, and its body wrapped across lines', () => {
     const body = configured.match(/.{1,16}/g)!.join('\n  ');
     assert.equal(containsSigningKey(`pasted:\n  ${body}\n`, pem), true);
+  });
+
+  test('finds the key through JSON string escapes and percent-encoding', () => {
+    const slashed = keyWithSlash();
+    const escaped = slashed.replace(/\//g, '\\/');
+    const unicode = slashed.replace(/\//g, '\\u002F');
+    const pemInJson = JSON.stringify({ privateKey: pemWrapped(slashed) }).replace(/\//g, '\\/');
+    for (const report of [
+      JSON.stringify({ playlist: { privateKey: slashed } }).replace(/\//g, '\\/'),
+      `"privateKey": "${unicode}"`,
+      pemInJson,
+      JSON.stringify({ log: JSON.stringify({ privateKey: escaped }) }),
+      `https://example.com/?k=${encodeURIComponent(slashed)}`,
+    ]) {
+      assert.equal(containsSigningKey(report, slashed), true, report);
+    }
   });
 
   test('ignores another key, and does nothing without a configured key', () => {

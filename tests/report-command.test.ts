@@ -305,6 +305,32 @@ describe('ff-cli report: text sources', () => {
       server.close();
     }
   });
+
+  test('refuses --file config.json when the config escapes the key as JSON allows', async () => {
+    const server = await startServer();
+    let configured = '';
+    while (!configured.includes('/')) {
+      configured = generateKeyPairSync('ed25519')
+        .privateKey.export({ format: 'der', type: 'pkcs8' })
+        .toString('base64');
+    }
+    // The loader decodes `\/`, so this config is the one ff-cli runs with and the file reported.
+    const escapedConfig = JSON.stringify({
+      supportLogs: { baseUrl: server.url },
+      playlist: { privateKey: configured },
+    }).replace(/\//g, '\\/');
+    try {
+      const run = await runReport(['--file', 'config.json'], {
+        supportUrl: server.url,
+        files: { 'config.json': escapedConfig },
+      });
+      assert.equal(run.status, 1, run.stdout + run.stderr);
+      assert.match(run.stderr, /contains this computer's playlist signing key/);
+      assert.deepEqual(server.seen, []);
+    } finally {
+      server.close();
+    }
+  });
 });
 
 describe('ff-cli report: dry run', () => {

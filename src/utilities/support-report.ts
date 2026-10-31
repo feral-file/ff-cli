@@ -189,8 +189,11 @@ export function isReservedAddress(value: string): boolean {
 /**
  * containsSigningKey reports whether `report` carries the configured playlist
  * signing key, as configured or in another encoding ff-cli accepts for the
- * same key (PKCS#8 DER or the 32-byte seed, as hex or base64). Whitespace and
- * case are ignored, so a wrapped PEM body still matches.
+ * same key (PKCS#8 DER or the 32-byte seed, as hex or base64). The report is
+ * read as written and with JSON string escapes (`\/`, `\u002f`, `\n`) and
+ * percent-encoding decoded, since a pasted config.json may escape the key.
+ * Everything outside the key alphabets, and case, is ignored, so a wrapped PEM
+ * body or a key split by separators still matches.
  *
  * A cheap guard against pasting a config or key file into a report, not a
  * secret scanner. Every form compared is at least 32 characters of key
@@ -205,13 +208,46 @@ export function containsSigningKey(report: string, material: string | null | und
   if (!configured) {
     return false;
   }
-  const haystack = report.replace(/\s+/g, '').toLowerCase();
-  return signingKeyForms(configured).some((form) => haystack.includes(form.toLowerCase()));
+  const forms = signingKeyForms(configured);
+  return reportReadings(report).some((text) => forms.some((form) => text.includes(form)));
 }
 
-/** signingKeyForms lists the encodings of one key to look for; an unparseable key is matched as written. */
+/** keyText keeps only the characters of hex, base64 and base64url, lowercased. */
+function keyText(text: string): string {
+  return text.replace(/[^A-Za-z0-9+/=_-]/g, '').toLowerCase();
+}
+
+/**
+ * reportReadings lists the report as key text: as written, percent-decoded,
+ * and with JSON string escapes decoded up to four levels deep (a config quoted
+ * inside a JSON log line is escaped twice).
+ */
+function reportReadings(report: string): string[] {
+  const readings = new Set<string>();
+  let text = report;
+  for (let depth = 0; depth < 4; depth += 1) {
+    readings.add(keyText(text));
+    readings.add(
+      keyText(
+        text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      )
+    );
+    const next = text.replace(/\\(?:u([0-9A-Fa-f]{4})|(.))/g, (_, hex, ch) =>
+      hex ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[ch] ?? ch)
+    );
+    if (next === text) {
+      break;
+    }
+    text = next;
+  }
+  return [...readings];
+}
+
+const JSON_ESCAPES: Record<string, string> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+
+/** signingKeyForms lists the encodings of one key to look for, as key text; an unparseable key is matched as written. */
 function signingKeyForms(material: string): string[] {
-  const forms = [material.replace(/-----[^-]+-----/g, '').replace(/\s+/g, '')];
+  const forms = [material.replace(/-----[^-]+-----/g, '')];
   try {
     const key = parsePlaylistPrivateKeyToKeyObject(material);
     const der = key.export({ format: 'der', type: 'pkcs8' });
@@ -222,7 +258,7 @@ function signingKeyForms(material: string): string[] {
   } catch {
     // Matched as written only.
   }
-  return forms.filter((form) => form.length >= 32);
+  return forms.map(keyText).filter((form) => form.length >= 32);
 }
 
 /**
