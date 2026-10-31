@@ -318,7 +318,9 @@ describe('ff-cli report: text sources', () => {
     const escapedConfig = JSON.stringify({
       supportLogs: { baseUrl: server.url },
       playlist: { privateKey: configured },
-    }).replace(/\//g, '\\/');
+    })
+      .split('/')
+      .join('\\/');
     try {
       const run = await runReport(['--file', 'config.json'], {
         supportUrl: server.url,

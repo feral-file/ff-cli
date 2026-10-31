@@ -271,6 +271,14 @@ function keyWithSlash(): string {
   }
 }
 
+/**
+ * escapeSlashes writes each `/` as `\/`, as a JSON encoder may. Its input is
+ * base64 or JSON text, whose backslashes are already what they should be.
+ */
+function escapeSlashes(text: string): string {
+  return text.split('/').join('\\/');
+}
+
 /** pemWrapped wraps a base64 DER body as PEM, 16 characters a line. */
 function pemWrapped(der: string): string {
   return `-----BEGIN PRIVATE KEY-----\n${der.match(/.{1,16}/g)!.join('\n')}\n-----END PRIVATE KEY-----\n`;
@@ -303,13 +311,12 @@ describe('containsSigningKey', () => {
 
   test('finds the key through JSON string escapes and percent-encoding', () => {
     const slashed = keyWithSlash();
-    const escaped = slashed.replace(/\//g, '\\/');
-    const unicode = slashed.replace(/\//g, '\\u002F');
-    const pemInJson = JSON.stringify({ privateKey: pemWrapped(slashed) }).replace(/\//g, '\\/');
+    const escaped = escapeSlashes(slashed);
+    const unicode = slashed.split('/').join('\\u002F');
     for (const report of [
-      JSON.stringify({ playlist: { privateKey: slashed } }).replace(/\//g, '\\/'),
+      escapeSlashes(JSON.stringify({ playlist: { privateKey: slashed } })),
       `"privateKey": "${unicode}"`,
-      pemInJson,
+      escapeSlashes(JSON.stringify({ privateKey: pemWrapped(slashed) })),
       JSON.stringify({ log: JSON.stringify({ privateKey: escaped }) }),
       `https://example.com/?k=${encodeURIComponent(slashed)}`,
     ]) {
