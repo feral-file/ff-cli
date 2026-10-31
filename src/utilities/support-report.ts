@@ -51,18 +51,26 @@ export const MAX_REQUEST_BYTES = 256 * 1024;
 /** MAX_FIELD_BYTES is support-logs' cap on every metadata field (the device's included). */
 const MAX_FIELD_BYTES = 256;
 
-/** MAX_EMAIL_LENGTH is the longest reply address support-intake will use (RFC 5321 path limit). */
-const MAX_EMAIL_LENGTH = 254;
-
-/**
- * BARE_ADDRESS is the reply-address form both readers accept: an ASCII
- * dot-atom local part (no quotes; no leading, trailing or double dot, as Go's
- * net/mail requires in support-logs) and a domain of letters, digits and
- * hyphens with at least one dot (support-intake's cli_reports.py). No display
- * name, angle brackets, whitespace, control or non-ASCII characters.
+/*
+ * The reply-address grammar shared with support-logs and support-intake.
+ * All three must accept exactly the same set; the shared cases are in
+ * tests/fixtures/reporter-email-fixtures.json, copied unchanged from the
+ * cross-repo contract, whose `rule` field is the grammar:
+ * - at most 254 bytes, all printable ASCII, exactly one `@`;
+ * - local part: 1-64 characters of atext in dot-separated runs (no leading,
+ *   trailing or doubled dot, no quotes);
+ * - domain: two or more dot-separated labels of 1-63 letters, digits and
+ *   hyphens, not starting or ending with a hyphen (no IP literal, no
+ *   underscore);
+ * - refused even when well formed (case-insensitive): support's own address,
+ *   and a local part of mailer-daemon or postmaster.
  */
+const MAX_EMAIL_BYTES = 254;
+const MAX_LOCAL_PART = 64;
 const ATEXT = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
-const BARE_ADDRESS = new RegExp(`^${ATEXT}(?:\\.${ATEXT})*@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+$`);
+const LOCAL_PART = new RegExp(`^${ATEXT}(?:\\.${ATEXT})*$`);
+const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const RESERVED_LOCAL_PARTS = new Set(['mailer-daemon', 'postmaster']);
 
 /** STATUS_TIMEOUT_MS bounds the LAN status read, so an absent FF1 delays a report only briefly. */
 const STATUS_TIMEOUT_MS = 5_000;
@@ -138,29 +146,44 @@ export function buildReportPayload(input: {
 }
 
 /**
- * isBareAddress reports whether `value` is a reply address that support-logs
- * stores and support-intake uses: BARE_ADDRESS, at most 254 characters (ASCII,
- * so characters are bytes). Anything looser is refused here because
- * support-logs answers it with a 400, or intake drops it and the reporter
- * gets no reply.
+ * isBareAddress reports whether `value` matches the shared reply-address
+ * grammar's form (everything but the reserved addresses). Anything looser is
+ * refused here because support-logs answers it with a 400, or intake drops it
+ * and the reporter gets no reply.
  *
- * @param value - Candidate address, already trimmed
- * @returns Whether both readers accept it
+ * @param value - Candidate address, as it would be sent
+ * @returns Whether it has the accepted form
  */
 export function isBareAddress(value: string): boolean {
-  return value.length <= MAX_EMAIL_LENGTH && BARE_ADDRESS.test(value);
+  // Printable ASCII is checked first, so length is a byte count.
+  if (!/^[\x21-\x7e]+$/.test(value) || value.length > MAX_EMAIL_BYTES) {
+    return false;
+  }
+  const parts = value.split('@');
+  if (parts.length !== 2) {
+    return false;
+  }
+  const [local, domain] = parts;
+  const labels = domain.split('.');
+  return (
+    local.length <= MAX_LOCAL_PART &&
+    LOCAL_PART.test(local) &&
+    labels.length >= 2 &&
+    labels.every((label) => DOMAIN_LABEL.test(label))
+  );
 }
 
 /**
- * isSupportAddress reports whether `value` is Feral File support's own
- * address, which intake never uses as a reply address (it would read the
- * report as support's own mail).
+ * isReservedAddress reports whether `value` is an address support never
+ * replies to: Feral File support's own (intake would read the report as its
+ * own mail), or a postmaster or mailer-daemon mailbox. Case-insensitive.
  *
- * @param value - Candidate address, already trimmed
- * @returns Whether it is support's address
+ * @param value - Candidate address
+ * @returns Whether it is reserved
  */
-export function isSupportAddress(value: string): boolean {
-  return value.toLowerCase() === SUPPORT_EMAIL;
+export function isReservedAddress(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower === SUPPORT_EMAIL || RESERVED_LOCAL_PARTS.has(lower.split('@')[0]);
 }
 
 /**

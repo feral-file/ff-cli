@@ -19,6 +19,7 @@ import {
   buildReportPayload,
   containsSigningKey,
   isBareAddress,
+  isReservedAddress,
   postReport,
   readDeviceStatus,
   requestLogUpload,
@@ -161,33 +162,47 @@ describe('requestLogUpload over secure control', () => {
   });
 });
 
-describe('isBareAddress', () => {
-  test('accepts a normal address and the other atext a local part may carry', () => {
-    for (const address of ['name@example.com', 'first.last+tag@mail.example.co', "o'brien@x.co"]) {
-      assert.equal(isBareAddress(address), true, address);
+/**
+ * EMAIL_FIXTURES are the reply-address cases shared with support-logs and
+ * support-intake, copied unchanged from the cross-repo contract. All three must
+ * accept exactly the `accept` list and refuse exactly the `reject` list.
+ */
+const EMAIL_FIXTURES = JSON.parse(
+  fs.readFileSync(path.join(__dirname, 'fixtures', 'reporter-email-fixtures.json'), 'utf8')
+) as { rule: string; accept: string[]; reject: string[] };
+
+/** acceptedReplyAddress is what `--email` takes: the grammar's form and not reserved. */
+function acceptedReplyAddress(value: string): boolean {
+  return isBareAddress(value) && !isReservedAddress(value);
+}
+
+describe('reply address (shared fixtures)', () => {
+  for (const address of EMAIL_FIXTURES.accept) {
+    test(`accepts ${JSON.stringify(address.length > 40 ? `${address.slice(0, 40)}… (${address.length})` : address)}`, () => {
+      assert.equal(acceptedReplyAddress(address), true);
+    });
+  }
+  for (const address of EMAIL_FIXTURES.reject) {
+    test(`refuses ${JSON.stringify(address.length > 40 ? `${address.slice(0, 40)}… (${address.length})` : address)}`, () => {
+      assert.equal(acceptedReplyAddress(address), false);
+    });
+  }
+
+  test('also refuses control and non-ASCII characters in the local part', () => {
+    for (const address of ['a\u0001b@example.com', 'üser@example.com', 'a\tb@example.com']) {
+      assert.equal(acceptedReplyAddress(address), false, JSON.stringify(address));
     }
   });
 
-  test('refuses what support-logs or support-intake would refuse', () => {
+  test('a reserved address has the accepted form but is refused as reserved', () => {
     for (const address of [
-      '<a@b.co>',
-      'Name <a@b.co>',
-      '"x"@b.co',
-      'user@bücher.de',
-      'üser@x.co',
-      'a b@x.co',
-      'a\u0001b@x.co',
-      'a..b@x.co',
-      '.a@x.co',
-      'a.@x.co',
-      'a@b',
-      'a@[127.0.0.1]',
-      'a@x_y.co',
-      `${'a'.repeat(245)}@example.co`,
+      'support@feralfile.com',
+      'Postmaster@example.com',
+      'mailer-daemon@example.com',
     ]) {
-      assert.equal(isBareAddress(address), false, address);
+      assert.equal(isBareAddress(address), true, address);
+      assert.equal(isReservedAddress(address), true, address);
     }
-    assert.equal(isBareAddress(`${'a'.repeat(243)}@example.co`), true, 'exactly 254 characters');
   });
 });
 
@@ -201,7 +216,8 @@ describe('report body size', () => {
       buildReportPayload({
         report: control.repeat(MAX_REPORT_BYTES),
         ffCliVersion: '3.0.0',
-        email: `${'a'.repeat(243)}@example.co`,
+        // The longest address the shared fixtures accept: 254 bytes.
+        email: EMAIL_FIXTURES.accept.reduce((a, b) => (b.length > a.length ? b : a)),
         device: {
           device_id: control.repeat(256),
           version: control.repeat(256),

@@ -11,7 +11,7 @@ import {
   buildReportPayload,
   containsSigningKey,
   isBareAddress,
-  isSupportAddress,
+  isReservedAddress,
   postReport,
   readDeviceStatus,
   requestLogUpload,
@@ -182,13 +182,17 @@ function checkReport(report: string, email: string | undefined): void {
     exitWith({
       error: `--email "${email}" is not an address Feral File support can reply to.`,
       details:
-        'Give a bare ASCII address such as name@example.com, at most 254 characters: no display name, angle brackets, quotes, spaces, or non-ASCII characters.',
+        'Give a bare ASCII address such as name@example.com, at most 254 characters. ' +
+        "Before the @: 1-64 characters of letters, digits and ! # $ % & ' * + / = ? ^ _ ` { | } ~ -, with single dots only between them. " +
+        'After it: two or more dot-separated labels of letters, digits and hyphens, no label starting or ending with a hyphen. ' +
+        'No display name, angle brackets, quotes, spaces, IP address, underscore in the domain, or non-ASCII characters.',
     });
   }
-  if (email !== undefined && isSupportAddress(email)) {
+  if (email !== undefined && isReservedAddress(email)) {
     exitWith({
-      error: "--email is Feral File support's own address.",
-      details: 'Give the address where you want the reply, or leave --email out.',
+      error: `--email "${email}" is an address Feral File support does not reply to.`,
+      details:
+        "Support's own address and postmaster or mailer-daemon mailboxes are refused. Give the address where you want the reply, or leave --email out.",
     });
   }
   if (containsSigningKey(report, getPlaylistConfig().privateKey)) {

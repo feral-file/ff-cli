@@ -259,7 +259,7 @@ describe('ff-cli report: text sources', () => {
     {
       name: "support's own address as --email",
       args: ['--message', 'a', '--email', 'Support@FeralFile.com'],
-      match: /Feral File support's own address/,
+      match: /is an address Feral File support does not reply to/,
     },
     {
       name: 'an unknown -d',
