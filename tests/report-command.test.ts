@@ -306,6 +306,31 @@ describe('ff-cli report: text sources', () => {
     }
   });
 
+  test('refuses --file with the seed as unpadded base64 holding + or /', async () => {
+    const server = await startServer();
+    let configured = '';
+    let unpadded = '';
+    while (!/[+/]/.test(unpadded)) {
+      const key = generateKeyPairSync('ed25519').privateKey;
+      configured = key.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+      unpadded = Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url')
+        .toString('base64')
+        .replace(/=+$/, '');
+    }
+    try {
+      const run = await runReport(['--file', 'report.txt'], {
+        supportUrl: server.url,
+        config: { playlist: { privateKey: configured } },
+        files: { 'report.txt': `my seed: ${unpadded}\n` },
+      });
+      assert.equal(run.status, 1, run.stdout + run.stderr);
+      assert.match(run.stderr, /contains this computer's playlist signing key/);
+      assert.deepEqual(server.seen, []);
+    } finally {
+      server.close();
+    }
+  });
+
   test('refuses --file config.json when the config escapes the key as JSON allows', async () => {
     const server = await startServer();
     let configured = '';

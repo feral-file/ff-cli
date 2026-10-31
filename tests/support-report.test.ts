@@ -324,6 +324,18 @@ describe('containsSigningKey', () => {
     }
   });
 
+  test('finds the seed as base64 without padding, the form the parser also accepts', () => {
+    for (let i = 0; i < 20; i += 1) {
+      const k = generateKeyPairSync('ed25519').privateKey;
+      const der64 = k.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+      const seed64 = Buffer.from(String(k.export({ format: 'jwk' }).d), 'base64url').toString(
+        'base64'
+      );
+      const unpadded = seed64.replace(/=+$/, '');
+      assert.equal(containsSigningKey(`seed: ${unpadded} end`, der64), true, unpadded);
+    }
+  });
+
   test('ignores another key, and does nothing without a configured key', () => {
     const other = generateKeyPairSync('ed25519')
       .privateKey.export({ format: 'der', type: 'pkcs8' })

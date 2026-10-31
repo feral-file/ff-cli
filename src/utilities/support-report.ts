@@ -188,12 +188,15 @@ export function isReservedAddress(value: string): boolean {
 
 /**
  * containsSigningKey reports whether `report` carries the configured playlist
- * signing key, as configured or in another encoding ff-cli accepts for the
- * same key (PKCS#8 DER or the 32-byte seed, as hex or base64). The report is
+ * signing key, as configured or in any other encoding
+ * parsePlaylistPrivateKeyToKeyObject accepts for the same key (PEM, or PKCS#8
+ * DER or the 32-byte seed as base64 with or without padding, or as hex), and
+ * as base64url. The report is
  * read as written and with JSON string escapes (`\/`, `\u002f`, `\n`) and
  * percent-encoding decoded, since a pasted config.json may escape the key.
- * Everything outside the key alphabets, and case, is ignored, so a wrapped PEM
- * body or a key split by separators still matches.
+ * Everything outside the key alphabets, padding and case are ignored, so a
+ * wrapped PEM body, an unpadded value or a key split by separators still
+ * matches.
  *
  * A cheap guard against pasting a config or key file into a report, not a
  * secret scanner. Every form compared is at least 32 characters of key
@@ -212,9 +215,9 @@ export function containsSigningKey(report: string, material: string | null | und
   return reportReadings(report).some((text) => forms.some((form) => text.includes(form)));
 }
 
-/** keyText keeps only the characters of hex, base64 and base64url, lowercased. */
+/** keyText keeps only the characters of hex, base64 and base64url, without `=` padding, lowercased. */
 function keyText(text: string): string {
-  return text.replace(/[^A-Za-z0-9+/=_-]/g, '').toLowerCase();
+  return text.replace(/[^A-Za-z0-9+/_-]/g, '').toLowerCase();
 }
 
 /**
