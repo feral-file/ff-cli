@@ -1,0 +1,589 @@
+/**
+ * Problem reports to Feral File support (`ff-cli report`).
+ *
+ * The report goes to support-logs' public `POST /v2/cli/reports`, which mints
+ * the support bundle id the app uses (`Support [<id>]`) and answers with a
+ * short-lived token valid only for that bundle's FF1 log submission. ff-cli
+ * holds no support credential: it is a public package, so any key it shipped
+ * would be public too. support-intake later moves the stored report into the
+ * support inbox, where it becomes a case like a report from the app.
+ *
+ * With an Art Computer, the report carries `device_id`, `version` and `branch`
+ * from its LAN `GET /api/status`, and once the report has posted the FF1 is
+ * sent its existing `uploadLogs` command with the token as `apiKey`, so its
+ * logs land under the same bundle id. FF OS sends that key as `x-api-key` to
+ * `/v2/ff1/log-submissions`; no firmware change is involved.
+ *
+ * What must not change:
+ * - The body is the report text, the reply address when given, this ff-cli's
+ *   version, the OS and Node versions, and the Art Computer block. Nothing
+ *   else leaves this machine: no config, keys, topic, or controller files.
+ * - The report is posted once and never retried: a request that timed out may
+ *   have been stored, and a resend would open a second case.
+ * - The device upload is best effort and never changes the outcome: the
+ *   report has already reached support by then.
+ */
+
+import os from 'node:os';
+import { defaultDeadlineFetch, fetchWithTimeout } from './http';
+import { USER_AGENT } from './user-agent';
+import { parsePlaylistPrivateKeyToKeyObject } from './ed25519-key-derive';
+import { publicControlCode } from './ff1-device';
+import { describeControlCode } from './control/control-errors';
+import {
+  type SecureTransportDeps,
+  findSecureController,
+  runSecureCommand,
+} from './control/secure-transport';
+import type { FF1Device } from '../types';
+
+/** MAX_REPORT_BYTES is support-logs' cap on `report`, in UTF-8 bytes. */
+export const MAX_REPORT_BYTES = 32_768;
+
+/**
+ * MAX_REQUEST_BYTES is support-logs' cap on the whole request body. A
+ * 32768-byte report of control characters escapes to 6 bytes each (`\u0001`),
+ * 196608 bytes, and every other field is capped at MAX_FIELD_BYTES, so a body
+ * stays near 202 KB; postReport still checks, so no future field can cross it.
+ */
+export const MAX_REQUEST_BYTES = 256 * 1024;
+
+/** MAX_FIELD_BYTES is support-logs' cap on every metadata field (the device's included). */
+const MAX_FIELD_BYTES = 256;
+
+/*
+ * The reply-address grammar shared with support-logs and support-intake.
+ * All three must accept exactly the same set; the shared cases are in
+ * tests/fixtures/reporter-email-fixtures.json, copied unchanged from the
+ * cross-repo contract, whose `rule` field is the grammar:
+ * - at most 254 bytes, all printable ASCII, exactly one `@`;
+ * - local part: 1-64 characters of atext in dot-separated runs (no leading,
+ *   trailing or doubled dot, no quotes);
+ * - domain: two or more dot-separated labels of 1-63 letters, digits and
+ *   hyphens, not starting or ending with a hyphen (no IP literal, no
+ *   underscore);
+ * - refused even when well formed (case-insensitive): support's own address,
+ *   and a local part of mailer-daemon or postmaster.
+ */
+const MAX_EMAIL_BYTES = 254;
+const MAX_LOCAL_PART = 64;
+const ATEXT = "[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+";
+const LOCAL_PART = new RegExp(`^${ATEXT}(?:\\.${ATEXT})*$`);
+const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+const RESERVED_LOCAL_PARTS = new Set(['mailer-daemon', 'postmaster']);
+
+/** STATUS_TIMEOUT_MS bounds the LAN status read, so an absent FF1 delays a report only briefly. */
+const STATUS_TIMEOUT_MS = 5_000;
+
+/** SUPPORT_BUNDLE_ID is the app's reference format: 13 base62 characters (ff-app support_bundle_id.dart). */
+const SUPPORT_BUNDLE_ID = /^[0-9A-Za-z]{13}$/;
+
+/** SUPPORT_EMAIL is the human route when the report cannot be posted. */
+const SUPPORT_EMAIL = 'support@feralfile.com';
+
+/** ReportDevice is the Art Computer block of a report. */
+export interface ReportDevice {
+  device_id?: string;
+  version?: string;
+  branch?: string;
+}
+
+/** ReportPayload is the `POST /v2/cli/reports` body. */
+export interface ReportPayload {
+  report: string;
+  ff_cli_version: string;
+  reporter_email?: string;
+  os: string;
+  node_version: string;
+  device?: ReportDevice;
+}
+
+/** ReportReceipt is what support-logs answers a stored report with. */
+export interface ReportReceipt {
+  supportBundleId: string;
+  /** Absent only when the answer carried none; the device upload is then skipped. */
+  uploadToken?: string;
+}
+
+/** ReportFailure names what went wrong and, in `details`, what to do next. */
+export interface ReportFailure {
+  error: string;
+  details?: string;
+}
+
+/** PostResult is the outcome of postReport. */
+export type PostResult = { ok: true; receipt: ReportReceipt } | ({ ok: false } & ReportFailure);
+
+/** LogUploadResult is the outcome of requestLogUpload. */
+export interface LogUploadResult {
+  success: boolean;
+  error?: string;
+  details?: string;
+}
+
+/**
+ * buildReportPayload assembles the report body from the text, the optional
+ * reply address and Art Computer block, and this ff-cli and runtime.
+ *
+ * @param input - Report text, ff-cli version (what `ff-cli --version` prints),
+ *   reply address, and Art Computer block
+ * @returns The body to post
+ */
+export function buildReportPayload(input: {
+  report: string;
+  ffCliVersion: string;
+  email?: string;
+  device?: ReportDevice;
+}): ReportPayload {
+  return {
+    report: input.report,
+    ff_cli_version: input.ffCliVersion,
+    ...(input.email ? { reporter_email: input.email } : {}),
+    os: `${process.platform} ${os.release()}`,
+    node_version: process.version,
+    ...(input.device && Object.keys(input.device).length > 0 ? { device: input.device } : {}),
+  };
+}
+
+/**
+ * isBareAddress reports whether `value` matches the shared reply-address
+ * grammar's form (everything but the reserved addresses). Anything looser is
+ * refused here because support-logs answers it with a 400, or intake drops it
+ * and the reporter gets no reply.
+ *
+ * @param value - Candidate address, as it would be sent
+ * @returns Whether it has the accepted form
+ */
+export function isBareAddress(value: string): boolean {
+  // Printable ASCII is checked first, so length is a byte count.
+  if (!/^[\x21-\x7e]+$/.test(value) || value.length > MAX_EMAIL_BYTES) {
+    return false;
+  }
+  const parts = value.split('@');
+  if (parts.length !== 2) {
+    return false;
+  }
+  const [local, domain] = parts;
+  const labels = domain.split('.');
+  return (
+    local.length <= MAX_LOCAL_PART &&
+    LOCAL_PART.test(local) &&
+    labels.length >= 2 &&
+    labels.every((label) => DOMAIN_LABEL.test(label))
+  );
+}
+
+/**
+ * isReservedAddress reports whether `value` is an address support never
+ * replies to: Feral File support's own (intake would read the report as its
+ * own mail), or a postmaster or mailer-daemon mailbox. Case-insensitive.
+ *
+ * @param value - Candidate address
+ * @returns Whether it is reserved
+ */
+export function isReservedAddress(value: string): boolean {
+  const lower = value.toLowerCase();
+  return lower === SUPPORT_EMAIL || RESERVED_LOCAL_PARTS.has(lower.split('@')[0]);
+}
+
+/**
+ * containsSigningKey reports whether `report` carries the configured playlist
+ * signing key. When the key parses, the report is decoded rather than compared
+ * as text: every run of base64 (either alphabet, any padding, any unused bits)
+ * and every run of hex is decoded at each alignment, and the report matches
+ * when the decoded bytes hold the key's 32-byte seed. That covers PEM, PKCS#8
+ * DER and the seed in every spelling parsePlaylistPrivateKeyToKeyObject
+ * accepts, since all of them decode to bytes that hold the seed. A key that
+ * does not parse is matched as written.
+ *
+ * The report is read as written, with JSON string escapes (`\/`, `/`,
+ * `\n`) decoded up to four levels deep, and percent-decoded, since a pasted
+ * config.json may escape the key. Characters outside the encoding's alphabet
+ * are dropped first, so a wrapped PEM body or a key split by separators still
+ * matches.
+ *
+ * A cheap guard against pasting a config or key file into a report, not a
+ * secret scanner. A match needs 32 bytes of key material, so it is never a
+ * coincidence.
+ *
+ * @param report - Report text
+ * @param material - Configured key (`playlist.privateKey` or PLAYLIST_PRIVATE_KEY), if any
+ * @returns Whether the report contains it
+ */
+export function containsSigningKey(report: string, material: string | null | undefined): boolean {
+  const configured = material?.trim();
+  if (!configured) {
+    return false;
+  }
+  const readings = reportReadings(report);
+  const seed = signingSeed(configured);
+  if (seed) {
+    return readings.some((text) => decodesToInclude(text, seed));
+  }
+  const asWritten = keyText(configured.replace(/-----[^-]+-----/g, ''));
+  return asWritten.length >= 32 && readings.some((text) => keyText(text).includes(asWritten));
+}
+
+/** keyText keeps only the characters of hex, base64 and base64url, without `=` padding, lowercased. */
+function keyText(text: string): string {
+  return text.replace(/[^A-Za-z0-9+/_-]/g, '').toLowerCase();
+}
+
+/**
+ * decodesToInclude decodes `text`'s base64 characters (both alphabets) at all
+ * four alignments and its hex digits at both, and reports whether any decoding
+ * holds `bytes`. Decoding at the alignment where the key starts yields the
+ * key's bytes exactly, whatever text runs into it on either side, and base64
+ * decoding ignores the unused bits of a final character.
+ */
+function decodesToInclude(text: string, bytes: Buffer): boolean {
+  const base64 = text.replace(/[^A-Za-z0-9+/_-]/g, '');
+  for (let offset = 0; offset < 4; offset += 1) {
+    if (Buffer.from(base64.slice(offset), 'base64').includes(bytes)) {
+      return true;
+    }
+  }
+  const hex = text.replace(/[^0-9A-Fa-f]/g, '');
+  for (let offset = 0; offset < 2; offset += 1) {
+    if (Buffer.from(hex.slice(offset), 'hex').includes(bytes)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * reportReadings lists the report as written, percent-decoded, and with JSON
+ * string escapes decoded up to four levels deep (a config quoted inside a JSON
+ * log line is escaped twice).
+ */
+function reportReadings(report: string): string[] {
+  const readings = new Set<string>();
+  let text = report;
+  for (let depth = 0; depth < 4; depth += 1) {
+    readings.add(text);
+    readings.add(
+      text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    );
+    const next = text.replace(/\\(?:u([0-9A-Fa-f]{4})|(.))/g, (_, hex, ch) =>
+      hex ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[ch] ?? ch)
+    );
+    if (next === text) {
+      break;
+    }
+    text = next;
+  }
+  return [...readings];
+}
+
+const JSON_ESCAPES: Record<string, string> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
+
+/** signingSeed returns the configured key's 32-byte Ed25519 seed, or null when the key does not parse. */
+function signingSeed(material: string): Buffer | null {
+  try {
+    const key = parsePlaylistPrivateKeyToKeyObject(material);
+    return Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * readDeviceStatus reads the Art Computer's identity and build from its LAN
+ * `GET /api/status` (FF OS hub/status.go: `device_id`, `version` and `branch`
+ * among other fields). The route is open on every FF OS, secured or not, so no
+ * controller is involved. A failed read is returned in `error`, never thrown:
+ * the report then goes with the device ID configured for it, if any. A value
+ * over support-logs' 256-byte field cap is left out, since one would make it
+ * refuse the whole report.
+ *
+ * @param device - Configured Art Computer
+ * @param fetchFn - Fetch (tests); defaults to a short deadline
+ * @returns The Art Computer block, and why the read failed when it did
+ */
+export async function readDeviceStatus(
+  device: FF1Device,
+  fetchFn: typeof fetch = (input, init) => fetchWithTimeout(input, init ?? {}, STATUS_TIMEOUT_MS)
+): Promise<{ device: ReportDevice; error?: string }> {
+  const configuredId = fieldValue(device.id);
+  const fallback: ReportDevice = configuredId ? { device_id: configuredId } : {};
+  let body: unknown;
+  try {
+    const response = await fetchFn(`${device.host}/api/status`, { headers: deviceHeaders(device) });
+    if (!response.ok) {
+      return { device: fallback, error: `HTTP ${response.status}` };
+    }
+    body = await response.json();
+  } catch (error) {
+    return { device: fallback, error: (error as Error).message };
+  }
+  const status = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>;
+  const read: ReportDevice = {};
+  for (const key of ['device_id', 'version', 'branch'] as const) {
+    const value = fieldValue(status[key]);
+    if (value) {
+      read[key] = value;
+    }
+  }
+  if (Object.keys(read).length === 0) {
+    return { device: fallback, error: 'the answer had no device_id, version or branch' };
+  }
+  return { device: { ...fallback, ...read } };
+}
+
+/** fieldValue returns a trimmed, non-empty string within MAX_FIELD_BYTES, else undefined. */
+function fieldValue(value: unknown): string | undefined {
+  const trimmed = typeof value === 'string' ? value.trim() : '';
+  return trimmed && Buffer.byteLength(trimmed, 'utf8') <= MAX_FIELD_BYTES ? trimmed : undefined;
+}
+
+/**
+ * postReport sends the report body to `<baseUrl>/v2/cli/reports`, once.
+ *
+ * The endpoint is public by design; its bounds are the size caps and the
+ * service's per-IP and global rate limits. A body over MAX_REQUEST_BYTES is
+ * refused here, before anything is sent. Errors are the service's
+ * `{code, message}` JSON.
+ *
+ * @param baseUrl - support-logs origin
+ * @param body - Serialized ReportPayload
+ * @param fetchFn - Fetch (tests); defaults to the shared deadline
+ * @returns The receipt, or a failure that says what to do next
+ */
+export async function postReport(
+  baseUrl: string,
+  body: string,
+  fetchFn: typeof fetch = defaultDeadlineFetch
+): Promise<PostResult> {
+  const bytes = Buffer.byteLength(body, 'utf8');
+  if (bytes > MAX_REQUEST_BYTES) {
+    return {
+      ok: false,
+      error: `The report is ${bytes} bytes once encoded; Feral File support takes at most ${MAX_REQUEST_BYTES}.`,
+      details:
+        'Shorten it. Control characters take six bytes each once encoded, so remove any the text carries.',
+    };
+  }
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetchFn(`${baseUrl}/v2/cli/reports`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+        'User-Agent': USER_AGENT,
+      },
+      body,
+    });
+    text = await response.text();
+  } catch (error) {
+    return {
+      ok: false,
+      error: `Could not reach Feral File support at ${baseUrl} (${(error as Error).message})`,
+      details: `Check this computer's internet connection and run the same command again. If it keeps failing, email the report to ${SUPPORT_EMAIL}.`,
+    };
+  }
+  if (!response.ok) {
+    return { ok: false, ...refusal(response.status, text) };
+  }
+  return parseReceipt(response.status, text);
+}
+
+/** parseReceipt reads `support_bundle_id` and `ff1_upload_token` from a 2xx answer. */
+function parseReceipt(status: number, text: string): PostResult {
+  let parsed: Record<string, unknown> = {};
+  try {
+    const value = JSON.parse(text) as unknown;
+    if (value && typeof value === 'object') {
+      parsed = value as Record<string, unknown>;
+    }
+  } catch {
+    // Reported below as an answer without a reference.
+  }
+  const id = parsed.support_bundle_id;
+  if (typeof id !== 'string' || !SUPPORT_BUNDLE_ID.test(id)) {
+    return {
+      ok: false,
+      error: `Feral File support answered HTTP ${status} without a report reference`,
+      details: `The report may have arrived, but there is no reference to quote. Email it to ${SUPPORT_EMAIL} so it is not lost.`,
+    };
+  }
+  const token = parsed.ff1_upload_token;
+  return {
+    ok: true,
+    receipt: {
+      supportBundleId: id,
+      ...(typeof token === 'string' && token ? { uploadToken: token } : {}),
+    },
+  };
+}
+
+/** refusal maps a non-2xx answer to copy that says what to do next. */
+function refusal(status: number, text: string): ReportFailure {
+  const reason = serviceMessage(text);
+  const said = reason ? `: ${reason}` : '';
+  if (status === 429) {
+    return {
+      error: `Feral File support is limiting reports right now (HTTP 429)${said}`,
+      details: 'Wait a few minutes, then run the same command again.',
+    };
+  }
+  if (status === 400) {
+    return {
+      error: `Feral File support refused the report (HTTP 400)${said}`,
+      details: 'Fix what the answer names, then run the command again.',
+    };
+  }
+  if (status < 500) {
+    return {
+      error: `Feral File support refused the report (HTTP ${status})${said}`,
+      details: `If you set supportLogs.baseUrl or FF_SUPPORT_LOGS_URL, check it. Otherwise email the report to ${SUPPORT_EMAIL}.`,
+    };
+  }
+  return {
+    error: `Feral File support could not take the report (HTTP ${status})${said}`,
+    details: `Try again later. If it keeps failing, email the report to ${SUPPORT_EMAIL}.`,
+  };
+}
+
+/** serviceMessage reads support-logs' `{code, message}` error, or a short excerpt of anything else. */
+function serviceMessage(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { code?: unknown; message?: unknown } | null;
+    if (typeof parsed?.message === 'string' && parsed.message) {
+      return parsed.message;
+    }
+    if (typeof parsed?.code === 'string' && parsed.code) {
+      return parsed.code;
+    }
+  } catch {
+    // Not JSON: quote it.
+  }
+  return text.trim().slice(0, 200);
+}
+
+/**
+ * requestLogUpload asks the Art Computer to upload its logs under the report's
+ * bundle, with FF OS's existing `uploadLogs` command and the bundle-scoped
+ * token as `apiKey`. FF OS requires `userId` and `title` and does not use them.
+ *
+ * The transport is the one ff-cli uses for the FF1's other owner-tier
+ * commands. With a controller file, a secure envelope (FF OS control/tiers.go
+ * puts `uploadLogs` at owner tier, so a controller-role grant gets
+ * `permission_denied`), over the LAN and through the relayer only when the LAN
+ * is unreachable, like `device controllers` and `device revoke`; the envelope
+ * is sealed to the FF1, so the relayer never sees the token. Without one, a
+ * plaintext LAN `/api/cast`, which FF OS takes from any LAN peer while the FF1
+ * is not secured (in phase 0 only `sshAccess` needs topic proof). No retry:
+ * FF OS runs one log upload at a time and ignores a duplicate.
+ *
+ * FF OS acks at once and uploads in the background (it needs internet), so
+ * success means the FF1 took the request, not that the logs arrived.
+ *
+ * @param device - Configured Art Computer
+ * @param receipt - The posted report's bundle id and upload token
+ * @param deps - Transport seams (tests)
+ * @returns Whether the FF1 took the request; never throws
+ */
+export async function requestLogUpload(
+  device: FF1Device,
+  receipt: { supportBundleId: string; uploadToken: string },
+  deps: SecureTransportDeps = {}
+): Promise<LogUploadResult> {
+  const req = {
+    userId: 'ff-cli',
+    apiKey: receipt.uploadToken,
+    title: 'ff-cli report',
+    supportBundleID: receipt.supportBundleId,
+  };
+  const secure = findSecureController(device, deps.controllerStore);
+  if (secure.failure) {
+    return { success: false, error: secure.failure.error, details: secure.failure.details };
+  }
+  if (!secure.record) {
+    return castUploadLogs(device, req, deps.fetchFn ?? defaultDeadlineFetch);
+  }
+  // The secure transport can still throw on paths it does not map (a relayer
+  // answer whose body read fails). This step runs after the report is in, so a
+  // throw here must not reach the command and turn a delivered report into
+  // exit 1, which would invite a second report.
+  try {
+    const result = await runSecureCommand(
+      {
+        device: device as FF1Device & { id: string },
+        record: secure.record,
+        cmd: 'uploadLogs',
+        req,
+        relayerFallback: true,
+        retry: false,
+      },
+      deps
+    );
+    return { success: result.success, error: result.error, details: result.details };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+}
+
+/** castUploadLogs sends `uploadLogs` as a plaintext LAN cast and reads FF OS's `{ok}` answer. */
+async function castUploadLogs(
+  device: FF1Device,
+  req: Record<string, unknown>,
+  fetchFn: typeof fetch
+): Promise<LogUploadResult> {
+  const label = device.name || device.host;
+  let response: Response;
+  let text: string;
+  try {
+    response = await fetchFn(`${device.host}/api/cast`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...deviceHeaders(device) },
+      body: JSON.stringify({ command: 'uploadLogs', request: req }),
+    });
+    text = await response.text();
+  } catch (error) {
+    return {
+      success: false,
+      error: `Could not reach ${label} at ${device.host} (${(error as Error).message})`,
+      details: 'Check that it is on and reachable from this computer.',
+    };
+  }
+  if (!response.ok) {
+    const code = publicControlCode(response.status, text);
+    if (code) {
+      const failure = describeControlCode(code, device.name || device.id || device.host);
+      return { success: false, error: failure.error, details: failure.details };
+    }
+    return {
+      success: false,
+      error: `${label} answered HTTP ${response.status}`,
+      details: text.trim().slice(0, 200) || undefined,
+    };
+  }
+  let answer: { ok?: unknown; message?: unknown; error?: unknown } | null = null;
+  try {
+    answer = JSON.parse(text) as typeof answer;
+  } catch {
+    // Reported below.
+  }
+  if (!answer || typeof answer !== 'object') {
+    // FF OS answers {"ok":true}. An empty or non-JSON 2xx (seen on the first
+    // cast after boot) does not say whether the command ran.
+    return {
+      success: false,
+      error: `${label} answered HTTP ${response.status} without a usable reply`,
+      details: 'It may or may not upload its logs.',
+    };
+  }
+  if (answer.ok === false) {
+    const why = typeof answer.message === 'string' ? answer.message : String(answer.error ?? '');
+    return { success: false, error: `${label} refused the request`, details: why || undefined };
+  }
+  return { success: true };
+}
+
+/** deviceHeaders carries the device's legacy API key when one is configured. */
+function deviceHeaders(device: FF1Device): Record<string, string> {
+  return device.apiKey ? { 'API-KEY': device.apiKey } : {};
+}

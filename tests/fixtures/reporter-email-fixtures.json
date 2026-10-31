@@ -1,0 +1,39 @@
+{
+  "rule": "reporter_email: at most 254 bytes, all printable ASCII. local@domain with exactly one @. Local part: 1-64 chars of atext (A-Z a-z 0-9 and ! # $ % & ' * + / = ? ^ _ ` { | } ~ -) in dot-separated runs: no leading, trailing or doubled dot. Domain: two or more labels separated by dots; each label 1-63 chars of A-Z a-z 0-9 and -, not starting or ending with -; no IP literal, no underscore. Refused even when well formed (case-insensitive): support@feralfile.com, and a local part of mailer-daemon or postmaster. Empty string means absent.",
+  "accept": [
+    "name@example.com",
+    "First.Last+tag@sub.example.co.uk",
+    "a@b.co",
+    "o'brien@example.ie",
+    "x-y_z@ex-ample.com",
+    "{weird}~#$%&*=?^`|!@example.org",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.ddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.com"
+  ],
+  "reject": [
+    "user@bücher.de",
+    "a..b@example.com",
+    ".a@example.com",
+    "a.@example.com",
+    "a@localhost",
+    "a@x_y.co",
+    "a@[127.0.0.1]",
+    "a@-example.com",
+    "a@example-.com",
+    "a@example..com",
+    "<a@b.co>",
+    "Name <a@b.co>",
+    "\"x\"@b.co",
+    "a b@example.com",
+    "a@b.co ",
+    "a@@b.co",
+    "ab.co",
+    "support@feralfile.com",
+    "Support@FeralFile.com",
+    "postmaster@example.com",
+    "MAILER-DAEMON@example.com",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@example.com",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.ccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc.dddddddddddddddddddddddddddddddddddddddddddddddddddddddddd.com",
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.com"
+  ]
+}

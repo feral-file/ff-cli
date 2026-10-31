@@ -142,6 +142,9 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `-s, --server <index>`, `-o, --output <file>`. There is no `--key`: a fetch is a plain read and signs nothing
 - `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the signing key to be an owner of the stored playlist, and confirms before deleting
   - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation), `-k, --key <privateKey>` (signs the delete authorization), `--key-file <path>` (the same key, read from a file)
+- `report` – Send a problem report privately to Feral File support and print its reference, `Support [<id>]`. The text comes from `--message` or `--file`, or from stdin when neither is given
+  - Options: `--message <text>`, `--file <path>`, `--email <address>` (where support may reply: a bare ASCII address such as `name@example.com`, no display name or angle brackets), `-d, --device <name>` (adds the Art Computer's device ID, FF OS version and branch, and asks it to upload its logs under the same reference), `--dry-run` (print the JSON and send nothing)
+  - Exits 1 only when the report did not reach support. See [Report a problem to Feral File support](#report-a-problem-to-feral-file-support)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
 - `device list` – List all configured FF1 devices
@@ -318,6 +321,38 @@ On newer FF OS, a claimed FF1 only accepts `ff-cli ssh` from a paired CLI: run
 "Add controller" in the Feral File app) before `ff-cli ssh enable|disable`. Unclaimed devices and older
 FF OS do not require pairing. On FF OS with secure control, `ssh` needs the
 **owner** role; a controller grant gets "This command needs owner access".
+
+### Report a problem to Feral File support
+
+```bash
+# Report what went wrong, with the Art Computer's logs
+ff-cli report -d "Living Room Display" --message "The work plays black on the Art Computer; in a desktop browser it renders."
+
+# From a file, with an address support can reply to
+ff-cli report --file report.txt --email you@example.com
+
+# Print exactly what would be sent, and send nothing
+ff-cli report -d "Living Room Display" --file report.txt --dry-run
+```
+
+The report goes privately to Feral File support, the same pipeline the app's
+Support & Feedback feeds, and ff-cli prints its reference in the app's form,
+`Support [<id>]`. It carries the report text, `--email` when given, and the
+ff-cli, OS and Node versions; nothing else leaves the computer. A report that
+contains the configured signing key is refused.
+
+With `-d`, the report also carries the Art Computer's device ID, FF OS version
+and branch from its `/api/status`, and once the report is in, ff-cli asks that
+Art Computer to upload its logs under the same reference, with a short-lived
+key that works for that one report only. When ff-cli is paired with the Art
+Computer under secure control, the request is a sealed envelope over the LAN,
+or through the relayer when the LAN cannot reach it; otherwise it is a plain
+LAN request. The Art Computer takes it at once and uploads in the background,
+so it needs internet. On FF OS with secure control the request needs the **owner** role;
+a controller grant gets "This command needs owner access". A log request the
+Art Computer does not take prints a line and leaves the exit status at 0: the
+report itself reached support. The exit status is 1 only when the report did
+not, and the message says what to do next.
 
 ### Publish to feed server
 

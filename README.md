@@ -124,6 +124,7 @@ npm run dev -- play "https://example.com/video.mp4"
 - Configuration: `./docs/CONFIGURATION.md`
 - Examples: `./docs/EXAMPLES.md`
 - SSH access: `ff-cli ssh enable|disable` in `./docs/README.md`
+- Problem reports to Feral File support: `ff-cli report` in `./docs/README.md`
 
 ## Verification
 

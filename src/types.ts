@@ -61,6 +61,11 @@ export interface FF1RelayerConfig {
   apiKey?: string;
 }
 
+/** SupportLogsConfig points `ff-cli report` at a Feral File support-logs origin. */
+export interface SupportLogsConfig {
+  baseUrl?: string;
+}
+
 /**
  * TokenSourceName names the vendor that answers token lookups.
  *
@@ -100,6 +105,7 @@ export interface Config {
   playlist?: PlaylistConfig;
   ff1Devices?: FF1DeviceConfig;
   ff1Relayer?: FF1RelayerConfig;
+  supportLogs?: SupportLogsConfig;
   tokenSource?: TokenSourceName;
   ipfsGateways?: IpfsGatewayConfig;
 }

@@ -258,6 +258,13 @@ replacement.
 
 - `ssh enable|disable`
 
+### Support
+
+- `report` (posts a problem report to Feral File's support-logs, which mints the `Support [<id>]`
+  reference and a token scoped to that one report; with `-d`, the Art Computer is then asked to upload
+  its logs under the same reference with its existing `uploadLogs` command. ff-cli holds no support
+  credential, since a key in a public package is public)
+
 ### Inline Ref Manifests
 
 Playlist items carry a full Ref Manifest inline (DP-1 Playlist Extension §3.6)
