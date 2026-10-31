@@ -120,6 +120,36 @@ describe('requestLogUpload over secure control', () => {
     assert.match(result.error!, /owner access/);
     assert.match(result.details!, /owner role/);
   });
+
+  test('a relayer answer whose body read fails is a failure, never a throw', async () => {
+    // The report is already in when this runs; a throw would reach the command
+    // and turn a delivered report into exit 1.
+    enrolledRecord('owner');
+    const urls: string[] = [];
+    const result = await requestLogUpload(office, RECEIPT, {
+      fetchFn: async (input) => {
+        urls.push(input.toString());
+        if (input.toString().startsWith(HOST)) {
+          throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+        }
+        return {
+          ok: true,
+          status: 200,
+          text: () => Promise.reject(new Error('terminated')),
+        } as unknown as Response;
+      },
+      getRelayerConfigFn: () => ({ baseUrl: 'https://relayer.example' }),
+      getTopicIdFn: () => 'topic-secret',
+      controllerStore: { dir: storeDir },
+      nowFn: () => NOW,
+    });
+    assert.equal(result.success, false);
+    assert.match(result.error!, /terminated/);
+    assert.ok(
+      urls.some((u) => u.startsWith('https://relayer.example/')),
+      'the relayer was tried'
+    );
+  });
 });
 
 describe('containsSigningKey', () => {

@@ -26,7 +26,7 @@
 
 import os from 'node:os';
 import { defaultDeadlineFetch, fetchWithTimeout } from './http';
-import { CLI_VERSION, USER_AGENT } from './user-agent';
+import { USER_AGENT } from './user-agent';
 import { parsePlaylistPrivateKeyToKeyObject } from './ed25519-key-derive';
 import { publicControlCode } from './ff1-device';
 import { describeControlCode } from './control/control-errors';
@@ -93,17 +93,19 @@ export interface LogUploadResult {
  * buildReportPayload assembles the report body from the text, the optional
  * reply address and Art Computer block, and this ff-cli and runtime.
  *
- * @param input - Report text, reply address, and Art Computer block
+ * @param input - Report text, ff-cli version (what `ff-cli --version` prints),
+ *   reply address, and Art Computer block
  * @returns The body to post
  */
 export function buildReportPayload(input: {
   report: string;
+  ffCliVersion: string;
   email?: string;
   device?: ReportDevice;
 }): ReportPayload {
   return {
     report: input.report,
-    ff_cli_version: CLI_VERSION,
+    ff_cli_version: input.ffCliVersion,
     ...(input.email ? { reporter_email: input.email } : {}),
     os: `${process.platform} ${os.release()}`,
     node_version: process.version,
@@ -358,18 +360,26 @@ export async function requestLogUpload(
   if (!secure.record) {
     return castUploadLogs(device, req, deps.fetchFn ?? defaultDeadlineFetch);
   }
-  const result = await runSecureCommand(
-    {
-      device: device as FF1Device & { id: string },
-      record: secure.record,
-      cmd: 'uploadLogs',
-      req,
-      relayerFallback: true,
-      retry: false,
-    },
-    deps
-  );
-  return { success: result.success, error: result.error, details: result.details };
+  // The secure transport can still throw on paths it does not map (a relayer
+  // answer whose body read fails). This step runs after the report is in, so a
+  // throw here must not reach the command and turn a delivered report into
+  // exit 1, which would invite a second report.
+  try {
+    const result = await runSecureCommand(
+      {
+        device: device as FF1Device & { id: string },
+        record: secure.record,
+        cmd: 'uploadLogs',
+        req,
+        relayerFallback: true,
+        retry: false,
+      },
+      deps
+    );
+    return { success: result.success, error: result.error, details: result.details };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
 }
 
 /** castUploadLogs sends `uploadLogs` as a plaintext LAN cast and reads FF OS's `{ok}` answer. */

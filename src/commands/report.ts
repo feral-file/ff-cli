@@ -66,9 +66,11 @@ export const reportCommand = new Command('report')
   )
   .option('--dry-run', 'Print the JSON that would be sent, and send nothing')
   .addHelpText('after', REPORT_HELP)
-  .action(async (options: ReportOptions) => {
+  .action(async (options: ReportOptions, command: Command) => {
     try {
-      await runReport(options);
+      // The program's own version, so the report carries exactly what
+      // `ff-cli --version` prints (index.ts reads the root package.json).
+      await runReport(options, command.parent?.version() || 'unknown');
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
       process.exit(1);
@@ -81,9 +83,10 @@ export const reportCommand = new Command('report')
  * post exits 1 with nothing sent; after the post the exit status is 0.
  *
  * @param options - Command options
+ * @param ffCliVersion - The version `ff-cli --version` prints
  * @returns Promise that resolves when the report is done
  */
-async function runReport(options: ReportOptions): Promise<void> {
+async function runReport(options: ReportOptions, ffCliVersion: string): Promise<void> {
   const report = await readReport(options);
   const email = options.email?.trim();
   checkReport(report, email);
@@ -91,7 +94,8 @@ async function runReport(options: ReportOptions): Promise<void> {
   const device = options.device !== undefined ? selectDevice(options.device) : undefined;
   const deviceBlock = device ? await describeDevice(device) : undefined;
   // One serialization, so --dry-run prints the very bytes a real run posts.
-  const body = JSON.stringify(buildReportPayload({ report, email, device: deviceBlock }), null, 2);
+  const payload = buildReportPayload({ report, ffCliVersion, email, device: deviceBlock });
+  const body = JSON.stringify(payload, null, 2);
   if (options.dryRun) {
     printDryRun(body, baseUrl, device);
     return;
