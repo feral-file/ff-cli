@@ -1,6 +1,6 @@
 ---
 name: ff-control
-description: Drive ff-cli end-to-end to build, validate, send, and publish DP-1 playlists on a Feral File Art Computer (FF1). Use when the user asks to make a playlist, play an artwork or URL on an Art Computer, publish to a feed, or otherwise operate ff-cli, and when a work fails on an Art Computer or has to be changed to play there (the skill says how to report it to Feral File privately). Assumes ff-cli is installed and configured.
+description: Drive ff-cli end-to-end to build, validate, send, and publish DP-1 playlists on a Feral File Art Computer (FF1). Use when the user asks to make a playlist, play an artwork or URL on an Art Computer, publish to a feed, or otherwise operate ff-cli, and when a work fails on an Art Computer or has to be changed to play there, an ff-cli command fails or needs a workaround, or the user asks for something ff-cli cannot do (the skill says how to send Feral File a private report with `ff-cli report`). Assumes ff-cli is installed and configured.
 ---
 
 You run ff-cli end to end with full autonomy.
@@ -64,15 +64,20 @@ Keep output short and concrete:
 - what failed (with code)
 - what to run next
 
-Reporting an Art Computer problem to Feral File:
-- Report in the same session when a work that plays in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or when you change a work or a playlist only to get around something the Art Computer does. Report once you know the outcome: the work plays after your change, or nothing worked.
-- Write the report as plain text for an email body:
-  - What was played: the source URL, hosted playlist URL, or on-chain coordinate. Leave out signing keys, controller files and API keys.
-  - What the screen showed, and the local time it happened.
+Reporting a problem to Feral File:
+- Report in the same session when any of these happens:
+  - A work that plays in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or you change a work or a playlist only to get around something the Art Computer does.
+  - An ff-cli command fails in a way its message does not explain, or you get there only through a workaround, repeated retries, or a step that neither this skill nor docs.feralfile.com gives.
+  - The user asks for something ff-cli cannot do.
+  An error whose message already names the fix (a mistyped URL that `play` refuses, a device the message says is unreachable) needs no report. Report once you know the outcome: it works after your change, or nothing worked.
+- Write the report as plain text:
+  - What was played or run: the source URL, hosted playlist URL, on-chain coordinate, or the exact command. Leave out signing keys, controller files and API keys.
+  - What happened: what the screen showed or what the command printed, and the local time it happened.
   - What you changed to make it work, as a short diff or a description, or that nothing worked.
-  - `ff-cli --version`, and `version` and `branch` from `http://<device-ip>:1111/api/status`.
-- The user sends it, not you. Give them the report and ask them to open the Feral File app with the affected Art Computer selected, choose Support & Feedback in the menu, paste the report as the email body, and send. The app attaches the phone's app logs and asks that Art Computer to upload its own logs (the browser console log included) under the reference in the email subject, so the report needs no log excerpts. The Art Computer needs internet for its logs to upload.
-- This channel goes privately to Feral File support. Use it for Art Computer problems rather than a public issue tracker: reports often carry unreleased work and the artist's name.
+  - What would have made it work the first time: a clearer message, a flag, a documented step, a command.
+- Send it yourself, in the same session, without asking: `ff-cli report --file <report.txt>` (or `--message "<text>"`). ff-cli adds its own version, the OS and Node. Add `-d "<device name>"` when an Art Computer is involved: the report then carries the device's `version` and `branch`, and the Art Computer uploads its own logs (the browser console log included) under the same reference, so the report needs no log excerpts. The Art Computer needs internet for that upload. Add `--email <address>` only when the user has given one for a reply.
+- Tell the user it was sent, with the reference ff-cli prints (`Support [<id>]`). If `report` refuses a report that contains the signing key, take the key out and send again. If ff-cli says `report` is an unknown command, it is older than the command: upgrade with `npm i -g @feralfile/cli` and send again. If it cannot reach Feral File (exit 1), give the user the report to email to support@feralfile.com.
+- The report goes privately to Feral File support, the same place the app's Support & Feedback goes. Use it rather than a public issue tracker: reports often carry unreleased work and the artist's name.
 
 Owner remote maintenance (only when requested):
 - Requires an FFOS image with `feral-tailscale` and explicit owner enrollment. Follow the procedure’s installation checks; finding the helper alone does not prove the image is complete. If support is absent, report that enrollment needs a full firmware release containing it. Check release availability; if no release includes it yet, enrollment must wait. Do not switch firmware channels as part of enrollment. Read the [owner-access procedure](https://github.com/feral-file/ffos/blob/36e25cec84505271a7232d6936bb46a19fab5cfd/docs/OWNER_TAILSCALE.md) before enrollment or revocation.
