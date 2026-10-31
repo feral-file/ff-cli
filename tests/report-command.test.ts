@@ -331,6 +331,29 @@ describe('ff-cli report: text sources', () => {
     }
   });
 
+  test('refuses --file with the seed as base64 whose last character sets unused bits', async () => {
+    const server = await startServer();
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+    const key = generateKeyPairSync('ed25519').privateKey;
+    const configured = key.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+    const canonical = Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url').toString(
+      'base64'
+    );
+    const variant = `${canonical.slice(0, 42)}${alphabet[alphabet.indexOf(canonical[42]) | 3]}=`;
+    try {
+      const run = await runReport(['--file', 'report.txt'], {
+        supportUrl: server.url,
+        config: { playlist: { privateKey: configured } },
+        files: { 'report.txt': `my seed: ${variant}\n` },
+      });
+      assert.equal(run.status, 1, run.stdout + run.stderr);
+      assert.match(run.stderr, /contains this computer's playlist signing key/);
+      assert.deepEqual(server.seen, []);
+    } finally {
+      server.close();
+    }
+  });
+
   test('refuses --file config.json when the config escapes the key as JSON allows', async () => {
     const server = await startServer();
     let configured = '';

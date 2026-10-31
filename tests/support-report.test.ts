@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
+import { parsePlaylistPrivateKeyToKeyObject } from '../src/utilities/ed25519-key-derive';
 import { parseProfile } from '../src/utilities/control/codec';
 import { parsePrivateJwk } from '../src/utilities/control/jwk';
 import { type ControllerRecord, saveController } from '../src/utilities/control/controller-store';
@@ -279,6 +280,18 @@ function escapeSlashes(text: string): string {
   return text.split('/').join('\\/');
 }
 
+/**
+ * seedWithUnusedBits writes a 32-byte seed as base64 whose last character
+ * carries nonzero unused bits: a spelling that decodes to the same seed but is
+ * not the canonical encoding.
+ */
+function seedWithUnusedBits(seed: Buffer): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  const canonical = seed.toString('base64');
+  const last = alphabet.indexOf(canonical[42]);
+  return `${canonical.slice(0, 42)}${alphabet[last | 3]}=`;
+}
+
 /** pemWrapped wraps a base64 DER body as PEM, 16 characters a line. */
 function pemWrapped(der: string): string {
   return `-----BEGIN PRIVATE KEY-----\n${der.match(/.{1,16}/g)!.join('\n')}\n-----END PRIVATE KEY-----\n`;
@@ -333,6 +346,25 @@ describe('containsSigningKey', () => {
       );
       const unpadded = seed64.replace(/=+$/, '');
       assert.equal(containsSigningKey(`seed: ${unpadded} end`, der64), true, unpadded);
+    }
+  });
+
+  test('finds a seed whose base64 sets the unused bits of its last character', () => {
+    for (let i = 0; i < 20; i += 1) {
+      const k = generateKeyPairSync('ed25519').privateKey;
+      const der64 = k.export({ format: 'der', type: 'pkcs8' }).toString('base64');
+      const seed = Buffer.from(String(k.export({ format: 'jwk' }).d), 'base64url');
+      const variant = seedWithUnusedBits(seed);
+      assert.notEqual(variant, seed.toString('base64'));
+      // The parser loads it as the same key, so the guard must catch it.
+      assert.equal(
+        parsePlaylistPrivateKeyToKeyObject(variant)
+          .export({ format: 'der', type: 'pkcs8' })
+          .toString('base64'),
+        der64
+      );
+      assert.equal(containsSigningKey(`seed: ${variant} end`, der64), true, variant);
+      assert.equal(containsSigningKey(`seed: ${variant.slice(0, -1)} end`, der64), true, variant);
     }
   });
 

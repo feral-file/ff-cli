@@ -188,19 +188,23 @@ export function isReservedAddress(value: string): boolean {
 
 /**
  * containsSigningKey reports whether `report` carries the configured playlist
- * signing key, as configured or in any other encoding
- * parsePlaylistPrivateKeyToKeyObject accepts for the same key (PEM, or PKCS#8
- * DER or the 32-byte seed as base64 with or without padding, or as hex), and
- * as base64url. The report is
- * read as written and with JSON string escapes (`\/`, `\u002f`, `\n`) and
- * percent-encoding decoded, since a pasted config.json may escape the key.
- * Everything outside the key alphabets, padding and case are ignored, so a
- * wrapped PEM body, an unpadded value or a key split by separators still
+ * signing key. When the key parses, the report is decoded rather than compared
+ * as text: every run of base64 (either alphabet, any padding, any unused bits)
+ * and every run of hex is decoded at each alignment, and the report matches
+ * when the decoded bytes hold the key's 32-byte seed. That covers PEM, PKCS#8
+ * DER and the seed in every spelling parsePlaylistPrivateKeyToKeyObject
+ * accepts, since all of them decode to bytes that hold the seed. A key that
+ * does not parse is matched as written.
+ *
+ * The report is read as written, with JSON string escapes (`\/`, `/`,
+ * `\n`) decoded up to four levels deep, and percent-decoded, since a pasted
+ * config.json may escape the key. Characters outside the encoding's alphabet
+ * are dropped first, so a wrapped PEM body or a key split by separators still
  * matches.
  *
  * A cheap guard against pasting a config or key file into a report, not a
- * secret scanner. Every form compared is at least 32 characters of key
- * material, so a match is never a coincidence.
+ * secret scanner. A match needs 32 bytes of key material, so it is never a
+ * coincidence.
  *
  * @param report - Report text
  * @param material - Configured key (`playlist.privateKey` or PLAYLIST_PRIVATE_KEY), if any
@@ -211,8 +215,13 @@ export function containsSigningKey(report: string, material: string | null | und
   if (!configured) {
     return false;
   }
-  const forms = signingKeyForms(configured);
-  return reportReadings(report).some((text) => forms.some((form) => text.includes(form)));
+  const readings = reportReadings(report);
+  const seed = signingSeed(configured);
+  if (seed) {
+    return readings.some((text) => decodesToInclude(text, seed));
+  }
+  const asWritten = keyText(configured.replace(/-----[^-]+-----/g, ''));
+  return asWritten.length >= 32 && readings.some((text) => keyText(text).includes(asWritten));
 }
 
 /** keyText keeps only the characters of hex, base64 and base64url, without `=` padding, lowercased. */
@@ -221,19 +230,40 @@ function keyText(text: string): string {
 }
 
 /**
- * reportReadings lists the report as key text: as written, percent-decoded,
- * and with JSON string escapes decoded up to four levels deep (a config quoted
- * inside a JSON log line is escaped twice).
+ * decodesToInclude decodes `text`'s base64 characters (both alphabets) at all
+ * four alignments and its hex digits at both, and reports whether any decoding
+ * holds `bytes`. Decoding at the alignment where the key starts yields the
+ * key's bytes exactly, whatever text runs into it on either side, and base64
+ * decoding ignores the unused bits of a final character.
+ */
+function decodesToInclude(text: string, bytes: Buffer): boolean {
+  const base64 = text.replace(/[^A-Za-z0-9+/_-]/g, '');
+  for (let offset = 0; offset < 4; offset += 1) {
+    if (Buffer.from(base64.slice(offset), 'base64').includes(bytes)) {
+      return true;
+    }
+  }
+  const hex = text.replace(/[^0-9A-Fa-f]/g, '');
+  for (let offset = 0; offset < 2; offset += 1) {
+    if (Buffer.from(hex.slice(offset), 'hex').includes(bytes)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * reportReadings lists the report as written, percent-decoded, and with JSON
+ * string escapes decoded up to four levels deep (a config quoted inside a JSON
+ * log line is escaped twice).
  */
 function reportReadings(report: string): string[] {
   const readings = new Set<string>();
   let text = report;
   for (let depth = 0; depth < 4; depth += 1) {
-    readings.add(keyText(text));
+    readings.add(text);
     readings.add(
-      keyText(
-        text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
-      )
+      text.replace(/%([0-9A-Fa-f]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
     );
     const next = text.replace(/\\(?:u([0-9A-Fa-f]{4})|(.))/g, (_, hex, ch) =>
       hex ? String.fromCharCode(parseInt(hex, 16)) : (JSON_ESCAPES[ch] ?? ch)
@@ -248,20 +278,14 @@ function reportReadings(report: string): string[] {
 
 const JSON_ESCAPES: Record<string, string> = { b: '\b', f: '\f', n: '\n', r: '\r', t: '\t' };
 
-/** signingKeyForms lists the encodings of one key to look for, as key text; an unparseable key is matched as written. */
-function signingKeyForms(material: string): string[] {
-  const forms = [material.replace(/-----[^-]+-----/g, '')];
+/** signingSeed returns the configured key's 32-byte Ed25519 seed, or null when the key does not parse. */
+function signingSeed(material: string): Buffer | null {
   try {
     const key = parsePlaylistPrivateKeyToKeyObject(material);
-    const der = key.export({ format: 'der', type: 'pkcs8' });
-    const seed = Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url');
-    for (const bytes of [der, seed]) {
-      forms.push(bytes.toString('hex'), bytes.toString('base64'), bytes.toString('base64url'));
-    }
+    return Buffer.from(String(key.export({ format: 'jwk' }).d), 'base64url');
   } catch {
-    // Matched as written only.
+    return null;
   }
-  return forms.map(keyText).filter((form) => form.length >= 32);
 }
 
 /**
