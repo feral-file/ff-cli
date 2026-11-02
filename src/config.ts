@@ -26,6 +26,41 @@ import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-p
  */
 const DEFAULT_FEED_BASE_URL = 'https://feed.feralfile.com/api/v1';
 
+/**
+ * The deleted worker ff-cli 3.0.0 named. Its `setup` and `config init` copied it into every
+ * config.json they wrote, and an explicit feed wins over the default, so a configured URL on
+ * this host is read as feed.feralfile.com (path kept) instead: same operator, same API.
+ */
+const RETIRED_FEED_HOST = 'dp1-feed-operator-api-prod.autonomy-system.workers.dev';
+const RETIRED_FEED_REPLACEMENT_ORIGIN = 'https://feed.feralfile.com';
+
+let retiredFeedNoted = false;
+
+/**
+ * replaceRetiredFeedUrl maps a feed URL on RETIRED_FEED_HOST to feed.feralfile.com, keeping its
+ * path, and notes it once per run on stderr (stdout may be a script's JSON). Any other URL,
+ * including an unparseable one, is returned unchanged.
+ */
+function replaceRetiredFeedUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (parsed.hostname.toLowerCase() !== RETIRED_FEED_HOST) {
+    return url;
+  }
+  const replaced = `${RETIRED_FEED_REPLACEMENT_ORIGIN}${parsed.pathname.replace(/\/$/, '')}${parsed.search}`;
+  if (!retiredFeedNoted) {
+    retiredFeedNoted = true;
+    console.error(
+      `Note: ${url} is a retired feed server; using ${replaced}. Update the feed in config.json or FEED_BASE_URLS to stop this note.`
+    );
+  }
+  return replaced;
+}
+
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
   const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
@@ -218,10 +253,13 @@ export function getFeedConfig(): {
 
   // Check for new feedServers format first
   if (config.feedServers && Array.isArray(config.feedServers) && config.feedServers.length > 0) {
-    const baseURLs = config.feedServers.map((server) => server.baseUrl);
+    const servers = config.feedServers.map((server) => ({
+      ...server,
+      baseUrl: replaceRetiredFeedUrl(server.baseUrl),
+    }));
     return {
-      baseURLs,
-      servers: config.feedServers,
+      baseURLs: servers.map((server) => server.baseUrl),
+      servers,
     };
   }
 
@@ -240,7 +278,7 @@ export function getFeedConfig(): {
   }
 
   return {
-    baseURLs: urls,
+    baseURLs: urls.map(replaceRetiredFeedUrl),
   };
 }
 

@@ -187,6 +187,7 @@ DP‑1 Feed API configuration.
 - `feed.baseURLs` (string[]): Array of DP‑1 Feed Operator API v1 base URLs. The CLI queries all feeds in parallel.
 - Legacy support: `feed.baseURL` (string) is still accepted and normalized to an array.
 - Default: `https://feed.feralfile.com/api/v1` if not set.
+- A configured URL on `dp1-feed-operator-api-prod.autonomy-system.workers.dev` (the deleted server ff-cli 3.0.0's `setup` wrote into `config.json`) is read as `https://feed.feralfile.com` with the same path, with a one-line note on stderr until you update it.
 - Compatibility: API v1 of the DP‑1 Feed Operator server. See the repository for endpoints and behavior: [dp1-feed](https://github.com/display-protocol/dp1-feed).
 
 Endpoints used by the CLI:
