@@ -7,7 +7,7 @@
   },
   "feedServers": [
     {
-      "baseUrl": "https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"
+      "baseUrl": "https://feed.feralfile.com/api/v1"
     },
     {
       "baseUrl": "http://localhost:8787"

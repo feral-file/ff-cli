@@ -55,7 +55,7 @@ ff-cli config validate
     "privateKey": "your_ed25519_private_key_hex_or_base64_here",
     "curatorName": "YOUR_CURATOR_NAME"
   },
-  "feed": { "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"] },
+  "feed": { "baseURLs": ["https://feed.feralfile.com/api/v1"] },
   "ff1Devices": {
     "devices": [
       {
