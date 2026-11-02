@@ -26,6 +26,7 @@
 
 import os from 'node:os';
 import { defaultDeadlineFetch, fetchWithTimeout } from './http';
+import { lanReadTimeoutMs } from './control/pairing';
 import { USER_AGENT } from './user-agent';
 import { parsePlaylistPrivateKeyToKeyObject } from './ed25519-key-derive';
 import { publicControlCode } from './ff1-device';
@@ -72,7 +73,8 @@ const LOCAL_PART = new RegExp(`^${ATEXT}(?:\\.${ATEXT})*$`);
 const DOMAIN_LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
 const RESERVED_LOCAL_PARTS = new Set(['mailer-daemon', 'postmaster']);
 
-/** STATUS_TIMEOUT_MS bounds the LAN status read, so an absent FF1 delays a report only briefly. */
+/** STATUS_TIMEOUT_MS bounds the LAN status read at an address. A `.local` host gets
+ *  lanReadTimeoutMs's 12 s instead, since macOS takes about 5 s to look one up. */
 const STATUS_TIMEOUT_MS = 5_000;
 
 /** SUPPORT_BUNDLE_ID is the app's reference format: 13 base62 characters (ff-app support_bundle_id.dart). */
@@ -298,12 +300,13 @@ function signingSeed(material: string): Buffer | null {
  * refuse the whole report.
  *
  * @param device - Configured Art Computer
- * @param fetchFn - Fetch (tests); defaults to a short deadline
+ * @param fetchFn - Fetch (tests); defaults to 5 s, or the longer `.local` deadline
  * @returns The Art Computer block, and why the read failed when it did
  */
 export async function readDeviceStatus(
   device: FF1Device,
-  fetchFn: typeof fetch = (input, init) => fetchWithTimeout(input, init ?? {}, STATUS_TIMEOUT_MS)
+  fetchFn: typeof fetch = (input, init) =>
+    fetchWithTimeout(input, init ?? {}, lanReadTimeoutMs(device.host, STATUS_TIMEOUT_MS))
 ): Promise<{ device: ReportDevice; error?: string }> {
   const configuredId = fieldValue(device.id);
   const fallback: ReportDevice = configuredId ? { device_id: configuredId } : {};
