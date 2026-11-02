@@ -138,7 +138,8 @@ export function requirePairableDevice(name?: string): PairDevice {
   const device = selected.device;
   if (!device.id) {
     throw new CommandFailure(
-      `Device "${device.name || device.host}" has no stable device ID. Re-add it with ff-cli device add before pairing.`
+      `Device "${device.name || device.host}" has no stable device ID.`,
+      'Re-add it with `ff-cli device add` (discovery records the ID), or with `--host` and `--id FF1-XXXXXXXX` (the app shows it under Device Information).'
     );
   }
   return device as PairDevice;
@@ -256,7 +257,22 @@ export async function pairDevice(
   // The status is unauthenticated, so it may never downgrade a device this
   // computer holds (or may hold) a grant for: any controller record or saved
   // pairing keys means the QR flow, whatever the LAN answers.
-  if (holdsControlState(device.id, deps.controllerStore ?? {})) {
+  const held = heldControlState(device.id, deps.controllerStore ?? {});
+  if (held) {
+    // Leftover pairing keys are often an earlier pairing that was stopped, not a
+    // grant: on an FF1 without secure control that QR can never complete, and
+    // nothing told the user how out. Read the status only to say so.
+    if (
+      held === 'pairing keys' &&
+      (await probeControlSupport(device, deps.fetchFn)) === 'plaintext'
+    ) {
+      console.log(
+        chalk.yellow(
+          `\nAn earlier pairing with ${deviceLabel(device)} left its keys here, so ff-cli shows the secure pairing code again. ` +
+            `The FF1’s LAN status, which is not authenticated, shows no secure control: if that is right, run \`${pairCommand(deviceLabel(device))} --topic-handoff\` instead.`
+        )
+      );
+    }
     await pairByRegistration(device, options, deps);
     return;
   }
@@ -285,16 +301,21 @@ export async function pairDevice(
 }
 
 /**
- * holdsControlState reports whether this computer has a controller record
- * (main or staged, even corrupt) or saved pairing keys for the device. An
- * unreadable file throws: its keys may be fine.
+ * heldControlState reports what this computer holds for the device: a
+ * controller record (main or staged, even corrupt), else saved pairing keys,
+ * else nothing. An unreadable file throws: its keys may be fine.
  */
-function holdsControlState(deviceId: string, store: ControllerStoreOptions): boolean {
-  return (
+function heldControlState(
+  deviceId: string,
+  store: ControllerStoreOptions
+): 'record' | 'pairing keys' | null {
+  if (
     loadUnlessCorrupt(deviceId, store) !== null ||
-    loadUnlessCorrupt(deviceId, stagingStore(store)) !== null ||
-    hasPairingKeys(deviceId, store)
-  );
+    loadUnlessCorrupt(deviceId, stagingStore(store)) !== null
+  ) {
+    return 'record';
+  }
+  return hasPairingKeys(deviceId, store) ? 'pairing keys' : null;
 }
 
 /**

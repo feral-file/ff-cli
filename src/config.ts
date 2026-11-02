@@ -17,6 +17,15 @@ import {
 } from './utilities/playlist-signing-role';
 import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
 
+/**
+ * The feed server used when neither config.json nor FEED_BASE_URLS names one. It replaced
+ * dp1-feed-operator-api-prod.autonomy-system.workers.dev, a deleted worker whose zone belongs to
+ * an account being retired: a default must never name a host someone else could register.
+ * DEFAULT_FF1_RELAYER_URL below is in the same zone but still live; the ff-cli release after
+ * the legacy relayer shutdown turns it off (ffos-user docs/ff1-control-v1.md §15.4).
+ */
+const DEFAULT_FEED_BASE_URL = 'https://feed.feralfile.com/api/v1';
+
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
   const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
@@ -44,7 +53,7 @@ function loadConfig(): Config {
     feed: {
       baseURLs: process.env.FEED_BASE_URLS
         ? process.env.FEED_BASE_URLS.split(',')
-        : ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'],
+        : [DEFAULT_FEED_BASE_URL],
     },
   };
 
@@ -227,7 +236,7 @@ export function getFeedConfig(): {
     urls = [feedConfig.baseURL];
   } else {
     // Default feed URL
-    urls = ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'];
+    urls = [DEFAULT_FEED_BASE_URL];
   }
 
   return {

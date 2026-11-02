@@ -23,8 +23,10 @@ function makeConfig() {
     defaultDuration: 10,
     ff1Devices: {
       devices: [
-        { name: 'kitchen', host: 'http://192.168.1.10:1111' },
-        { name: 'office', host: 'http://192.168.1.11:1111' },
+        // IDs, as pairing-ready rows have: a row without one makes `device add --host`
+        // read the FF1's status over the network.
+        { name: 'kitchen', host: 'http://192.168.1.10:1111', id: 'FF1-KITCHEN1' },
+        { name: 'office', host: 'http://192.168.1.11:1111', id: 'FF1-OFFICE01' },
       ],
     },
   };

@@ -40,6 +40,21 @@ function runShow(configJson: Record<string, unknown> | null, env: Record<string,
 }
 
 describe('config show numbers the effective feed servers', () => {
+  // The former default, dp1-feed-operator-api-prod.autonomy-system.workers.dev, is a deleted
+  // worker (HTTP 404), and its zone belongs to an account that is going away: once someone else
+  // registers that name it would serve every default fetch and receive every default publish.
+  for (const [label, configJson] of [
+    ['no config file', null],
+    ['a config file without feeds', { defaultDuration: 10 }],
+  ] as const) {
+    test(`with ${label}, the default feed is feed.feralfile.com`, () => {
+      const out = runShow(configJson);
+      assert.equal(out.status, 0, out.stderr);
+      assert.match(out.stdout, /0: https:\/\/feed\.feralfile\.com\/api\/v1/);
+      assert.doesNotMatch(out.stdout, /autonomy-system/);
+    });
+  }
+
   test('feedServers are listed with the index -s expects', () => {
     const out = runShow({
       defaultDuration: 10,
