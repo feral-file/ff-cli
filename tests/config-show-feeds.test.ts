@@ -55,6 +55,52 @@ describe('config show numbers the effective feed servers', () => {
     });
   }
 
+  // ff-cli 3.0.0's setup and `config init` copied config.json.example, which named the
+  // now-deleted dp1-feed-operator worker under feedServers. An explicit entry wins over the
+  // default, so without this every such config kept failing after the upgrade.
+  const RETIRED = 'https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1';
+  for (const [label, configJson, env] of [
+    ['feedServers', { feedServers: [{ baseUrl: RETIRED }] }, {}],
+    ['the legacy feed.baseURLs', { feed: { baseURLs: [RETIRED] } }, {}],
+    ['FEED_BASE_URLS', null, { FEED_BASE_URLS: RETIRED }],
+  ] as const) {
+    test(`the retired feed host in ${label} reads as feed.feralfile.com, with a note`, () => {
+      const out = runShow(configJson, env);
+      assert.equal(out.status, 0, out.stderr);
+      assert.match(out.stdout, /0: https:\/\/feed\.feralfile\.com\/api\/v1/);
+      assert.doesNotMatch(out.stdout, /autonomy-system/);
+      assert.match(out.stderr, /retired feed server/);
+    });
+  }
+
+  test('a mixed list keeps the other server and its index; the note is printed once', () => {
+    const out = runShow({
+      feedServers: [
+        { baseUrl: RETIRED },
+        { baseUrl: 'https://feed.example.com/api/v1' },
+        { baseUrl: `${RETIRED}/` },
+      ],
+    });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /0: https:\/\/feed\.feralfile\.com\/api\/v1/);
+    assert.match(out.stdout, /1: https:\/\/feed\.example\.com\/api\/v1/);
+    assert.match(out.stdout, /2: https:\/\/feed\.feralfile\.com\/api\/v1/);
+    assert.equal(out.stderr.match(/retired feed server/g)?.length, 1);
+  });
+
+  test('the legacy single feed.baseURL is mapped too', () => {
+    const out = runShow({ feed: { baseURL: RETIRED } });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /0: https:\/\/feed\.feralfile\.com\/api\/v1/);
+  });
+
+  test('any other feed server is left as configured, without a note', () => {
+    const out = runShow({ feedServers: [{ baseUrl: 'https://feed.example.com/api/v1' }] });
+    assert.equal(out.status, 0, out.stderr);
+    assert.match(out.stdout, /0: https:\/\/feed\.example\.com\/api\/v1/);
+    assert.doesNotMatch(out.stderr, /retired feed server/);
+  });
+
   test('feedServers are listed with the index -s expects', () => {
     const out = runShow({
       defaultDuration: 10,
