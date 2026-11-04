@@ -24,7 +24,7 @@ const RATE_LIMIT_STATUS = 429;
 // hostile device cannot pin a command for minutes/hours.
 const MAX_RETRY_DELAY_MS = 30_000;
 // PUBLIC_CONTROL_CODES are the ff1-control-v1 §4.4 public errors a secured
-// FF1 can answer a plaintext cast with (LAN 401/403, relayer RPC message).
+// FF1 can answer a plaintext command with (LAN 401/403, relayer RPC message).
 const PUBLIC_CONTROL_CODES = new Set([
   'bad_envelope',
   'unknown_controller',
@@ -72,7 +72,7 @@ interface DeliveryDependencies {
   nowFn?: () => number;
 }
 
-/** Find an FF1 `ok` flag through the nested cast response envelopes. */
+/** Find an FF1 `ok` flag through the nested `/api/cast` response envelopes. */
 function nestedCastOk(value: unknown): boolean | undefined {
   if (!value || typeof value !== 'object') {
     return undefined;
@@ -97,7 +97,7 @@ function waitForRetry(delayMs: number): Promise<void> {
 }
 
 /**
- * Send a DP1 playlist to an FF1 device using the cast API
+ * Send a DP1 playlist to an FF1 device through `/api/cast`
  *
  * This function sends the entire DP1 JSON payload to a configured FF1 device.
  * If a device name is provided, it searches for a device with that exact name.
@@ -108,7 +108,7 @@ function waitForRetry(delayMs: number): Promise<void> {
  * @param {Object} params.playlist - Complete DP1 v1.0.0 playlist object to send
  * @param {string} [params.deviceName] - Name of the device to send to (exact match required)
  * @returns {Promise<Object>} Result object
- * @returns {boolean} returns.success - Whether the cast was successful
+ * @returns {boolean} returns.success - Whether the playlist was accepted
  * @returns {string} [returns.device] - Device host that received the playlist
  * @returns {string} [returns.deviceName] - Name of the device used
  * @returns {Object} [returns.response] - Response from the device
@@ -178,7 +178,7 @@ export async function sendPlaylistToDevice(
     if (!compatibility.compatible) {
       return {
         success: false,
-        error: compatibility.error || 'FF1 OS does not support playlist casting',
+        error: compatibility.error || 'FF1 OS does not support playlist display',
         details:
           compatibility.details ??
           (compatibility.version ? `Detected version ${compatibility.version}` : undefined),
@@ -214,7 +214,7 @@ export async function sendPlaylistToDevice(
 
     // Make the API request with bounded retries for transient local network
     // errors, device rate-limiting, and empty/non-JSON bodies (the device can
-    // return an empty response on the first cast after boot).
+    // return an empty response on the first request after boot).
     let response: Response | null = null;
     let responseData: Record<string, unknown> = {};
     // Describes a 2xx response whose body could not be parsed, so the post-loop
@@ -252,7 +252,7 @@ export async function sendPlaylistToDevice(
         }
 
         // 2xx: read the body defensively. An empty or non-JSON body is a known
-        // transient hiccup (commonly the first cast after boot), so retry within
+        // transient hiccup (commonly the first request after boot), so retry within
         // the attempt budget instead of throwing "Unexpected end of JSON input".
         const bodyText = (await response.text()).trim();
         if (bodyText === '') {
@@ -312,7 +312,7 @@ export async function sendPlaylistToDevice(
     // Check response status
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error(`Failed to cast to device: ${response.status} ${response.statusText}`);
+      logger.error(`Failed to send to device: ${response.status} ${response.statusText}`);
       logger.debug(`Error details: ${errorText}`);
 
       const publicCode = publicControlCode(response.status, errorText);
@@ -344,13 +344,13 @@ export async function sendPlaylistToDevice(
     if (lastBodyIssue) {
       const deviceLabel = device.name || device.host;
       logger.error(
-        `Cast to "${deviceLabel}" returned HTTP ${response.status} but ${lastBodyIssue}`
+        `Display on "${deviceLabel}" returned HTTP ${response.status} but ${lastBodyIssue}`
       );
       return {
         success: false,
         error: `Device "${deviceLabel}" accepted the request (HTTP ${response.status}) but returned no usable response`,
         details:
-          `${lastBodyIssue}. This is often transient on the first cast after boot — ` +
+          `${lastBodyIssue}. This is often transient on the first request after boot — ` +
           'wait a few seconds and try again.',
       };
     }
@@ -580,7 +580,7 @@ async function fallbackToRelayer(input: {
     playlist: input.playlist,
     fetchFn: input.dependencies.fetchFn,
   });
-  // A secured FF1 refuses a plaintext relayer cast it will not run
+  // A secured FF1 refuses a plaintext relayer command it will not run
   // (ff1-control-v1 §4.4/§7.2) with a flat `{ok:false,error:"<code>"}` RPC
   // message; map it to pairing guidance instead of a bare rejection.
   const refusal = plaintextRefusalCode(result.response);

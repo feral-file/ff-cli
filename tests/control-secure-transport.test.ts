@@ -95,7 +95,7 @@ function json(status: number, body: unknown, headers: Record<string, string> = {
   });
 }
 
-/** lanFetch routes LAN casts to the fake device and records request bodies. */
+/** lanFetch routes LAN commands to the fake device and records request bodies. */
 function lanFetch(device: FakeFF1, bodies: unknown[] = []): typeof fetch {
   return async (input, init) => {
     const body = JSON.parse(String(init?.body));
@@ -285,7 +285,7 @@ describe('controller key store', () => {
 });
 
 describe('secure displayPlaylist', () => {
-  test('sends preflight and cast as envelopes with fresh counters over the LAN', async () => {
+  test('sends preflight and displayPlaylist as envelopes with fresh counters over the LAN', async () => {
     enrolledRecord('owner');
     const device = fakeDevice((claims) =>
       claims.cmd === 'getDeviceStatus'
@@ -523,7 +523,7 @@ describe('secure displayPlaylist', () => {
     assert.equal(relayed.length, 1);
     assert.match(relayed[0], /topicID=topic-secret/);
     assert.match(notices[0], /relayer/);
-    // Three LAN casts and the preflight burned counters 1-4; the relayer used 5.
+    // Three LAN commands and the preflight burned counters 1-4; the relayer used 5.
     assert.equal(device.seen.at(-1)!.ctr, 5);
   });
 
@@ -809,7 +809,7 @@ describe('legacy path against a secured FF1', () => {
     assert.match(result.details!, /ff-cli device pair Office/);
   });
 
-  test('old firmware keeps the plaintext cast unchanged', async () => {
+  test('old firmware keeps the plaintext command unchanged', async () => {
     const casts: Array<Record<string, unknown>> = [];
     const result = await sendPlaylistToDevice(
       { playlist },

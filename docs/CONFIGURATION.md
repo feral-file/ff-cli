@@ -355,7 +355,7 @@ You can also manage devices independently with:
   also shows Play sites that an owner approved through mint pairing, with role
   `display`, platform `web` and the site's origin in the LABEL column
   (`(unverified)` when the relay did not attest it). A display row may only
-  cast to the FF1; `ff-cli device revoke` removes it like any controller.
+  display on the FF1; `ff-cli device revoke` removes it like any controller.
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
 - `ff-cli device unpair [name]` – Revoke ff-cli's own access on the FF1 (best
@@ -378,9 +378,9 @@ Selection rules when sending:
 - If you omit `-d`, the first configured device is used.
 - If you pass `-d <name>`, the CLI matches the device by `name` (case-insensitive) or by host URL — the same rules as `device remove`/`default`/`rename`, so unnamed entries can be targeted by host. If not found, you’ll see an error listing available devices.
 
-Device cast contract:
+Device command contract:
 
-The device exposes a single HTTP endpoint, `POST http://<device>:1111/api/cast`. `ff-cli display` casts a DP-1 playlist with:
+The device exposes a single HTTP endpoint, `POST http://<device>:1111/api/cast`. `ff-cli display` sends a DP-1 playlist with:
 
 ```jsonc
 POST http://<device>:1111/api/cast
@@ -487,7 +487,7 @@ the topic relayer.
 - On relay v2 a `replay` answer is reported as an unknown outcome, never
   retried: the FF1 may have received two copies of the same request.
 
-On the first cast after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
+On the first request after boot the device may return an empty body. ff-cli retries this automatically and, if it persists, reports a clear "accepted the request but returned no usable response" error rather than crashing on a JSON parse.
 
 Compatibility checks:
 

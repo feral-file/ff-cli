@@ -274,7 +274,7 @@ async function detectFF1Version(
 
 /**
  * refusalFromPublicError recognizes a secured FF1 refusing a plaintext LAN
- * cast (ff1-control-v1 §4.4, HTTP 403 `enrollment_required`). That answer
+ * command (ff1-control-v1 §4.4, HTTP 403 `enrollment_required`). That answer
  * means every plaintext command will be refused, so the preflight stops with
  * the pairing guidance instead of sending the real command into the same 403.
  * Any other failure keeps the historical "could not verify" behavior.
@@ -357,7 +357,7 @@ async function detectFF1VersionSecurely(
 }
 
 /**
- * Build headers shared by cast requests.
+ * Build headers shared by `/api/cast` requests.
  *
  * @param {FF1Device} device - Target device
  * @returns {Record<string, string>} Headers map

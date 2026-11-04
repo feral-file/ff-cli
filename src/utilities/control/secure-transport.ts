@@ -2,7 +2,7 @@
  * Secure command transport (ffos-user docs/ff1-control-v1.md §10): sends one
  * request as `{"command":"ff1Envelope","request":{"v":1,"jwe":…}}` to the
  * FF1's LAN `POST /api/cast`, and, where today's plaintext path falls back,
- * through the relayer topic cast.
+ * through the relayer topic command.
  *
  * Rules this module owns (keep them when changing it):
  * - Every attempt is sealed afresh with a newly allocated counter, rid, rk,
@@ -721,7 +721,7 @@ const RELAYER_NO_DEVICE_SOCKET = 1003;
 const RELAYER_LEGACY_RETIRED = new Set(['legacy_controller_api_retired', 'legacy_api_retired']);
 
 /**
- * heldTopicGone reports whether a topic cast failed with the relayer's own
+ * heldTopicGone reports whether a topic command failed with the relayer's own
  * answer that the topic leads nowhere: 1003 (no device socket on it), 410
  * (the legacy route is retired) or 404 (the legacy host is shut down: a
  * deleted workers.dev worker answers `404 error code: 1042`, while a live
@@ -877,7 +877,7 @@ function v2Failure(request: SecureRequest, error: Error): SecureOutcome {
   };
 }
 
-/** sendViaRelayer seals a NEW request (new ctr) and casts it on the topic. */
+/** sendViaRelayer seals a NEW request (new ctr) and sends it on the topic. */
 async function sendViaRelayer(
   request: SecureRequest,
   record: ControllerRecord,

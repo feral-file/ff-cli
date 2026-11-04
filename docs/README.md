@@ -122,14 +122,14 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, and verifies it against the document as it now stands. Your own earlier signature is replaced by the same run. Another key's entry that **still verifies** — which is every entry when the content was not edited, since the signing payload excludes `signatures` — is reported as removed; keep the previous file if you want it back. An entry that does **not** verify is reported as exactly that and no more: the command has only the document as it stands, so it cannot tell an edit from an entry that was never valid, and it does not guess. Roles are carried through as found (`agent`, `institution` and `licensor` are as valid as `curator`), and a flat legacy `signature` is reported as not checkable, since it carries no key or role at all
 - `display <source>` – Display a playlist file, playlist URL, media URL, or web page on an FF1 device (`play` still works for existing scripts; runs `verify` before sending; only the CLI-synthesized media/web URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
   - Any URL that does not load as a playlist is sent as a single item: a media file displays as media, and anything else displays as a web page
-  - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never cast as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
+  - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never displayed as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
   - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
-  - Options: `-o, --output <path>`, `-l, --limit <n>`, `--display`, `--no-display` (never cast; combine with `-y` to build and save without displaying; `-p`, `--play` and `--no-play` still work for existing scripts), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it displays the playlist on a device, so add `--no-display` to skip casting), `--skip-verify`
+  - Options: `-o, --output <path>`, `-l, --limit <n>`, `--display`, `--no-display` (never display; combine with `-y` to build and save without displaying; `-p`, `--play` and `--no-play` still work for existing scripts), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it displays the playlist on a device, so add `--no-display` to skip the display), `--skip-verify`
   - A wallet address picks one work by the artist at that address. For what a wallet owns, use `build` with a `query_address` requirement
   - Without a terminal, pass `-y`: a question with no terminal to answer it fails with exit 1 and names the flag, rather than waiting or exiting 0 with nothing built
 - `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards. With the opt-in Raster token source no still image is supplied, so `enrich` adds artist and description but no thumbnail; thumbnails come from the default indexer source
@@ -255,7 +255,7 @@ re-signed before displaying:
 ff-cli enrich playlist.json --assume-ethereum && ff-cli sign playlist.json
 ```
 
-That role is fine for casting. Use `ff-cli sign playlist.json -r curator` if the enriched playlist is
+That role is fine for display. Use `ff-cli sign playlist.json -r curator` if the enriched playlist is
 also going to a feed.
 
 ### Validate, sign, and display
@@ -275,7 +275,7 @@ npm run dev -- display playlist.json -d "Living Room Display"
 
 # The display path performs a compatibility preflight check against the target FF1.
 # If the device reports an unsupported FF1 OS version, the command fails with
-# a clear version message before any cast request is sent.
+# a clear version message before any display request is sent.
 # It also retries transient local-network errors (for example intermittent
 # mDNS/Wi-Fi resolver failures) with a short backoff before returning a final error.
 

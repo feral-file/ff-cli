@@ -83,7 +83,7 @@ function fakeDevice(decide?: ConstructorParameters<typeof FakeFF1>[2]): FakeFF1 
   );
 }
 
-/** lanFetch routes LAN casts to the fake device. */
+/** lanFetch routes LAN commands to the fake device. */
 function lanFetch(device: FakeFF1): typeof fetch {
   return async (input, init) => {
     assert.equal(new URL(input.toString()).origin, HOST);

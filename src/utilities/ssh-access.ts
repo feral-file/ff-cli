@@ -5,7 +5,7 @@
  * `/api/cast` endpoint and never falls back to the relayer.
  *
  * Topic proof (feral-file#3551 phase 0): on a claimed FF1, newer FF OS rejects
- * a LAN `sshAccess` (and `connect`) cast unless it carries the relayer topic in
+ * a LAN `sshAccess` (and `connect`) command unless it carries the relayer topic in
  * the `X-FF1-Topic` header, answering HTTP 401 `{"error":{"code":"topic_required"}}`.
  * The topic is the secret that `ff-cli device pair` stores in the OS keyring;
  * holding it proves the CLI was paired by the owner through the mobile app.
@@ -32,7 +32,7 @@ import {
   runSecureCommand,
 } from './control/secure-transport';
 
-/** FF1_TOPIC_HEADER is the LAN cast header that carries the relayer topic proof. */
+/** FF1_TOPIC_HEADER is the LAN `/api/cast` header that carries the relayer topic proof. */
 export const FF1_TOPIC_HEADER = 'X-FF1-Topic';
 
 /** TOPIC_REQUIRED_CODE is the device error code for a missing or wrong topic proof. */
@@ -215,7 +215,7 @@ function lookupTopicId(
   }
 }
 
-/** buildSshAccessHeaders returns the cast headers, adding topic proof only when known. */
+/** buildSshAccessHeaders returns the `/api/cast` headers, adding topic proof only when known. */
 function buildSshAccessHeaders(device: FF1Device, topicId: string | null): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (device.apiKey) {
@@ -227,7 +227,7 @@ function buildSshAccessHeaders(device: FF1Device, topicId: string | null): Recor
   return headers;
 }
 
-/** buildSshAccessBody returns the `sshAccess` cast body. */
+/** buildSshAccessBody returns the `sshAccess` command body. */
 function buildSshAccessBody(
   enabled: boolean,
   publicKey: string | undefined,

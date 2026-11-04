@@ -391,7 +391,7 @@ describe('ff-cli report: dry run', () => {
         supportUrl: server.url,
       });
       assert.equal(run.status, 0, run.stdout + run.stderr);
-      // Only the read-only status GET; no report and no cast.
+      // Only the read-only status GET; no report and no /api/cast.
       assert.deepEqual(
         server.seen.map((s) => `${s.method} ${s.path}`),
         ['GET /api/status']
