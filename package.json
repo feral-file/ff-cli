@@ -1,6 +1,6 @@
 {
   "name": "@feralfile/cli",
-  "version": "3.0.0",
+  "version": "4.0.0",
   "description": "CLI for building, signing, and displaying DP-1 playlists of digital art on Feral File devices",
   "repository": {
     "type": "git",
