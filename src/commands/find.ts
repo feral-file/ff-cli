@@ -1,4 +1,4 @@
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
 import { parseFindInput, resolveTokenInfos } from '@feralfile/source-resolver';
@@ -47,6 +47,9 @@ interface FindOptions {
   output?: string;
   limit?: string;
   yes?: boolean;
+  /** `--display` (true) or `--no-display` (false); undefined when neither was passed. */
+  display?: boolean;
+  /** Hidden `-p, --play` / `--no-play`, the retired spelling of `display`; see displayIntent. */
   play?: boolean;
   device?: string;
   publish?: boolean;
@@ -91,21 +94,40 @@ const RASTER_PAGE_SIZE = 100;
 /**
  * FIND_NON_INTERACTIVE_HINT is what `find` tells a caller without a terminal
  * when one of its questions comes up. `-y` answers every question with its
- * default, and that default is Play, so the hint names `--no-play` in the same
- * breath for a caller that only wants the file.
+ * default, and that default is to display, so the hint names `--no-display` in
+ * the same breath for a caller that only wants the file.
  */
 const FIND_NON_INTERACTIVE_HINT =
-  'Re-run with -y to accept the defaults (it builds the playlist and plays it on your FF1); add --no-play to only save it.';
+  'Re-run with -y to accept the defaults (it builds the playlist and displays it on your FF1); add --no-display to only save it.';
 
 /**
  * playAPageHint points a caller who handed `find` a page it cannot resolve to
  * the command that shows a page as it is.
  *
  * @param {string} input - The URL the caller gave `find`
- * @returns {string} One line naming `ff-cli play --web`
+ * @returns {string} One line naming `ff-cli display --web`
  */
 function playAPageHint(input: string): string {
-  return `To show this page itself on your FF1, run: ff-cli play --web "${input}"`;
+  return `To show this page itself on your FF1, run: ff-cli display --web "${input}"`;
+}
+
+/**
+ * displayIntent folds the hidden `--play` / `--no-play` spellings into
+ * `--display` / `--no-display`.
+ *
+ * The verb for art is display, not play (B&F weekly 2026-11-03; Canon
+ * reference/naming-brand.md §3.4), so `find` takes `--display` and
+ * `--no-display`. `-p, --play` and `--no-play` stay accepted, hidden from
+ * help, so existing scripts and agents keep working. Commander stores the two
+ * spellings under separate keys (`display`, `play`); this is the one place
+ * that reads both. The current spelling wins when a caller passes both.
+ *
+ * @param {FindOptions} options - Parsed `find` options
+ * @returns {boolean | undefined} true to display, false to never cast,
+ *   undefined when neither spelling was passed
+ */
+function displayIntent(options: FindOptions): boolean | undefined {
+  return options.display ?? options.play;
 }
 
 export const findCommand = new Command('find')
@@ -116,18 +138,27 @@ export const findCommand = new Command('find')
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
   .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
-  .option('-p, --play', 'Play the playlist on an FF1 device after building')
-  .option('--no-play', 'Never cast to a device; combine with -y to build and save without playing')
-  .option('-d, --device <name>', 'Device to play on (used with --play; default: first configured)')
+  .option('--display', 'Display the playlist on an FF1 device after building')
+  .option(
+    '--no-display',
+    'Never cast to a device; combine with -y to build and save without displaying'
+  )
+  // The retired spellings of the two flags above, accepted but never listed; see displayIntent.
+  .addOption(new Option('-p, --play').hideHelp())
+  .addOption(new Option('--no-play').hideHelp())
+  .option(
+    '-d, --device <name>',
+    'Device to display on (used with --display; default: first configured)'
+  )
   .option('--publish', 'Publish the playlist to a configured feed server')
   .option('-s, --server <index>', 'Feed server index (used with --publish)')
   .option(
     '-y, --yes',
-    'Skip interactive prompts. Without --output or --publish, -y plays the playlist on a device; add --no-play to skip casting'
+    'Skip interactive prompts. Without --output or --publish, -y displays the playlist on a device; add --no-display to skip casting'
   )
   .option(
     '--skip-verify',
-    'Skip signature verification before --play (mirrors `ff-cli play --skip-verify`)'
+    'Skip signature verification before --display (mirrors `ff-cli display --skip-verify`)'
   )
   .action(async (input: string, options: FindOptions) => {
     try {
@@ -143,11 +174,11 @@ export const findCommand = new Command('find')
               'or a wallet address (`0x...` / `tz1.../tz2.../tz3...`).'
           )
         );
-        // A plain web page or media URL is not an artwork lookup at all; `play`
+        // A plain web page or media URL is not an artwork lookup at all; `display`
         // casts those directly, so name it rather than leave the caller stuck.
         if (/^https?:\/\//i.test(input.trim())) {
           console.error(
-            chalk.dim(`To play a web page or media URL as it is, run: ff-cli play "${input}"`)
+            chalk.dim(`To display a web page or media URL as it is, run: ff-cli display "${input}"`)
           );
         }
         process.exit(1);
@@ -159,7 +190,7 @@ export const findCommand = new Command('find')
           return;
         }
         console.error(chalk.red(parsed.reason));
-        // `play` sends unrecognized pages on these hosts here, so the way out
+        // `display` sends unrecognized pages on these hosts here, so the way out
         // of that loop has to be printed on this side too.
         console.error(chalk.dim(playAPageHint(input)));
         process.exit(1);
@@ -400,7 +431,7 @@ async function resolveTarget(
     // so every time, so neither a person nor an agent mistakes the result.
     console.log(
       chalk.dim(
-        'find on an address plays one work by the artist at that address. ' +
+        'find on an address displays one work by the artist at that address. ' +
           'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
       )
     );
@@ -450,11 +481,11 @@ async function resolveTokenListInput(
 
 /**
  * Resolve on-chain coords to a target. If Raster doesn't index this token,
- * fall back to single-token mode so we still build something playable.
+ * fall back to single-token mode so we still build something to display.
  *
  * Raster being unreachable gets the same fallback: it only enriches the find
  * (series enumeration, artist labels) — the coords in hand are enough to
- * build a playable single-token playlist, and a network blip on one optional
+ * build a single-token playlist to display, and a network blip on one optional
  * dependency must not kill the whole command (#97).
  */
 async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
@@ -636,20 +667,23 @@ async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boo
 /**
  * Decide which post-build actions to run.
  *
- * Precedence: explicit flags (--play / --publish) win and may combine. If no
- * flag is set, fall back to --yes default (Play) or an interactive 3-way
- * prompt. Save is unconditional and already done before this is called.
+ * Precedence: explicit flags (--display / --publish) win and may combine. If
+ * no flag is set, fall back to the --yes default (display) or an interactive
+ * 3-way prompt. Save is unconditional and already done before this is called.
  *
- * `--no-play` (commander sets `play === false`) is an opt-out that removes
- * casting from every path, including the `--yes` default and the interactive
- * prompt. It is additive: `--yes` alone keeps its deliberate "max-satisfaction
- * default for scripted use" of Play, and this must not change that. Because
- * `--no-play` already states the user's intent, it never opens the prompt.
+ * `--no-display` (commander sets `display === false`) is an opt-out that
+ * removes casting from every path, including the `--yes` default and the
+ * interactive prompt. It is additive: `--yes` alone keeps its deliberate
+ * "max-satisfaction default for scripted use" of displaying, and this must not
+ * change that. Because `--no-display` already states the user's intent, it
+ * never opens the prompt. The hidden `--play` / `--no-play` spellings mean the
+ * same (displayIntent). The internal action keeps its name, 'play'.
  */
 export async function decideActions(options: FindOptions): Promise<PostBuildAction[]> {
   const flagActions: PostBuildAction[] = [];
-  const noPlay = options.play === false;
-  if (options.play) {
+  const display = displayIntent(options);
+  const noDisplay = display === false;
+  if (display) {
     flagActions.push('play');
   }
   if (options.publish) {
@@ -659,11 +693,11 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
     return flagActions;
   }
   // --output alone (with or without --yes) means "save mode" — the save was the action.
-  // --no-play likewise means the save was the action; never prompt or default to Play.
-  if (options.output || noPlay) {
+  // --no-display likewise means the save was the action; never prompt or default to display.
+  if (options.output || noDisplay) {
     return [];
   }
-  // --yes without --output defaults to Play (max-satisfaction default for scripted use).
+  // --yes without --output defaults to display (max-satisfaction default for scripted use).
   if (options.yes) {
     return ['play'];
   }
@@ -672,18 +706,30 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
 
 export type { FindOptions, BuildToken, ResolvedTarget };
 
+/**
+ * promptNextAction asks what to do with a saved playlist when no flag said so.
+ *
+ * `p` and `play` stay accepted after the rename to display: a script that
+ * pipes its answer in must keep getting the same action.
+ *
+ * @returns {Promise<PostBuildAction>} The chosen action
+ * @throws {Error} On an answer that names no action
+ */
 async function promptNextAction(): Promise<PostBuildAction> {
   const prompt = createPrompt(
-    'The playlist is saved. Pass --play to cast it, or --publish to publish it.'
+    'The playlist is saved. Pass --display to cast it, or --publish to publish it.'
   );
   const answer = (
-    await prompt.ask('Next? [P]lay on FF1 / just [S]ave / pub[L]ish to feed (default: Play): ')
+    await prompt.ask(
+      'Next? [D]isplay on FF1 / just [S]ave / pub[L]ish to feed (default: Display): '
+    )
   )
     .trim()
     .toLowerCase();
   prompt.close();
   console.log();
-  if (!answer || answer === 'p' || answer === 'play' || answer === 'y' || answer === 'yes') {
+  const displayAnswers = ['', 'd', 'display', 'p', 'play', 'y', 'yes'];
+  if (displayAnswers.includes(answer)) {
     return 'play';
   }
   if (answer === 's' || answer === 'save' || answer === 'n' || answer === 'no') {
@@ -692,7 +738,7 @@ async function promptNextAction(): Promise<PostBuildAction> {
   if (answer === 'l' || answer === 'pub' || answer === 'publish') {
     return 'publish';
   }
-  throw new Error(`Unrecognized choice: "${answer}". Use P, S, or L.`);
+  throw new Error(`Unrecognized choice: "${answer}". Use D, S, or L.`);
 }
 
 async function doPlay(
@@ -700,7 +746,7 @@ async function doPlay(
   deviceName: string | undefined,
   skipVerify: boolean
 ): Promise<void> {
-  // Same verify → send gate `ff-cli play` uses, via the shared castPlaylist
+  // Same verify → send gate `ff-cli display` uses, via the shared castPlaylist
   // helper. `find`'s playlists are already signed by buildDP1Playlist (when a
   // key is configured), so no signing is requested here — an unsigned one
   // fails the verify gate with an actionable message instead of reaching the
@@ -726,7 +772,7 @@ async function doPlay(
         )
       );
     } else {
-      console.error(chalk.red('Play failed:'), result.error);
+      console.error(chalk.red('Display failed:'), result.error);
       if (result.deviceDetails) {
         console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
       }
@@ -738,8 +784,8 @@ async function doPlay(
   if (result.verified) {
     console.log(chalk.green('✓ Verified\n'));
   }
-  console.log(chalk.blue('Play on FF1'));
-  console.log(chalk.green('✓ Playing'));
+  console.log(chalk.blue('Display on FF1'));
+  console.log(chalk.green('✓ Displaying'));
   if (result.deviceName) {
     console.log(chalk.dim(`  Device: ${result.deviceName}`));
   }

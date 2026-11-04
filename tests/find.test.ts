@@ -2,7 +2,7 @@
  * Tests for `ff-cli find` pure logic: input parsing, limit validation, and
  * post-build action selection. These are the surfaces flagged by review on
  * PR #67; covering them prevents regressions in the URL-recognition table
- * and the flag-vs-prompt branching that drives whether `--yes` plays,
+ * and the flag-vs-prompt branching that drives whether `--yes` displays,
  * saves, publishes, or some combination.
  *
  * Tests stay synchronous where possible — the only async path here is
@@ -712,8 +712,9 @@ describe('parseLimitOption', () => {
 });
 
 describe('decideActions', () => {
-  test('--play alone → [play]', async () => {
-    const actions = await decideActions({ play: true });
+  // The action keeps its internal name 'play'; the flag users pass is --display.
+  test('--display alone → [play]', async () => {
+    const actions = await decideActions({ display: true });
     assert.deepEqual(actions, ['play']);
   });
 
@@ -722,8 +723,8 @@ describe('decideActions', () => {
     assert.deepEqual(actions, ['publish']);
   });
 
-  test('--play --publish → [play, publish] (combined actions)', async () => {
-    const actions = await decideActions({ play: true, publish: true });
+  test('--display --publish → [play, publish] (combined actions)', async () => {
+    const actions = await decideActions({ display: true, publish: true });
     assert.deepEqual(actions, ['play', 'publish']);
   });
 
@@ -732,8 +733,8 @@ describe('decideActions', () => {
     assert.deepEqual(actions, []);
   });
 
-  test('--output --play → [play] (action flag wins; save happens unconditionally upstream)', async () => {
-    const actions = await decideActions({ output: '/tmp/x.json', play: true });
+  test('--output --display → [play] (action flag wins; save happens unconditionally upstream)', async () => {
+    const actions = await decideActions({ output: '/tmp/x.json', display: true });
     assert.deepEqual(actions, ['play']);
   });
 
@@ -742,23 +743,50 @@ describe('decideActions', () => {
     assert.deepEqual(actions, ['play']);
   });
 
-  test('--yes --publish → [publish] (publish flag overrides default Play)', async () => {
+  test('--yes --publish → [publish] (publish flag overrides the default display)', async () => {
     const actions = await decideActions({ yes: true, publish: true });
     assert.deepEqual(actions, ['publish']);
   });
 
-  test('--yes --no-play → [] (opt-out of the -y default Play)', async () => {
-    const actions = await decideActions({ yes: true, play: false });
+  test('--yes --no-display → [] (opt-out of the -y default display)', async () => {
+    const actions = await decideActions({ yes: true, display: false });
     assert.deepEqual(actions, []);
   });
 
-  test('--no-play alone → [] (no cast and no prompt, without --yes)', async () => {
-    const actions = await decideActions({ play: false });
+  test('--no-display alone → [] (no cast and no prompt, without --yes)', async () => {
+    const actions = await decideActions({ display: false });
+    assert.deepEqual(actions, []);
+  });
+
+  test('--no-display --publish → [publish] (publish still runs)', async () => {
+    const actions = await decideActions({ display: false, publish: true });
+    assert.deepEqual(actions, ['publish']);
+  });
+});
+
+describe('decideActions — hidden --play / --no-play spellings', () => {
+  test('--play alone → [play] (same as --display)', async () => {
+    const actions = await decideActions({ play: true });
+    assert.deepEqual(actions, ['play']);
+  });
+
+  test('--yes --no-play → [] (same as --no-display)', async () => {
+    const actions = await decideActions({ yes: true, play: false });
     assert.deepEqual(actions, []);
   });
 
   test('--no-play --publish → [publish] (publish still runs)', async () => {
     const actions = await decideActions({ play: false, publish: true });
     assert.deepEqual(actions, ['publish']);
+  });
+
+  test('--display wins over --no-play when both are passed', async () => {
+    const actions = await decideActions({ display: true, play: false });
+    assert.deepEqual(actions, ['play']);
+  });
+
+  test('--no-display wins over --play when both are passed', async () => {
+    const actions = await decideActions({ display: false, play: true, yes: true });
+    assert.deepEqual(actions, []);
   });
 });

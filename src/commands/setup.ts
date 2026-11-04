@@ -411,7 +411,7 @@ export const setupCommand = new Command('setup')
         }
       }
 
-      console.log(chalk.dim('\nRun: ff-cli play <url-or-playlist>'));
+      console.log(chalk.dim('\nRun: ff-cli display <url-or-playlist>'));
     } catch (error) {
       console.error(chalk.red('\nSetup failed:'), (error as Error).message);
       process.exit(1);

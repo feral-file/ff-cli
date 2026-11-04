@@ -82,7 +82,7 @@ describe('upsertDevice', () => {
   });
 
   // Regression: re-adding a named device with a new host used to append to the end,
-  // silently changing devices[0] (the implicit default for play/send/ssh).
+  // silently changing devices[0] (the implicit default for display/send/ssh).
   test('preserves array position when same-name device moves to a new host', () => {
     const existing = [
       { name: 'kitchen', host: 'http://10.0.0.1:1111' },

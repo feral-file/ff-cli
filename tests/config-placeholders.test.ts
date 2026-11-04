@@ -65,7 +65,7 @@ describe('config placeholder handling', () => {
     assert.deepEqual(devices, [{ name: 'kitchen', host: 'http://192.168.1.100:1111' }]);
   });
 
-  test('getFF1DeviceConfig does not expose sample placeholder devices to play/send flows', () => {
+  test('getFF1DeviceConfig does not expose sample placeholder devices to display/send flows', () => {
     withTempConfig(
       baseConfig([
         {

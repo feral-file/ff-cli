@@ -66,7 +66,7 @@ function applyPatch(existing: DeviceEntry, patch: Partial<DeviceEntry>): DeviceE
  * 1. Same mDNS device ID → update in-place (preserves position, handles host change).
  * 2. Same host → update in-place (preserves position and metadata).
  * 3. Same name, different host → replace in-place (preserves position so that
- *    devices[0] — the implicit default for play/send/ssh — does not silently change).
+ *    devices[0] — the implicit default for display/send/ssh — does not silently change).
  * 4. Neither match → append.
  */
 export function upsertDevice(

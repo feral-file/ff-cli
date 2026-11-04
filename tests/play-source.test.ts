@@ -99,7 +99,7 @@ describe('resolvePlaySource', () => {
         assert.equal(
           validated.valid,
           true,
-          'synthesized media playlist must pass the same structure check `play` uses'
+          'synthesized media playlist must pass the same structure check `display` uses'
         );
       }
     } finally {
@@ -251,7 +251,7 @@ describe('resolvePlaySource', () => {
   });
 });
 
-describe('checkWebPageUrl (play --web)', () => {
+describe('checkWebPageUrl (display --web)', () => {
   const original = global.fetch;
   const respond = (status: number) => {
     global.fetch = async () => new Response('page', { status });

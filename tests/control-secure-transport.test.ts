@@ -351,7 +351,7 @@ describe('secure displayPlaylist', () => {
       },
     ],
   ] as const) {
-    test(`play retries ${name} with a new request (new ctr and rid)`, async () => {
+    test(`display retries ${name} with a new request (new ctr and rid)`, async () => {
       enrolledRecord('controller');
       let casts = 0;
       const device = fakeDevice((claims) => {
@@ -382,7 +382,7 @@ describe('secure displayPlaylist', () => {
     });
   }
 
-  test('play retries a public busy (LAN 503) with a new request', async () => {
+  test('display retries a public busy (LAN 503) with a new request', async () => {
     enrolledRecord('controller');
     const device = fakeDevice();
     let casts = 0;

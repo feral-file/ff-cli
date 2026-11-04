@@ -1,12 +1,12 @@
 /**
- * `play` accepts DP-1 feed playlist URLs that the discovery parser claims.
+ * `display` accepts DP-1 feed playlist URLs that the discovery parser claims.
  *
  * The discovery parser claims whole hosts — any *.feralfile.com URL parses
  * as a Feral File URL, and non-exhibition paths come back `unsupported` —
  * which wrongly redirected DP-1 feed playlist URLs
  * (https://feed.feralfile.com/api/v1/playlists/{slug}, exactly the URLs the
  * feed hands out) to `find`, which has no feed route either. The documented
- * "hosted playlist URL plays directly" contract was unreachable for them.
+ * "hosted playlist URL displays directly" contract was unreachable for them.
  *
  * probeDiscoveryUrlAsPlaylist pins the repair: a discovery-classified URL
  * that actually serves a DP-1 document (dpVersion marker) resolves as a
@@ -42,7 +42,7 @@ function mockFetchOnce(body: string, status = 200): void {
     })) as unknown as typeof fetch;
 }
 
-describe('probeDiscoveryUrlAsPlaylist — feed playlist URLs play directly', () => {
+describe('probeDiscoveryUrlAsPlaylist — feed playlist URLs display directly', () => {
   const originalFetch = global.fetch;
 
   afterEach(() => {
@@ -87,7 +87,7 @@ describe('probeDiscoveryUrlAsPlaylist — feed playlist URLs play directly', () 
   });
 
   test('a URL that does not exist is refused, not redirected', async () => {
-    // The redirect also suggests `play --web`, which would cast the error page.
+    // The redirect also suggests `display --web`, which would cast the error page.
     mockFetchOnce('not found', 404);
 
     await assert.rejects(() => probeDiscoveryUrlAsPlaylist(FEED_URL), /Nothing at .* \(HTTP 404\)/);

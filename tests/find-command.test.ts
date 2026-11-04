@@ -636,7 +636,7 @@ describe('find command — resolver-backed token-list flow', () => {
         [{ chain: 'tezos', contractAddress: 'KT1TokenListContract', tokenId: '1' }],
       ]);
       assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
-      assert.match(promptQuestions[1], /^Next\? \[P\]lay on FF1/);
+      assert.match(promptQuestions[1], /^Next\? \[D\]isplay on FF1/);
       assert.match(stdoutWrites.join(''), /Mock Objkt Collection/);
       assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
       assert.ok(existsSync(join(dir, 'mock-objkt-collection.json')));
