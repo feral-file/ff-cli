@@ -685,7 +685,7 @@ function detectMimeType(url) {
  *   e.g. extensionless IPFS gateway URLs, where without this hint a video
  *   would be misclassified as a static image and stamped a fixed duration.
  * @param {boolean} [options.asWebPage] - Time the item as a web page whatever
- *   the URL's extension says (`play --web`)
+ *   the URL's extension says (`display --web`)
  * @returns {Object} DP1 playlist item
  */
 function buildUrlItem(url, duration, options = {}) {
@@ -727,14 +727,14 @@ function buildUrlItem(url, duration, options = {}) {
     // offChainURI has no provenance.uri in the DP-1 schema — only type.
     .provenance(new ProvenanceBuilder().type('offChainURI'));
 
-  // A URL handed to `play` that isn't a recognized media file is treated as an
+  // A URL handed to `display` that isn't a recognized media file is treated as an
   // interactive web page: the FF1 renders unknown URLs in a sandboxed iframe,
   // so an explicit caller hint aside, "unknown" means web, not static image.
   // This routes such items through the open-ended (no-duration) timing path
   // instead of the static-image default.
   const mimeHint = options.mimeType || (detectMimeType(sourceUrl) === '' ? 'text/html' : undefined);
 
-  // `play --web` says the URL is a page whatever its path looks like. Timing
+  // `display --web` says the URL is a page whatever its path looks like. Timing
   // checks the URL extension before the MIME hint, so a page served at
   // /page.mp4 would otherwise be timed as video (no duration, loop false);
   // leaving the URL out of the timing hints makes the page timing win.

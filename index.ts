@@ -25,7 +25,7 @@ import { setupCommand } from './src/commands/setup';
 import { statusCommand } from './src/commands/status';
 import { verifyCommand, validateCommand } from './src/commands/validate';
 import { signCommand } from './src/commands/sign';
-import { playCommand } from './src/commands/play';
+import { displayCommand } from './src/commands/play';
 import { publishCommand } from './src/commands/publish';
 import { unpublishCommand } from './src/commands/unpublish';
 import { fetchCommand } from './src/commands/fetch';
@@ -36,6 +36,7 @@ import { configCommand } from './src/commands/config';
 import { sshCommand } from './src/commands/ssh';
 import { deviceCommand } from './src/commands/device';
 import { reportCommand } from './src/commands/report';
+import { hiddenAliasHelp } from './src/commands/helpers/hidden-alias-help';
 import { installRelayPairingChannel } from './src/utilities/control/relay-pairing-channel';
 
 // Load version from package.json. Try the built location first
@@ -56,9 +57,11 @@ program
   .name('ff-cli')
   .description(packageDescription)
   .version(packageVersion)
+  // Lists aliased commands by their name only (`display`, never `display|play`); see hiddenAliasHelp.
+  .configureHelp(hiddenAliasHelp)
   .addHelpText(
     'after',
-    `\nQuick start:\n  1) ff-cli setup\n  2) ff-cli play <url-or-playlist>\n\nDocs: https://github.com/feral-file/ff-cli\n`
+    `\nQuick start:\n  1) ff-cli setup\n  2) ff-cli display <url-or-playlist>\n\nDocs: https://github.com/feral-file/ff-cli\n`
   );
 
 program.addCommand(setupCommand);
@@ -66,7 +69,7 @@ program.addCommand(statusCommand);
 program.addCommand(verifyCommand);
 program.addCommand(validateCommand);
 program.addCommand(signCommand);
-program.addCommand(playCommand);
+program.addCommand(displayCommand);
 program.addCommand(publishCommand);
 program.addCommand(unpublishCommand);
 program.addCommand(fetchCommand);

@@ -10,19 +10,6 @@ export interface PlaylistVerificationResult {
 }
 
 /**
- * Print the standard "playlist saved" footer with the next-step hint.
- *
- * Used by `chat` and `build` after they write a playlist to disk, so the
- * surface message stays consistent across both commands.
- */
-export function displayPlaylistSummary(playlist: Playlist, outputPath: string) {
-  console.log(chalk.green('\nPlaylist saved'));
-  console.log(chalk.dim(`  Output: ./${outputPath}`));
-  console.log(chalk.dim('  Next: play last | publish playlist'));
-  console.log();
-}
-
-/**
  * Print a focused failure for playlist source loading problems with a
  * URL-vs-file aware hint block.
  */
@@ -47,7 +34,7 @@ export function printPlaylistSourceLoadFailure(source: string, error: Error): vo
 
 /**
  * Print playlist validation failure details consistently for commands that
- * validate structure before sending (for example `play`).
+ * validate structure before sending (for example `display`).
  */
 export function printPlaylistVerificationFailure(
   verifyResult: PlaylistVerificationResult,
@@ -65,7 +52,7 @@ export function printPlaylistVerificationFailure(
     });
   }
 
-  console.log(chalk.yellow('\n   Use --skip-verify to play anyway (not recommended)\n'));
+  console.log(chalk.yellow('\n   Use --skip-verify to display anyway (not recommended)\n'));
 }
 
 /**

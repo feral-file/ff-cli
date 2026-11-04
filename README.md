@@ -4,7 +4,7 @@ A small Node.js CLI for building DP-1 playlists of digital art.
 
 **Runtime:** Node.js 22 or newer (matches CI and the `dp1-js` dependency). That engine floor is a **breaking** change if you previously used Node 18 or 20—check the **GitHub Release** for the version you move to; release authors follow `docs/RELEASING.md` so the notes stay explicit.
 
-ff-cli is a set of deterministic commands for building DP-1–conformant playlists and playing them on an Art Computer: schema validation, indexing, JSON‑LD, signing, and device delivery. There's no built-in chat — natural language belongs in your coding agent (Claude Code, Codex), which drives ff-cli through the `ff-control` skill (see [Use with Claude Code](#use-with-claude-code)). No LLM API key required.
+ff-cli is a set of deterministic commands for building DP-1–conformant playlists and displaying them on an Art Computer: schema validation, indexing, JSON‑LD, signing, and device delivery. There's no built-in chat — natural language belongs in your coding agent (Claude Code, Codex), which drives ff-cli through the `ff-control` skill (see [Use with Claude Code](#use-with-claude-code)). No LLM API key required.
 
 ## Install
 
@@ -18,16 +18,16 @@ This installs a complete package (including `config.json.example` and the bundle
 
 ```bash
 npx @feralfile/cli setup
-npx @feralfile/cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+npx @feralfile/cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --display
 ```
 
 ## Quick Start
 
 ```bash
 ff-cli setup
-ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
-ff-cli play "https://example.com/video.mp4"
-ff-cli play "https://example.com/"          # any web page
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --display
+ff-cli display "https://example.com/video.mp4"
+ff-cli display "https://example.com/"          # any web page
 ```
 
 If you need manual config actions instead of guided setup:
@@ -54,7 +54,7 @@ ff-cli setup -y --key "<private-key>" --role agent
 
 `--generate-key`, `--key`, and `--key-file` refuse to replace a signing key that is already configured, because that key owns the playlists you published. Add `--force` only when you mean to replace it.
 
-Without a terminal, `find` needs `-y` (it plays by default; add `--no-play` to only save). A question with no terminal to answer it exits 1 and names the flag.
+Without a terminal, `find` needs `-y` (it displays by default; add `--no-display` to only save). A question with no terminal to answer it exits 1 and names the flag.
 
 Device pairing is also scriptable on its own: `ff-cli device add --host http://<ip>:1111 --name <name>` skips mDNS discovery entirely.
 
@@ -62,19 +62,19 @@ On FF OS with secure control, an FF1 only accepts commands from controllers an o
 
 ## Find an artwork
 
-`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or a wallet address into a playable DP-1 playlist. The focus is computational and generative art; PFP collections and pre-ERC-721 contracts have limits noted below.
+`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or a wallet address into a DP-1 playlist ready to display. The focus is computational and generative art; PFP collections and pre-ERC-721 contracts have limits noted below.
 
 ```bash
-# Most satisfying: paste a URL, play it on your FF1
-ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+# Most satisfying: paste a URL, display it on your FF1
+ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --display
 
 # Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
-ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --display
 
 # Feral File artwork (public id can be hex or numeric — both forms resolve via /api/artworks)
-ff-cli find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --play
+ff-cli find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --display
 
-# Save without playing
+# Save without displaying
 ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 --output send-receive.json
 ```
 
@@ -85,7 +85,7 @@ Sources: Art Blocks, Objkt, fxhash (canonical `/gentk/...`, live `/iteration/{sl
 - **CryptoPunks (original)** don't index — the contract predates ERC-721 ([ff-indexer-v2#83](https://github.com/feral-file/ff-indexer-v2/issues/83)). The opt-in Raster token source resolves them.
 - **Mainstream PFPs** (Azuki, BAYC, Pudgy Penguins) build a single-item playlist instead of a series — Raster's curation is effectively the series allowlist.
 - **Indexer 502s on burst load** are intermittent ([ff-indexer-v2#82](https://github.com/feral-file/ff-indexer-v2/issues/82)) — retry clears or use `--limit N`.
-- **The Raster token source is opt-in and under evaluation** (`tokenSource: "raster"`). It cannot list a contract, its Feral File metadata is a snapshot (an evolving work plays the version Raster recorded), and some Feral File works point at a retired image host and play black. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#tokensource).
+- **The Raster token source is opt-in and under evaluation** (`tokenSource: "raster"`). It cannot list a contract, its Feral File metadata is a snapshot (an evolving work displays the version Raster recorded), and some Feral File works point at a retired image host and display black. See [docs/CONFIGURATION.md](docs/CONFIGURATION.md#tokensource).
 
 ## Use with Claude Code
 
@@ -96,7 +96,7 @@ d="$(mktemp -d)" && git clone --depth=1 https://github.com/feral-file/ff-cli "$d
   && mkdir -p ~/.claude/skills && cp -r "$d/skills/ff-control" ~/.claude/skills/
 ```
 
-Claude Code will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The skill validates config, builds, validates the playlist, and sends or publishes — reporting the failing command + exit code if anything breaks. Full prompt and exact flow: [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
+Claude Code will surface it when you ask to build a playlist, display an artwork or URL on an Art Computer, or publish to a feed. The skill validates config, builds, validates the playlist, and sends or publishes — reporting the failing command + exit code if anything breaks. Full prompt and exact flow: [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
 
 ## Use with Codex
 
@@ -107,15 +107,15 @@ d="$(mktemp -d)" && git clone --depth=1 https://github.com/feral-file/ff-cli "$d
   && mkdir -p ~/.codex/skills && cp -r "$d/skills/ff-control" ~/.codex/skills/
 ```
 
-Codex will surface it when you ask to build a playlist, play an artwork or URL on an Art Computer, or publish to a feed. The installed skill is `skills/ff-control/SKILL.md`, so the execution flow stays defined in one place. Codex metadata and exact flow: [`skills/ff-control/agents/openai.yaml`](./skills/ff-control/agents/openai.yaml), [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
+Codex will surface it when you ask to build a playlist, display an artwork or URL on an Art Computer, or publish to a feed. The installed skill is `skills/ff-control/SKILL.md`, so the execution flow stays defined in one place. Codex metadata and exact flow: [`skills/ff-control/agents/openai.yaml`](./skills/ff-control/agents/openai.yaml), [`skills/ff-control/SKILL.md`](./skills/ff-control/SKILL.md).
 
 ## Dev Quick Start
 
 ```bash
 npm ci
 npm run dev -- setup
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
-npm run dev -- play "https://example.com/video.mp4"
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display
+npm run dev -- display "https://example.com/video.mp4"
 ```
 
 ## Documentation

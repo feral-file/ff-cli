@@ -58,7 +58,7 @@ describe('createPrompt without a terminal', () => {
 });
 
 describe('find on a plain web page', () => {
-  test('names `ff-cli play` as the way to show it', () => {
+  test('names `ff-cli display` as the way to show it', () => {
     const cwd = mkdtempSync(join(tmpdir(), 'ff-cli-find-page-'));
     try {
       const run = spawnSync(process.execPath, [tsxCli, cliEntry, 'find', 'https://example.com'], {
@@ -67,7 +67,7 @@ describe('find on a plain web page', () => {
         encoding: 'utf-8',
       });
       assert.equal(run.status, 1, run.stdout + run.stderr);
-      assert.match(run.stderr, /ff-cli play "https:\/\/example\.com"/);
+      assert.match(run.stderr, /ff-cli display "https:\/\/example\.com"/);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }

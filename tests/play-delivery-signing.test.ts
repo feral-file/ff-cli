@@ -51,7 +51,7 @@ function makePrivateKeyBase64(): string {
   return privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
 }
 
-describe('play delivery signing contract', () => {
+describe('display delivery signing contract', () => {
   let dir: string;
   let mediaServer: ReturnType<typeof createServer>;
   let mediaUrl: string;
@@ -108,7 +108,7 @@ describe('play delivery signing contract', () => {
     const playlistPath = join(dir, 'unsigned-playlist.json');
     writeFileSync(playlistPath, readFileSync(fixturePath, 'utf-8'), 'utf-8');
 
-    const result = await runCli(dir, ['play', playlistPath]);
+    const result = await runCli(dir, ['display', playlistPath]);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stdout + result.stderr, /Playlist signature verification failed/i);
@@ -176,11 +176,11 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(dir, ['play', mediaUrl]);
+      const result = await runCli(dir, ['display', mediaUrl]);
 
       assert.equal(result.status, 0);
       assert.match(result.stdout + result.stderr, /Signed and verified/i);
-      assert.match(result.stdout + result.stderr, /Playing/i);
+      assert.match(result.stdout + result.stderr, /Displaying/);
       assert.ok(deliveredBody, 'expected device request body to be captured');
 
       const request = JSON.parse(deliveredBody) as {
@@ -257,7 +257,7 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(dir, ['play', mediaUrl]);
+      const result = await runCli(dir, ['display', mediaUrl]);
 
       assert.equal(result.status, 0);
       assert.ok(deliveredBody, 'expected device request body to be captured');
@@ -328,7 +328,7 @@ describe('play delivery signing contract', () => {
       );
 
       const envKey = makePrivateKeyBase64();
-      const result = await runCli(dir, ['play', mediaUrl], { PLAYLIST_PRIVATE_KEY: envKey });
+      const result = await runCli(dir, ['display', mediaUrl], { PLAYLIST_PRIVATE_KEY: envKey });
       const out = result.stdout + result.stderr;
 
       assert.equal(result.status, 0, out);
@@ -347,7 +347,7 @@ describe('play delivery signing contract', () => {
     }
   });
 
-  test('fails closed when media playback has no signing key', async () => {
+  test('fails closed when displaying media has no signing key', async () => {
     let deviceHits = 0;
     const deviceServer = createServer((_req, res) => {
       deviceHits += 1;
@@ -383,12 +383,12 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(isolatedDir, ['play', mediaUrl]);
+      const result = await runCli(isolatedDir, ['display', mediaUrl]);
 
       assert.notEqual(result.status, 0);
       assert.match(
         result.stdout + result.stderr,
-        /Cannot sign playlist for playback: no playlist signing key is configured/i
+        /Cannot sign playlist for display: no playlist signing key is configured/i
       );
       assert.equal(deviceHits, 0);
     } finally {

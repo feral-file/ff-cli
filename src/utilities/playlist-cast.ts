@@ -1,7 +1,7 @@
 import type { Playlist } from '../types';
 
 /**
- * DP-1 signature role used when signing a playlist for playback.
+ * DP-1 signature role used when signing a playlist for display.
  *
  * A cast never passes through a feed, so a document signed here carries no `feed` signature and its own
  * entry is the only one a player could judge. DP-1 §7.1.1 rule 1 has players verify a `feed` or `curator`
@@ -64,15 +64,15 @@ export interface CastPlaylistResult {
 }
 
 /**
- * Shared "(sign →) verify → send to device" sequence used by `play` and
- * `find --play`.
+ * Shared "(sign →) verify → send to device" sequence used by `display` and
+ * `find --display`.
  *
  * This is the single source of truth for getting a playlist onto an FF1: the
  * verification gate, the synthesized-media auto-sign (rebuilding the
  * `signatures[]` envelope), and the device transport. Callers own their
  * console output and map the returned `stage`/`error` to their own messages —
  * keeping delivery behavior consistent without coupling the two commands'
- * UX. Previously this logic was duplicated across `play`, `find`, and the
+ * UX. Previously this logic was duplicated across `display`, `find`, and the
  * (now-removed) chat send path, and drifted between them.
  */
 export async function castPlaylist(
@@ -92,7 +92,7 @@ export async function castPlaylist(
           signed: false,
           verified: false,
           stage: 'sign',
-          error: 'Cannot sign playlist for playback: no playlist signing key is configured',
+          error: 'Cannot sign playlist for display: no playlist signing key is configured',
         };
       }
       try {
@@ -110,7 +110,7 @@ export async function castPlaylist(
           signed: false,
           verified: false,
           stage: 'sign',
-          error: `Failed to sign playlist for playback: ${(error as Error).message}`,
+          error: `Failed to sign playlist for display: ${(error as Error).message}`,
         };
       }
     }

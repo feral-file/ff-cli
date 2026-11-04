@@ -57,7 +57,7 @@ export type IndexerChain = 'ethereum' | 'tezos';
  * Raster could not be reached at the network level (connect failure, broken
  * IPv6 path, timeout). Distinct from API-level errors so callers that hold
  * usable token coordinates can degrade gracefully instead of dying — Raster
- * only enriches a find, it is not required to build a playable playlist.
+ * only enriches a find, it is not required to build a playlist to display.
  */
 export class RasterUnreachableError extends Error {
   constructor(message: string) {

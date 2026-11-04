@@ -52,9 +52,9 @@ export interface NeortArt {
 }
 
 /**
- * Resolve a Neort art id to a playable asset URL plus title/artist metadata.
+ * Resolve a Neort art id to a displayable asset URL plus title/artist metadata.
  *
- * @throws When the id is unknown, the art is private, or no playable asset
+ * @throws When the id is unknown, the art is private, or no displayable asset
  *   can be constructed from the response.
  */
 export async function resolveNeortArt(id: string): Promise<NeortArt> {
@@ -81,7 +81,7 @@ export async function resolveNeortArt(id: string): Promise<NeortArt> {
     : thumbnailUrl;
   if (!assetUrl) {
     throw new Error(
-      `Neort: art "${id}" has no playable asset (resourceFileName and thumbnail are both empty).`
+      `Neort: art "${id}" has no displayable asset (resourceFileName and thumbnail are both empty).`
     );
   }
   return {

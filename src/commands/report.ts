@@ -43,7 +43,7 @@ Exit status: 0 when the report reached Feral File support, even if the Art
 Computer did not take the log request; 1 when it did not.
 
 Examples:
-  ff-cli report --message "The work plays black on the Art Computer; in a desktop browser it renders." -d Office
+  ff-cli report --message "The work displays black on the Art Computer; in a desktop browser it renders." -d Office
   ff-cli report --file report.txt --email you@example.com
   printf '%s\\n' "$REPORT" | ff-cli report -d Office --dry-run
 `;
@@ -203,7 +203,7 @@ function checkReport(report: string, email: string | undefined): void {
   }
 }
 
-/** selectDevice resolves -d the way `play -d` does, or exits 1 naming the configured devices. */
+/** selectDevice resolves -d the way `display -d` does, or exits 1 naming the configured devices. */
 function selectDevice(name: string): FF1Device {
   const selected = resolveConfiguredDevice(name);
   if (!selected.success || !selected.device) {

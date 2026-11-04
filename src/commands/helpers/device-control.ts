@@ -834,7 +834,7 @@ function reportEnrollment(device: PairDevice, result: EnrollResult): void {
         chalk.dim(
           role === 'owner'
             ? 'Owner access covers every command, including ssh and controller management.\n'
-            : 'Controller access covers playback and device status. SSH and controller management need an owner grant.\n'
+            : 'Controller access covers displaying art and device status. SSH and controller management need an owner grant.\n'
         )
       );
       return;

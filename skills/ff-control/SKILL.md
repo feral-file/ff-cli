@@ -1,13 +1,13 @@
 ---
 name: ff-control
-description: Drive ff-cli end-to-end to build, validate, send, and publish DP-1 playlists on a Feral File Art Computer (FF1). Use when the user asks to make a playlist, play an artwork or URL on an Art Computer, publish to a feed, or otherwise operate ff-cli, and when a work fails on an Art Computer or has to be changed to play there (the skill says how to report it to Feral File privately). Assumes ff-cli is installed and configured.
+description: Drive ff-cli end-to-end to build, validate, send, and publish DP-1 playlists on a Feral File Art Computer (FF1). Use when the user asks to make a playlist, display (or play) an artwork or URL on an Art Computer, publish to a feed, or otherwise operate ff-cli, and when a work fails on an Art Computer or has to be changed to display there (the skill says how to report it to Feral File privately). Assumes ff-cli is installed and configured.
 ---
 
 You run ff-cli end to end with full autonomy.
 Do not ask for final confirmation before send or publish.
 
 Context:
-- The Art Computer is Feral File's instrument for daily playback in The Digital Art System.
+- The Art Computer is Feral File's instrument for displaying art every day in The Digital Art System.
 - This skill uses ff-cli to build DP-1 playlists and send/publish them.
 - Prioritize reliable execution and clear failure reporting over explanation.
 
@@ -23,21 +23,21 @@ Bootstrap:
   - setup generates a signing key (base64 PKCS#8 DER) when none is configured and keeps one that is. To use a specific key, pass `--key "<value>"` (base64 PKCS#8 DER, 32-byte seed as hex/base64, or PEM).
   - setup refuses to replace a signing key that is already configured: that key owns every playlist the user published. Never add `--force` unless the user explicitly asks to replace their key.
   - Skip mDNS discovery entirely — it is unreliable across subnets. Always pass `--device-host`. Add more devices with `ff-cli device add --host http://<ip>:1111 --name "<name>"`.
-- A signed playlist hosted at any public HTTPS URL plays directly (`ff-cli play "<url>"`); a feed server is only needed for discovery/curation, not for playback.
+- A signed playlist hosted at any public HTTPS URL displays directly (`ff-cli display "<url>"`); a feed server is only needed for discovery/curation, not for displaying.
 
 Flow:
 1) ff-cli status
 2) ff-cli config validate
 3) Build playlist (ff-cli has no chat — you are the natural-language layer; translate the request into one of these yourself):
-   - a web page, media file, or hosted playlist URL needs no build: run `ff-cli play "<url>"` and skip to reporting. Marketplace links (Art Blocks, OpenSea, objkt, fxhash, Feral File, …) are sent to `find`, which plays the artwork; when the user wants the page itself, run `ff-cli play --web "<url>"`.
-   - for a single artwork or a collection from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json -y` (add `--play` to build and play in one step). `-y` skips the prompts, which is safe when the input names one work or one series. `-y` without `-o` or `--publish` plays the playlist on a device (the scripted default); add `--no-play` to build and save without casting, e.g. `ff-cli find "<input>" -y --no-play`.
+   - a web page, media file, or hosted playlist URL needs no build: run `ff-cli display "<url>"` and skip to reporting. Marketplace links (Art Blocks, OpenSea, objkt, fxhash, Feral File, …) are sent to `find`, which displays the artwork; when the user wants the page itself, run `ff-cli display --web "<url>"`.
+   - for a single artwork or a collection from a URL or on-chain coords: `ff-cli find "<input>" -o playlist.json -y` (add `--display` to build and display in one step). `-y` skips the prompts, which is safe when the input names one work or one series. `-y` without `-o` or `--publish` displays the playlist on a device (the scripted default); add `--no-display` to build and save without casting, e.g. `ff-cli find "<input>" -y --no-display`.
    - `find` on a wallet address does not build from everything the wallet holds: it resolves the address to one artist and picks one artwork, and `-y` picks the first without asking. Ask the user which work they mean and run `find` on that work's URL or coordinate. When they want a playlist of what a wallet holds, use `build` with a `query_address` requirement, which is what it is for. The params file is a whole document, not a bare requirement: `{"requirements": [{"type": "query_address", "ownerAddress": "<address>", "quantity": <n>}], "playlistSettings": {"title": "<title>"}}`.
    - on-chain coordinates are `ethereum:<contract>:<tokenId>` or `tezos:<contract>:<tokenId>`. When Raster knows the work, `find` expands the coordinate to its whole series, and a large series indexes for minutes; when Raster does not know it or cannot be reached, `find` builds a one-token playlist. Pass `-l <n>` unless the user asked for the whole series, so the expanded case never runs away.
    - otherwise turn the request into structured params and run `ff-cli build <params.json> -o playlist.json -v`. `ff-cli build --help` lists every requirement type. `build` exits 1 when a requirement finds nothing, named token ids do not all resolve, or the send fails; it still saves the playlist when it collected anything, so report what is missing.
    - `find` and `build` sign the playlist as `curator` with the configured key and declare it in `curators[]`; that is what lets the feed accept it and what lets you take it back later.
 4) `ff-cli validate playlist.json`
 5) If requested, run:
-   - send: `ff-cli play playlist.json` (or with `-d "Device Name"`)
+   - send: `ff-cli display playlist.json` (or with `-d "Device Name"`)
    - if it fails with reachability errors (`fetch failed`, `No route to host`, resolver timeout), report the exact failing command and error and that the Art Computer is unreachable from this network. For an explicitly enrolled Tailscale connection, use its recorded address as described below; otherwise do not invent tunnels or change addresses
    - publish: `ff-cli publish playlist.json -s <index>`. Run `ff-cli config show` first; it lists the effective feed servers as `<index>: <url>`, whichever source configured them. With more than one configured, the command prompts for one and a prompt cannot be driven by an agent, so pass `-s <index>` for the feed the user named. If the user did not name a feed and more than one is configured, stop and ask which; never pick index 0 on your own, it is usually production. Use that same index for every later fetch, replace, or unpublish of that playlist. Publishing sends no API key; the feed accepts the playlist on its own signatures.
    - if both are requested: send first, then publish
@@ -51,7 +51,7 @@ Changing or removing something already published (owner-bound: only the key that
 Pairing and access (FF OS with secure control):
 - On FF OS without secure control, `ff-cli device pair "<name>"` instead prints a one-time code and a security check: the human enters the code in Feral File mobile ("Pair with ff-cli") and confirms the check matches; relay both verbatim. ff-cli picks the path from the FF1's LAN status; `--topic-handoff` forces the one-time code when the FF1 is not on this LAN.
 - ff-cli must be paired as a controller of each FF1: `ff-cli device pair "<name>"`. On FF OS with secure control it prints a QR code and the same `ff1-ctl:1|…` text; an owner scans it (or pastes the text) with "Add controller" in the Feral File app and picks the role. Show the code to the user verbatim; it is a one-time offer that only works while the command runs. Pairing needs internet (the owner's answer comes over the Feral File relay) and an FF1 that already has an owner: ff-cli cannot be the first owner, so if nobody has secured the FF1, the user chooses "Secure this FF1" in the app first. Never claim pairing succeeded until the command prints the granted role. It waits up to 5 minutes (`--timeout <seconds>`, 10-600). A timeout means "not completed", never "rejected": run `ff-cli device pair "<name>"` again for a new code (it keeps the same keys, so an owner who already added ff-cli only rescans). If the owner's answer arrived but enrolling did not finish, the command says to run `ff-cli device pair "<name>" --resume`. Confirmations (`pair` replacing an enrolled pairing, `unpair`) need a terminal; without one they fail unless `--yes` is passed, and pass it only when the user has explicitly agreed.
-- Roles: `owner` can run everything; `controller` can `play` and read status, but `ssh`, `device controllers` and `device revoke` fail with "This command needs owner access". Report that; do not try to work around it.
+- Roles: `owner` can run everything; `controller` can `display` and read status, but `ssh`, `device controllers` and `device revoke` fail with "This command needs owner access". Report that; do not try to work around it.
 - Errors that mean "pair (again) and have an owner add it": "only accepts requests from paired controllers", "does not know this ff-cli controller", "was revoked or has expired", "has not been approved", "still waiting for approval", "has no grant for ff-cli". "could not open the request", "rejected the request signature" or "did not verify against the paired FF1 identity" are NOT authenticated (anyone on the network can send them, and a changed device address gives the same answer): first check the device address; only if the user confirms the FF1 was factory reset, run `ff-cli device pair "<name>"`, which keeps the current keys until the new pairing is finished. Never run `ff-cli device unpair` for these errors, for "counter as already used" (ff-cli already moved its counter ahead once; check that no other computer uses a copy of the controller file), or for a corrupt or unreadable controller file: unpair deletes keys that may be the FF1's only reachable owner. "Pairing is not available: … relay v2 is turned off" means relay v2 is off (an empty `ff1Relayer.v2Endpoint`/`FF1_RELAY_V2_ENDPOINT`, invalid relayer settings, or a `ff1Relayer.baseUrl` that is not a bare HTTPS origin with no v2 endpoint set): fix the setting.
 - The controller key file (`~/.config/ff-cli/controllers/<device ID>.json`) holds private keys: never print, copy, edit or commit it. `ff-cli device unpair` revokes ff-cli's own access on the FF1 (best effort) and then deletes it.
 
@@ -65,9 +65,9 @@ Keep output short and concrete:
 - what to run next
 
 Reporting an Art Computer problem to Feral File:
-- Report in the same session when a work that plays in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or when you change a work or a playlist only to get around something the Art Computer does. Report once you know the outcome: the work plays after your change, or nothing worked.
+- Report in the same session when a work that renders in a desktop browser fails on the Art Computer (a blank screen, only the work's background, an error page), or when you change a work or a playlist only to get around something the Art Computer does. Report once you know the outcome: the work displays after your change, or nothing worked.
 - Write the report as plain text for an email body:
-  - What was played: the source URL, hosted playlist URL, or on-chain coordinate. Leave out signing keys, controller files and API keys.
+  - What was displayed: the source URL, hosted playlist URL, or on-chain coordinate. Leave out signing keys, controller files and API keys.
   - What the screen showed, and the local time it happened.
   - What you changed to make it work, as a short diff or a description, or that nothing worked.
   - `ff-cli --version`, and `version` and `branch` from `http://<device-ip>:1111/api/status`.
