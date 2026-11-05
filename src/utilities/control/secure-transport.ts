@@ -940,6 +940,12 @@ export interface SecureCommandResult {
   transport?: Transport;
   /** Protocol code behind a failure, for callers that branch on it. */
   code?: string;
+  /**
+   * True when code came from a reply verified against the pinned profile.
+   * A public error (§4.4) is unauthenticated, so a caller that acts on a code
+   * only the FF1 sends sealed (internal_error) must require this.
+   */
+  verified?: boolean;
 }
 
 /**
@@ -991,6 +997,7 @@ export function outcomeToResult(outcome: SecureOutcome, device: FF1Device): Secu
     details: failure.details,
     transport: outcome.transport,
     code,
+    verified: outcome.kind === 'reply',
   };
 }
 

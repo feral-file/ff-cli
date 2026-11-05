@@ -12,7 +12,9 @@ import { createPrompt, promptYesNo } from './helpers/prompt';
 import {
   CommandFailure,
   type PairOptions,
+  type LanOptions,
   runControllers,
+  runLan,
   runPair,
   runRevoke,
   runUnpair,
@@ -31,7 +33,7 @@ const deviceCommand = new Command('device').description('Manage configured FF1 d
 deviceCommand
   .command('pair')
   .description(
-    'Pair ff-cli with a configured FF1: on secure control, show a code an owner scans with "Add controller" in the Feral File app (needs internet and an owner); otherwise receive relayer access through a one-time code'
+    'Pair ff-cli with a configured FF1: on secure control, show a code an owner scans with "Add controller" in the Feral File app (needs internet and an owner); on FF OS without secure control, receive relayer access through a one-time code'
   )
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .option(
@@ -64,6 +66,18 @@ deviceCommand
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .action(async (ctl: string, name?: string) => {
     await runControlAction('Error:', () => runRevoke(ctl, name));
+  });
+
+deviceCommand
+  .command('lan')
+  .description(
+    'Open or close control from the FF1’s Wi-Fi without pairing: when open, anyone on its network can display art and read its status (owner only)'
+  )
+  .argument('[name]', 'Configured device name (uses the default device when omitted)')
+  .option('--open', 'Let anyone on its network display art without pairing')
+  .option('--close', 'Accept commands only from paired controllers, on its network too')
+  .action(async (name: string | undefined, options: LanOptions) => {
+    await runControlAction('Error:', () => runLan(name, options));
   });
 
 deviceCommand
