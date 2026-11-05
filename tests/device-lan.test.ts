@@ -180,6 +180,22 @@ describe('device lan', () => {
     }
   });
 
+  // controld sends internal_error only sealed; a public one is unauthenticated (forged).
+  test('a public internal_error gets the ordinary failure and no status read', async () => {
+    const { statusReads, deps } = enrolledFF1(
+      'owner',
+      () => ({ publicCode: 'internal_error', status: 403 }),
+      () => json(200, { control: { lan: 'open' } })
+    );
+    await assert.rejects(runLan('Office', { close: true }, deps), (error: unknown) => {
+      assert.ok(error instanceof CommandFailure);
+      assert.doesNotMatch(error.message, /switch may have changed/);
+      assert.match(error.message, /could not confirm it recorded the request/);
+      return true;
+    });
+    assert.deepEqual(statusReads, []);
+  });
+
   test('other error codes do not read the status', async () => {
     const { statusReads, deps } = enrolledFF1(
       'owner',

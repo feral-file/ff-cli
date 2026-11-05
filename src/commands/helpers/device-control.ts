@@ -1171,7 +1171,9 @@ export async function runLan(
   const device = requirePairableDevice(name);
   const record = requireEnrolledController(device, deps.controllerStore);
   const result = await runOwnerCommand(device, record, 'setLanControl', { open }, deps);
-  if (!result.success && result.code === 'internal_error') {
+  // Only a verified reply: controld sends internal_error sealed, never as a
+  // public error, so a public one is forged and gets the ordinary failure.
+  if (!result.success && result.verified && result.code === 'internal_error') {
     throw await lanStateAfterInternalError(device, deps.fetchFn);
   }
   if (!result.success) {
