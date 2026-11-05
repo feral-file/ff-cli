@@ -319,8 +319,8 @@ ff-cli ssh disable -d "Living Room Display"
 
 On newer FF OS, a claimed FF1 only accepts `ff-cli ssh` from a paired CLI: run
 `ff-cli device pair "Living Room Display"` once (an owner scans the code with
-"Add controller" in the Feral File app) before `ff-cli ssh enable|disable`. Unclaimed devices and older
-FF OS do not require pairing. On FF OS with secure control, `ssh` needs the
+"Add controller" in the Feral File app) before `ff-cli ssh enable|disable`. FF OS without secure
+control does not require pairing. On FF OS with secure control, `ssh` needs the
 **owner** role; a controller grant gets "This command needs owner access". An
 FF1 with secure control but no owner yet refuses `ssh` too: set it up as owner
 in the Feral File app, then pair ff-cli with **Add controller**.
