@@ -52,10 +52,14 @@ async function captureLog(fn: () => Promise<unknown>): Promise<string> {
   return lines.join('\n');
 }
 
-/** enrolledFF1 enrolls ff-cli with role and answers its requests through decide. */
+/**
+ * enrolledFF1 enrolls ff-cli with role and answers its requests through
+ * decide; `GET /api/status` is answered by status, or fails when none is given.
+ */
 function enrolledFF1(
   role: 'owner' | 'controller',
-  decide: (c: Record<string, unknown>) => FakeAnswer
+  decide: (c: Record<string, unknown>) => FakeAnswer,
+  status?: () => Response
 ) {
   createController({ profile, label: 'x' }, store);
   markEnrolled(DEVICE_ID, { role, nk: NK }, store);
@@ -72,12 +76,21 @@ function enrolledFF1(
     },
     decide
   );
-  const fetchFn: typeof fetch = async (_input, init) => {
+  const statusReads: string[] = [];
+  const fetchFn: typeof fetch = async (input, init) => {
+    if (String(input).endsWith('/api/status')) {
+      statusReads.push(String(input));
+      if (!status) {
+        throw new Error('fetch failed');
+      }
+      return status();
+    }
     const answer = fake.handle(JSON.parse(String(init?.body)));
     return json(answer.status, answer.json);
   };
   return {
     fake,
+    statusReads,
     deps: { fetchFn, getTopicIdFn: () => null, waitFn: async () => {}, controllerStore: store },
   };
 }
@@ -132,6 +145,49 @@ describe('device lan', () => {
   test('a reply without the state fails instead of guessing', async () => {
     const { deps } = enrolledFF1('owner', () => ({ ok: true, res: {} }));
     await assert.rejects(runLan('Office', { close: true }, deps), /did not report its LAN control/);
+  });
+
+  // The FF1 may commit lan.json and still answer internal_error (directory
+  // fsync failed), so the status is re-read and reported; the command fails.
+  test('internal_error re-reads the status and reports the state it shows', async () => {
+    const { statusReads, deps } = enrolledFF1(
+      'owner',
+      () => ({ ok: false, code: 'internal_error' }),
+      () => json(200, { device_id: DEVICE_ID, control: { v: 1, state: 'enrolled', lan: 'open' } })
+    );
+    await assert.rejects(runLan('Office', { open: true }, deps), (error: unknown) => {
+      assert.ok(error instanceof CommandFailure);
+      assert.equal(
+        error.message,
+        'The FF1 reported an error, but the switch may have changed. It now reports: open.'
+      );
+      assert.match(error.details!, /Run the command again/);
+      return true;
+    });
+    assert.deepEqual(statusReads, [`${device.host}/api/status`]);
+  });
+
+  test('internal_error with an unreadable status says the switch may have changed', async () => {
+    for (const status of [undefined, () => json(200, { device_id: DEVICE_ID })]) {
+      fs.rmSync(store.dir, { recursive: true, force: true });
+      const { deps } = enrolledFF1('owner', () => ({ ok: false, code: 'internal_error' }), status);
+      await assert.rejects(runLan('Office', { close: true }, deps), (error: unknown) => {
+        assert.ok(error instanceof CommandFailure);
+        assert.match(error.message, /switch may have changed, and its status could not be read/);
+        assert.match(error.details!, /Run the command again/);
+        return true;
+      });
+    }
+  });
+
+  test('other error codes do not read the status', async () => {
+    const { statusReads, deps } = enrolledFF1(
+      'owner',
+      () => ({ ok: false, code: 'rate_limited' }),
+      () => json(200, { control: { lan: 'open' } })
+    );
+    await assert.rejects(runLan('Office', { close: true }, deps), /rate-limiting/);
+    assert.deepEqual(statusReads, []);
   });
 
   test('a controller grant gets the owner-access message from the FF1', async () => {

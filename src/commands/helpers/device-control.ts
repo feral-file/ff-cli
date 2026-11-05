@@ -50,6 +50,7 @@ import {
   chooseControllerKeys,
   defaultControllerLabel,
   enrollRegistered,
+  lanReadTimeoutMs,
   prepareRegisteredController,
   probeControlSupport,
   registrationRecordOf,
@@ -1153,7 +1154,9 @@ export function parseLanSwitch(options: LanOptions): boolean {
  * stored grant ff-cli refuses locally: a plaintext setLanControl would be
  * refused anyway, and the guidance (pair, owner role) is what helps. A
  * controller grant is not refused locally: the FF1 answers permission_denied,
- * which carries the same advice as for `device controllers`.
+ * which carries the same advice as for `device controllers`. A verified
+ * `internal_error` may still have changed the switch, so the status is read
+ * and reported (lanStateAfterInternalError); the command fails either way.
  *
  * @param name - Optional device name
  * @param options - `--open` / `--close`
@@ -1168,6 +1171,9 @@ export async function runLan(
   const device = requirePairableDevice(name);
   const record = requireEnrolledController(device, deps.controllerStore);
   const result = await runOwnerCommand(device, record, 'setLanControl', { open }, deps);
+  if (!result.success && result.code === 'internal_error') {
+    throw await lanStateAfterInternalError(device, deps.fetchFn);
+  }
   if (!result.success) {
     throw ownerFailure(result);
   }
@@ -1192,6 +1198,60 @@ export async function runLan(
         : 'Only paired controllers can control it, on its network too.\n'
     )
   );
+}
+
+/**
+ * lanStateAfterInternalError builds the failure for a verified
+ * `internal_error` reply to setLanControl. The FF1 may have applied the
+ * switch anyway: lan.json can be renamed into place before the directory
+ * fsync fails, and the FF1 then follows the file it committed (spec §5.5:
+ * the owner re-reads the status). So the open `GET /api/status` is read
+ * once and its `control.lan` is reported. That member is public and
+ * unauthenticated; it only informs the owner here and decides nothing, so a
+ * signed status request is not worth its cost. The command still fails.
+ *
+ * @param device - Device with ID
+ * @param fetchFn - Fetch (tests); defaults to the LAN read deadline
+ * @returns The failure to throw
+ */
+async function lanStateAfterInternalError(
+  device: PairDevice,
+  fetchFn?: typeof fetch
+): Promise<CommandFailure> {
+  const lan = await readLanControlState(device, fetchFn);
+  if (lan) {
+    return new CommandFailure(
+      `The FF1 reported an error, but the switch may have changed. It now reports: ${lan}.`,
+      'Run the command again to set the state you want.'
+    );
+  }
+  return new CommandFailure(
+    'The FF1 reported an error, but the switch may have changed, and its status could not be read.',
+    'Run the command again to set the state you want; it prints the state the FF1 reports.'
+  );
+}
+
+/**
+ * readLanControlState reads `control.lan` from the FF1's LAN `GET /api/status`,
+ * or undefined when the read fails or the member is absent.
+ */
+async function readLanControlState(
+  device: PairDevice,
+  fetchFn: typeof fetch = (input, init) =>
+    fetchWithTimeout(input, init ?? {}, lanReadTimeoutMs(device.host))
+): Promise<'open' | 'closed' | undefined> {
+  try {
+    const headers: Record<string, string> = device.apiKey ? { 'API-KEY': device.apiKey } : {};
+    const response = await fetchFn(`${device.host}/api/status`, { headers });
+    if (!response.ok) {
+      return undefined;
+    }
+    const lan = ((await response.json()) as { control?: { lan?: unknown } } | null)?.control?.lan;
+    return lan === 'open' || lan === 'closed' ? lan : undefined;
+  } catch (error) {
+    logger.debug(`LAN status read failed: ${(error as Error).message}`);
+    return undefined;
+  }
 }
 
 /**
