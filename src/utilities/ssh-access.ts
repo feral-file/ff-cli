@@ -18,6 +18,13 @@
  * LAN-only. `sshAccess` is owner tier, so a controller-role grant gets
  * `permission_denied`, mapped to "needs an owner grant". No topic header is
  * sent on that path: the signed envelope is the proof.
+ *
+ * LAN control (feral-file#3551): `sshAccess` is owner tier on every route, so
+ * FF OS with LAN control refuses a plaintext one with 403
+ * `enrollment_required`, also before the FF1 has an owner (`legacy`). Only
+ * then is the status read, to tell "set it up as owner first" (legacy) from
+ * "pair with an owner grant" (owned). Reading it only after a refusal keeps
+ * the plaintext path one request for FF OS that still accepts it.
  */
 
 import { fetchWithTimeout } from './http';
@@ -26,6 +33,9 @@ import { assertFF1CommandCompatibility, resolveConfiguredDevice } from './ff1-co
 import { getTopicId } from './topic-store';
 import type { FF1Device, FF1DeviceConfig } from '../types';
 import type { ControllerRecord, ControllerStoreOptions } from './control/controller-store';
+import { describeControlCode, ownerSetupGuidance } from './control/control-errors';
+import { probeControlSupport } from './control/pairing';
+import { publicControlCode } from './ff1-device';
 import {
   type SecureTransportDeps,
   findSecureController,
@@ -144,7 +154,7 @@ export async function sendSshAccessCommand(
       headers: buildSshAccessHeaders(device, topicId),
       body: JSON.stringify(body),
     });
-    return await interpretSshAccessResponse(device, response);
+    return await interpretSshAccessResponse(device, response, overrides.fetchFn);
   } catch (error) {
     logger.error(`Error sending SSH access command: ${(error as Error).message}`);
     return { success: false, error: (error as Error).message };
@@ -243,10 +253,18 @@ function buildSshAccessBody(
   return { command: 'sshAccess', request };
 }
 
-/** interpretSshAccessResponse maps the device HTTP response onto an SshAccessResult. */
+/**
+ * interpretSshAccessResponse maps the device HTTP response onto an SshAccessResult.
+ *
+ * @param device - Target device
+ * @param response - Plaintext cast response
+ * @param fetchFn - Fetch for the status read after an enrollment_required (tests)
+ * @returns SSH access result
+ */
 async function interpretSshAccessResponse(
   device: FF1Device,
-  response: Response
+  response: Response,
+  fetchFn?: FetchFunction
 ): Promise<SshAccessResult> {
   if (!response.ok) {
     const errorText = await response.text();
@@ -254,6 +272,10 @@ async function interpretSshAccessResponse(
     logger.debug(`Error details: ${errorText}`);
     if (isTopicRequired(response.status, errorText)) {
       return { success: false, error: topicRequiredMessage(device), details: errorText };
+    }
+    const publicCode = publicControlCode(response.status, errorText);
+    if (publicCode) {
+      return await publicCodeFailure(device, publicCode, fetchFn);
     }
     return {
       success: false,
@@ -271,6 +293,37 @@ async function interpretSshAccessResponse(
     deviceName: device.name || device.host,
     response: responseData,
   };
+}
+
+/**
+ * publicCodeFailure maps a control-protocol public error on the plaintext
+ * path. An `enrollment_required` from an FF1 whose status says it has no
+ * owner yet gets the owner-setup guidance, since pairing cannot work before
+ * an owner exists; every other answer uses the shared table.
+ *
+ * @param device - Target device
+ * @param code - Public error code
+ * @param fetchFn - Fetch for the status read (tests)
+ * @returns SSH access failure
+ */
+async function publicCodeFailure(
+  device: FF1Device,
+  code: string,
+  fetchFn?: FetchFunction
+): Promise<SshAccessResult> {
+  const label = device.name || device.id || device.host;
+  if (
+    code === 'enrollment_required' &&
+    (await probeControlSupport(device, fetchFn as typeof fetch | undefined)) === 'unowned'
+  ) {
+    return {
+      success: false,
+      error: `${label} has no owner yet, and SSH access needs one.`,
+      details: ownerSetupGuidance(label),
+    };
+  }
+  const failure = describeControlCode(code, label);
+  return { success: false, error: failure.error, details: failure.details };
 }
 
 /** isTopicRequired reports whether a device rejection is the topic-proof 401. */

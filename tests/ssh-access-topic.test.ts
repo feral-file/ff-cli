@@ -149,3 +149,72 @@ describe('sshAccess topic proof header (#3551 phase 0)', () => {
     assert.equal(result.details, 'boom');
   });
 });
+
+// feral-file#3551 LAN control: sshAccess is owner tier, so FF OS with LAN
+// control refuses a plaintext one with enrollment_required, also before the
+// FF1 has an owner; the status read after that refusal picks the advice.
+describe('sshAccess without a grant on FF OS with LAN control (#3551)', () => {
+  const office: FF1Device = { name: 'Office', host: 'http://10.0.0.4:1111', id: 'ff1-def' };
+  const refused = (code: string) =>
+    new Response(JSON.stringify({ error: { code } }), { status: 403, statusText: 'Forbidden' });
+
+  /** lanFetch answers getDeviceStatus with status, and sshAccess with reply. */
+  function lanFetch(status: Record<string, unknown>, reply: () => Response, casts: string[]) {
+    return async (_input: string, init?: RequestInit): Promise<Response> => {
+      const command = (JSON.parse(String(init?.body ?? '{}')) as { command: string }).command;
+      casts.push(command);
+      return command === 'getDeviceStatus'
+        ? new Response(JSON.stringify(status), { status: 200 })
+        : reply();
+    };
+  }
+
+  function send(fetchFn: (input: string, init?: RequestInit) => Promise<Response>) {
+    return sendSshAccessCommand(
+      { enabled: true, publicKey: 'ssh-ed25519 AAAA test', deviceName: office.name },
+      { fetchFn, getFF1DeviceConfigFn: () => ({ devices: [office] }), getTopicIdFn: () => null }
+    );
+  }
+
+  test('an FF1 with no owner yet gets the owner-setup guidance', async () => {
+    const casts: string[] = [];
+    const result = await send(
+      lanFetch(
+        { installedVersion: '3.0.0', control: { v: 1, state: 'legacy' } },
+        () => refused('enrollment_required'),
+        casts
+      )
+    );
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /Office has no owner yet, and SSH access needs one/);
+    assert.match(
+      result.details ?? '',
+      /Set this FF1 up as owner in the Feral File app, then add this computer with Add controller/
+    );
+    assert.deepEqual(casts, ['getDeviceStatus', 'sshAccess', 'getDeviceStatus']);
+  });
+
+  test('an owned FF1 gets the owner-or-closed copy and the pair command', async () => {
+    const result = await send(
+      lanFetch(
+        { installedVersion: '3.0.0', control: { v: 1, state: 'enrolled', lan: 'open' } },
+        () => refused('enrollment_required'),
+        []
+      )
+    );
+    assert.equal(result.success, false);
+    assert.match(
+      result.error ?? '',
+      /accepts this command only from its owner, or the owner turned off control from its Wi-Fi/
+    );
+    assert.match(result.details ?? '', /ff-cli device pair Office/);
+  });
+
+  test('lan_only says the FF1 only accepts its own network', async () => {
+    const result = await send(
+      lanFetch({ installedVersion: '3.0.0' }, () => refused('lan_only'), [])
+    );
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /accepts requests only from its own network/);
+  });
+});

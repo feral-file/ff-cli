@@ -477,7 +477,7 @@ describe('ff-cli report: Art Computer', () => {
         supportUrl: server.url,
       });
       assert.equal(run.status, 0, run.stdout + run.stderr);
-      assert.match(run.stdout, /This FF1 is secured/);
+      assert.match(run.stdout, /This FF1 accepts this command only from its owner/);
       assert.match(run.stdout, /ff-cli device pair Office/);
     } finally {
       server.close();

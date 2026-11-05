@@ -177,10 +177,13 @@ function probeBases(device: FF1Device): Array<{ base: string; byName: boolean }>
 /**
  * ControlSupport is what the FF1's LAN status says about pairing: `secure`
  * (the control protocol with an owner: owner-initiated registration),
- * `plaintext` (no `control` block, or `control.state` legacy: no owner, so
- * plaintext is accepted and the legacy topic handoff applies), or `unknown`.
+ * `plaintext` (no `control` block: FF OS without secure control, where the
+ * legacy topic handoff applies), `unowned` (`control.state` legacy: secure
+ * control with no owner yet; nothing can pair until someone sets it up as
+ * owner in the app, and the topic handoff is not offered because the relayer
+ * topic is inert on that firmware, #3551), or `unknown`.
  */
-export type ControlSupport = 'secure' | 'plaintext' | 'unknown';
+export type ControlSupport = 'secure' | 'plaintext' | 'unowned' | 'unknown';
 
 /**
  * probeControlSupport reads `getDeviceStatus` in plaintext over the LAN
@@ -259,9 +262,7 @@ async function probeControlSupportAt(
   if (status.control === undefined) {
     return 'plaintext';
   }
-  return isPlainObject(status.control) && status.control.state === 'legacy'
-    ? 'plaintext'
-    : 'secure';
+  return isPlainObject(status.control) && status.control.state === 'legacy' ? 'unowned' : 'secure';
 }
 
 /**

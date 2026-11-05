@@ -32,6 +32,8 @@ const PUBLIC_CONTROL_CODES = new Set([
   'enrollment_required',
   'envelope_required',
   'locked',
+  // The hub refuses a caller that is not on the FF1's own network (#3551).
+  'lan_only',
 ]);
 
 interface SendPlaylistParams {
