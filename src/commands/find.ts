@@ -123,7 +123,7 @@ function playAPageHint(input: string): string {
  * that reads both. The current spelling wins when a caller passes both.
  *
  * @param {FindOptions} options - Parsed `find` options
- * @returns {boolean | undefined} true to display, false to never cast,
+ * @returns {boolean | undefined} true to display, false to never send,
  *   undefined when neither spelling was passed
  */
 function displayIntent(options: FindOptions): boolean | undefined {
@@ -141,7 +141,7 @@ export const findCommand = new Command('find')
   .option('--display', 'Display the playlist on an FF1 device after building')
   .option(
     '--no-display',
-    'Never cast to a device; combine with -y to build and save without displaying'
+    'Never display on a device; combine with -y to build and save without displaying'
   )
   // The retired spellings of the two flags above, accepted but never listed; see displayIntent.
   .addOption(new Option('-p, --play').hideHelp())
@@ -154,7 +154,7 @@ export const findCommand = new Command('find')
   .option('-s, --server <index>', 'Feed server index (used with --publish)')
   .option(
     '-y, --yes',
-    'Skip interactive prompts. Without --output or --publish, -y displays the playlist on a device; add --no-display to skip casting'
+    'Skip interactive prompts. Without --output or --publish, -y displays the playlist on a device; add --no-display to skip the display'
   )
   .option(
     '--skip-verify',
@@ -175,7 +175,7 @@ export const findCommand = new Command('find')
           )
         );
         // A plain web page or media URL is not an artwork lookup at all; `display`
-        // casts those directly, so name it rather than leave the caller stuck.
+        // sends those directly, so name it rather than leave the caller stuck.
         if (/^https?:\/\//i.test(input.trim())) {
           console.error(
             chalk.dim(`To display a web page or media URL as it is, run: ff-cli display "${input}"`)
@@ -672,7 +672,7 @@ async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boo
  * 3-way prompt. Save is unconditional and already done before this is called.
  *
  * `--no-display` (commander sets `display === false`) is an opt-out that
- * removes casting from every path, including the `--yes` default and the
+ * removes the display step from every path, including the `--yes` default and the
  * interactive prompt. It is additive: `--yes` alone keeps its deliberate
  * "max-satisfaction default for scripted use" of displaying, and this must not
  * change that. Because `--no-display` already states the user's intent, it
@@ -717,7 +717,7 @@ export type { FindOptions, BuildToken, ResolvedTarget };
  */
 async function promptNextAction(): Promise<PostBuildAction> {
   const prompt = createPrompt(
-    'The playlist is saved. Pass --display to cast it, or --publish to publish it.'
+    'The playlist is saved. Pass --display to display it, or --publish to publish it.'
   );
   const answer = (
     await prompt.ask(

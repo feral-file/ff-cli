@@ -71,7 +71,7 @@ describe('display command', () => {
     const display = runCli(['display', WALLET]);
     const play = runCli(['play', WALLET]);
     assert.equal(display.status, 1, display.stdout + display.stderr);
-    assert.match(display.stderr, /`display` casts an exact playlist or media URL/);
+    assert.match(display.stderr, /`display` sends an exact playlist or media URL/);
     assert.match(display.stdout, /ff-cli find "0x[0-9a-f]+" --display -y/);
     assert.deepEqual(play, display);
   });

@@ -1,6 +1,6 @@
 /**
  * Network classification shared by the FF1 LAN delivery paths (legacy
- * plaintext casts in ff1-device.ts and the secure envelope transport in
+ * plaintext commands in ff1-device.ts and the secure envelope transport in
  * control/secure-transport.ts), so both apply the same retry and relayer
  * fallback rules.
  */

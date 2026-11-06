@@ -1087,7 +1087,7 @@ export async function runControllers(name: string | undefined): Promise<void> {
   if ((res.controllers ?? []).some((row) => row.role === 'display')) {
     console.log(
       chalk.dim(
-        '  display = a Play site (browser) that may only cast to this FF1; `ff-cli device revoke` removes it'
+        '  display = a Play site (browser) that may only display on this FF1; `ff-cli device revoke` removes it'
       )
     );
   }

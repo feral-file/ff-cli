@@ -1,7 +1,7 @@
 /**
  * `display` guards against discovery inputs.
  *
- * `display` casts an exact, source it can send as it is (playlist file, hosted
+ * `display` sends an exact source as it is (playlist file, hosted
  * playlist URL, or a direct media/web URL). A marketplace URL, on-chain
  * coordinates, or a wallet address must be resolved through the indexer
  * first — that is `find`'s job. describeDiscoveryInput returns a label for

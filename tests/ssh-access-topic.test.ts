@@ -4,7 +4,7 @@ import { FF1_TOPIC_HEADER, sendSshAccessCommand } from '../src/utilities/ssh-acc
 import type { FF1Device } from '../src/types';
 
 // Phase 0 of feral-file#3551: a claimed FF1 on newer FF OS requires the
-// relayer topic as LAN topic proof on sshAccess casts. These tests pin the
+// relayer topic as LAN topic proof on sshAccess commands. These tests pin the
 // header contract and the 401 topic_required -> pairing guidance mapping.
 
 const TOPIC = 'topic-secret-value';

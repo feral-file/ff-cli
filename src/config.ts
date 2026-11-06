@@ -283,7 +283,7 @@ export function getFeedConfig(): {
 }
 
 /**
- * Get FF1 device configuration for casting playlists
+ * Get FF1 device configuration for displaying playlists
  *
  * @returns {Object} FF1 device configuration
  * @returns {Array<Object>} returns.devices - Array of configured FF1 devices

@@ -64,13 +64,13 @@ export async function sendPlaylistViaRelayer(input: {
 }
 
 /**
- * sendCastViaRelayer posts one cast body to the relayer topic endpoint and
+ * sendCastViaRelayer posts one `/api/cast` body to the relayer topic endpoint and
  * returns the parsed JSON response without interpreting the device's answer.
  * It is shared by the legacy plaintext Play path and the secure `ff1Envelope`
- * path (ff1-control-v1 §10: the envelope rides the same topic cast).
+ * path (ff1-control-v1 §10: the envelope rides the same topic route).
  *
  * @param input - Relayer endpoint, optional compatibility key, paired topic,
- * cast body, and optional fetch implementation.
+ * command body, and optional fetch implementation.
  * @returns The parsed relayer response, or a structured failure.
  */
 export async function sendCastViaRelayer(input: {

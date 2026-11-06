@@ -753,7 +753,7 @@ describe('decideActions', () => {
     assert.deepEqual(actions, []);
   });
 
-  test('--no-display alone → [] (no cast and no prompt, without --yes)', async () => {
+  test('--no-display alone → [] (no display and no prompt, without --yes)', async () => {
     const actions = await decideActions({ display: false });
     assert.deepEqual(actions, []);
   });
