@@ -15,7 +15,7 @@ Params (JSON file, or piped on stdin):
   {"requirements": [ ...one or more... ], "playlistSettings": { ... }}
 
 Requirement types:
-  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all").
+  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all") and includeContracts (array of contract addresses).
                       {"type":"query_address","ownerAddress":"0x…","quantity":5}
   build_playlist      Tokens from a contract. blockchain ("ethereum" or "tezos"), contractAddress, tokenIds.
                       {"type":"build_playlist","blockchain":"ethereum","contractAddress":"0x…","tokenIds":["1","2"]}
