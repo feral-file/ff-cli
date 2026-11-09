@@ -125,6 +125,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never cast as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
   - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
+  - When a loaded playlist is unsigned and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)

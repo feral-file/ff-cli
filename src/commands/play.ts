@@ -276,7 +276,17 @@ async function castResolved(
     if (result.stage === 'verify') {
       printPlaylistVerificationFailure(
         { valid: false, error: result.error, details: result.details },
-        isPlaylistSource ? `source: ${sourceLabel}` : undefined
+        isPlaylistSource ? `source: ${sourceLabel}` : undefined,
+        // Only name an absent signature after structure passed. A broken existing
+        // signature or malformed document needs its own diagnosis, not a signing hint.
+        isPlaylistSource &&
+          privateKey &&
+          result.error === 'Playlist signature verification failed' &&
+          !resolved.playlist.signature &&
+          (!Array.isArray(resolved.playlist.signatures) ||
+            resolved.playlist.signatures.length === 0)
+          ? resolved
+          : undefined
       );
     } else if (result.stage === 'sign') {
       console.error(chalk.red(`\n${result.error}`));

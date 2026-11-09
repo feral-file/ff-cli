@@ -115,6 +115,92 @@ describe('display delivery signing contract', () => {
     assert.doesNotMatch(result.stdout + result.stderr, /Could not reach device/i);
   });
 
+  test('points an unsigned local file at sign with the configured key and a quoted path', async () => {
+    const playlistPath = join(dir, "unsigned ' $playlist.json");
+    const original = readFileSync(fixturePath, 'utf-8');
+    writeFileSync(playlistPath, original, 'utf-8');
+
+    const result = await runCli(dir, ['display', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /This playlist is unsigned/);
+    assert.match(out, /configured signing key/);
+    assert.ok(out.includes(`ff-cli sign -- '${playlistPath.replace(/'/g, "'\\''")}'`), out);
+    assert.ok(out.indexOf('ff-cli sign') < out.indexOf('--skip-verify'), out);
+    assert.equal(readFileSync(playlistPath, 'utf-8'), original);
+
+    // The suggested argument separator must work with the real sign command.
+    const signed = await runCli(dir, ['sign', '--', playlistPath]);
+    assert.equal(signed.status, 0, signed.stdout + signed.stderr);
+  });
+
+  test('points an unsigned hosted playlist at saving and signing a local file', async () => {
+    const playlistServer = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(readFileSync(fixturePath, 'utf-8'));
+    });
+    await new Promise<void>((resolvePromise) => playlistServer.listen(0, resolvePromise));
+    const address = playlistServer.address();
+    assert.ok(address && typeof address !== 'string');
+    const url = `http://127.0.0.1:${address.port}/playlist.json`;
+    try {
+      const result = await runCli(dir, ['display', url]);
+      const out = result.stdout + result.stderr;
+      assert.equal(result.status, 1, out);
+      assert.match(out, /Save the hosted playlist to a local file/);
+      assert.match(out, /ff-cli sign playlist.json/);
+      assert.match(out, /upload the signed file|display the signed local file/);
+      assert.doesNotMatch(out, /ff-cli sign[^\n]*http/);
+    } finally {
+      playlistServer.close();
+    }
+  });
+
+  test('does not label a structurally invalid or already signed playlist as unsigned', async () => {
+    for (const fixture of ['invalid-missing-title-v10.json', 'valid-signed-v11.json']) {
+      const playlist = JSON.parse(
+        readFileSync(join(__dirname, 'fixtures/playlists', fixture), 'utf-8')
+      );
+      if (fixture === 'valid-signed-v11.json') {
+        playlist.title = 'Tampered after signing';
+      }
+      const playlistPath = join(dir, fixture);
+      writeFileSync(playlistPath, JSON.stringify(playlist));
+      const result = await runCli(dir, ['display', playlistPath]);
+      const out = result.stdout + result.stderr;
+      assert.equal(result.status, 1, out);
+      assert.doesNotMatch(out, /This playlist is unsigned|ff-cli sign/);
+    }
+  });
+
+  test('uses the resolved environment key for the hint, but ignores an unset template key', async () => {
+    const isolatedDir = mkdtempSync(join(tmpdir(), 'ff-cli-play-sign-hint-'));
+    try {
+      const playlistPath = join(isolatedDir, 'playlist.json');
+      writeFileSync(playlistPath, readFileSync(fixturePath, 'utf-8'));
+      writeFileSync(
+        join(isolatedDir, 'config.json'),
+        JSON.stringify({ playlist: { privateKey: 'YOUR_ED25519_PRIVATE_KEY' } })
+      );
+      const withKey = await runCli(isolatedDir, ['play', playlistPath], {
+        PLAYLIST_PRIVATE_KEY: privateKeyBase64,
+      });
+      assert.equal(withKey.status, 1);
+      assert.match(withKey.stdout + withKey.stderr, /configured signing key/);
+
+      const withoutKey = await runCli(isolatedDir, ['display', playlistPath], {
+        PLAYLIST_PRIVATE_KEY: '',
+      });
+      assert.equal(withoutKey.status, 1);
+      assert.doesNotMatch(
+        withoutKey.stdout + withoutKey.stderr,
+        /configured signing key|ff-cli sign/
+      );
+    } finally {
+      rmSync(isolatedDir, { recursive: true, force: true });
+    }
+  });
+
   test('auto-signs the synthesized media fallback before delivery', async () => {
     let deliveredBody = '';
     const deviceServer = createServer((req, res) => {
