@@ -76,10 +76,12 @@ type PostBuildAction = 'play' | 'publish' | 'skip';
  * `token-list` — the source-resolver library returned concrete token
  *   coordinates for a collection-like page, so no Raster series lookup is
  *   needed before handing tokens to the token source.
+ * `wallet` — no Raster artist claims the address; list its holdings.
  */
 type ResolvedTarget =
   | { kind: 'series'; summary: RasterArtworkSummary }
   | { kind: 'single'; coords: TokenCoords }
+  | { kind: 'wallet'; address: string }
   | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
 
 /**
@@ -134,10 +136,10 @@ export const findCommand = new Command('find')
   .description('Find an artwork on the web and build a DP-1 playlist')
   .argument(
     '<input>',
-    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address (picks one work by the artist at that address; for what a wallet owns, see `ff-cli build --help`)'
+    'URL (Objkt / fxhash / Art Blocks / OpenSea / SuperRare / Feral File / Neort / Verse / Raster), `ethereum:{contract}:{tokenId}`, `tezos:{contract}:{tokenId}`, or a wallet address (looks up the artist, then wallet holdings if no artist claims it)'
   )
   .option('-o, --output <path>', 'Save the playlist to this file (default: ./<slug>.json)')
-  .option('-l, --limit <n>', 'Max tokens to include from the series (default: all)')
+  .option('-l, --limit <n>', 'Max tokens to include from a series or wallet (up to 1024)')
   .option('--display', 'Display the playlist on an FF1 device after building')
   .option(
     '--no-display',
@@ -211,7 +213,12 @@ export const findCommand = new Command('find')
     }
   });
 
+/** runResolvedTarget builds the resolved artwork or wallet holdings into a playlist. */
 async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): Promise<void> {
+  if (target.kind === 'wallet') {
+    await runWalletFind(target.address, options);
+    return;
+  }
   if (target.kind === 'series') {
     console.log(chalk.cyan(formatSummaryLine(target.summary)));
   } else if (target.kind === 'token-list') {
@@ -299,13 +306,6 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   }
 
   const title = playlistTitleFor(target, items);
-  const playlist = await buildDP1Playlist({ items, title });
-
-  const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
-  await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
-
-  console.log(chalk.green(`✓ Playlist saved to ${outputPath}`));
-  console.log(chalk.dim(`  ${items.length} item${items.length === 1 ? '' : 's'}`));
   const dropped = tokens.length - items.length;
   if (dropped > 0) {
     console.log(chalk.dim(`  ${dropped} token${dropped === 1 ? '' : 's'} could not be resolved:`));
@@ -313,6 +313,45 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
       console.log(chalk.dim(`    ${message}`));
     }
   }
+  await saveFindPlaylist(items, title, options);
+}
+
+/** runWalletFind lists holdings through the configured token source without re-indexing them. */
+async function runWalletFind(address: string, options: FindOptions): Promise<void> {
+  const limit = resolverLimitFromOption(options.limit);
+  const source = getTokenSource();
+  console.log(chalk.cyan(`Looking up holdings for wallet ${address}...`));
+  const listing = await source.listTokensByOwner(address, { limit });
+  const items = itemsOf(listing.results).slice(0, limit);
+  for (const message of failureMessages(listing.results)) {
+    console.log(chalk.dim(`  ${message}`));
+  }
+  if (listing.skippedUnsupported > 0) {
+    console.log(chalk.dim(`  Skipped ${listing.skippedUnsupported} tokens on unsupported chains.`));
+  }
+  if (items.length === 0) {
+    throw new Error(`No playable tokens found in wallet ${address} via ${source.name}.`);
+  }
+  if (!options.yes && !options.output && !(await confirmMakePlaylist(items.length, false))) {
+    console.log(chalk.dim('Cancelled.'));
+    return;
+  }
+  await saveFindPlaylist(items, `Wallet ${address}`, options);
+}
+
+/** saveFindPlaylist writes the DP-1 playlist and runs the requested delivery actions. */
+async function saveFindPlaylist(
+  items: Record<string, unknown>[],
+  title: string,
+  options: FindOptions
+): Promise<void> {
+  const playlist = await buildDP1Playlist({ items, title });
+
+  const outputPath = options.output ?? `${playlist.slug || 'playlist'}.json`;
+  await fs.writeFile(outputPath, JSON.stringify(playlist, null, 2));
+
+  console.log(chalk.green(`✓ Playlist saved to ${outputPath}`));
+  console.log(chalk.dim(`  ${items.length} item${items.length === 1 ? '' : 's'}`));
   console.log();
 
   const actions = await decideActions(options);
@@ -417,10 +456,7 @@ async function resolveTarget(
   if (parsed.kind === 'address') {
     const artist = await resolveAddressToArtist(parsed.address);
     if (artist === null) {
-      throw new Error(
-        `No artist found on Raster for address ${parsed.address}. ` +
-          'Raster indexes artists by their on-chain addresses; this address may not yet be claimed.'
-      );
+      return { kind: 'wallet', address: parsed.address };
     }
     const catalog = await listArtistArtworks(artist.id);
     if (catalog.length === 0) {
@@ -511,7 +547,10 @@ async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
  * one-item fallback, use the token source's name (already in the item)
  * with a fall-through to coords if name is missing.
  */
-function playlistTitleFor(target: ResolvedTarget, items: Array<{ title?: string }>): string {
+function playlistTitleFor(
+  target: Exclude<ResolvedTarget, { kind: 'wallet' }>,
+  items: Array<{ title?: string }>
+): string {
   if (target.kind === 'series') {
     const artistLabel = target.summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
     return `${artistLabel} — ${target.summary.title}`;

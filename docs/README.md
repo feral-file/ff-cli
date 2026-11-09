@@ -131,7 +131,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
   - Options: `-o, --output <path>`, `-l, --limit <n>`, `--display`, `--no-display` (never cast; combine with `-y` to build and save without displaying; `-p`, `--play` and `--no-play` still work for existing scripts), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it displays the playlist on a device, so add `--no-display` to skip casting), `--skip-verify`
-  - A wallet address picks one work by the artist at that address. For what a wallet owns, use `build` with a `query_address` requirement
+  - A wallet address picks one work by the artist or lists holdings when Raster finds no artist. Use `build` with `query_address` to query holdings directly.
   - Without a terminal, pass `-y`: a question with no terminal to answer it fails with exit 1 and names the flag, rather than waiting or exiting 0 with nothing built
 - `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards. With the opt-in Raster token source no still image is supplied, so `enrich` adds artist and description but no thumbnail; thumbnails come from the default indexer source
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
@@ -178,8 +178,7 @@ ff-cli find https://objkt.com/tokens/hicetnunc/111068 --display
 # Save without displaying
 ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 -o send-receive.json
 
-# Wallet address: one work by the artist at that address; cap the number of tokens with --limit
-# (for what a wallet owns, use build with a query_address requirement)
+# Wallet address: find one work by the artist, or list holdings if no artist claims the address
 ff-cli find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
 
 # Build and publish to a configured feed server
@@ -199,7 +198,7 @@ cat params.json | ff-cli build -o playlist.json
 
 - `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`. Omitting `tokenIds` asks for random tokens from the contract, which only the default indexer token source supports.
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
-- `query_address` — `ownerAddress`, optional `quantity` (random selection)
+- `query_address` — `ownerAddress`, optional `quantity` (first matches in provider order), optional `includeContracts` (contract address allowlist applied before quantity)
 - `fetch_feed` — `playlistName`, `quantity`
 
 `playlistSettings` may set `title`, `durationPerItem`, `preserveOrder` (set `false` to shuffle), and `deviceName`. Feed playlists (for example `Unsupervised`, `Social Codes`) depend on your configured feed servers and network reachability; use exact or near-exact playlist titles for best results.

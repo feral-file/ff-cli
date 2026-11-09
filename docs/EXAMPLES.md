@@ -53,7 +53,7 @@ npm run dev -- find ethereum:0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0:52932 -o
 # Tezos token by coordinates
 npm run dev -- find tezos:KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ:22 -o tez-token.json
 
-# Wallet address (owner lookup); cap the number of tokens with --limit
+# Wallet address: find one work by the artist, or list holdings if no artist claims the address
 npm run dev -- find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
 
 # Limit a large series to the first N tokens
@@ -97,7 +97,7 @@ Each requirement has a `type`:
 
 - `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
-- `query_address` — `ownerAddress`, optional `quantity` (random selection)
+- `query_address` — `ownerAddress`, optional `quantity` (first matches in provider order), optional `includeContracts` (contract address allowlist applied before quantity)
 - `fetch_feed` — `playlistName`, `quantity`
 
 `playlistSettings` may set `title`, `durationPerItem`, `preserveOrder` (set `false` to shuffle), and `deviceName`.
@@ -158,7 +158,7 @@ cat > /tmp/wallet.json <<'JSON'
       "quantity": 5
     }
   ],
-  "playlistSettings": { "title": "From a wallet", "preserveOrder": false }
+  "playlistSettings": { "title": "From a wallet" }
 }
 JSON
 

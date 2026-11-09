@@ -43,7 +43,7 @@ export const REQUIREMENT_TYPES = [
 ] as const;
 
 /**
- * Validate and apply constraints to requirements
+ * validateRequirements validates and applies constraints to requirements.
  *
  * @param {Array<Object>} requirements - Array of requirements
  * @returns {Array<Object>} Validated requirements
@@ -80,11 +80,28 @@ export function validateRequirements(requirements: Requirement[]): Requirement[]
       if (!req.ownerAddress) {
         throw new Error(`Requirement ${index + 1}: ownerAddress is required for query_address`);
       }
+      if (
+        req.includeContracts !== undefined &&
+        (!Array.isArray(req.includeContracts) ||
+          req.includeContracts.length === 0 ||
+          req.includeContracts.some(
+            (address) =>
+              typeof address !== 'string' ||
+              !/^(?:0x[0-9a-fA-F]{40}|KT1[1-9A-HJ-NP-Za-km-z]{33})$/.test(address)
+          ))
+      ) {
+        throw new Error(
+          `Requirement ${index + 1}: includeContracts must be a non-empty list of contract addresses`
+        );
+      }
       // Allow "all" as a string, or cap numeric values
       let quantity: number | string | undefined;
       if (req.quantity === 'all') {
         quantity = 'all';
       } else if (typeof req.quantity === 'number') {
+        if (!Number.isInteger(req.quantity) || req.quantity < 1) {
+          throw new Error(`Requirement ${index + 1}: quantity must be a positive integer or "all"`);
+        }
         quantity = Math.min(req.quantity, 100);
       } else {
         quantity = undefined;

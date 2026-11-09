@@ -92,6 +92,15 @@ describe('build failures', () => {
 });
 
 describe('requirement validation', () => {
+  test('wallet quantities must be positive integers', () => {
+    for (const quantity of [-1, 0, 1.5]) {
+      assert.throws(
+        () => validateRequirements([{ type: 'query_address', ownerAddress: 'test.eth', quantity }]),
+        /quantity must be a positive integer/
+      );
+    }
+  });
+
   test('an unknown type lists the valid ones', () => {
     assert.throws(
       () => validateRequirements([{ type: 'wallet' } as never]),

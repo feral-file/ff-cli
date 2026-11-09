@@ -59,32 +59,25 @@ function rowsToResults(rows: IndexerRow[], duration?: number): ResolvedToken[] {
 
 /**
  * walkOwner pages through the indexer for an owner, as queryTokensByAddress did.
- * A failed first page throws; a failed later page keeps what was collected,
- * which is the indexer path's long-standing behaviour.
+ * Fail the listing if any page fails so callers cannot mistake a partial
+ * scan for a complete playlist or an exhaustive contract filter.
  */
 async function walkOwner(address: string, limit: number | 'all'): Promise<IndexerRow[]> {
   const indexer = loadIndexer();
-  if (limit !== 'all') {
-    const result = await indexer.queryTokensByOwner(address, Math.min(limit, MAX_BOUNDED_LIMIT));
+  const maxRows = limit === 'all' ? Infinity : limit;
+  const rows: IndexerRow[] = [];
+  for (let offset = 0; offset < maxRows; offset += OWNER_PAGE_SIZE) {
+    const pageSize = Math.min(OWNER_PAGE_SIZE, maxRows - offset);
+    const result = await indexer.queryTokensByOwner(address, pageSize, offset);
     if (!result.success) {
       throw new Error(result.error || 'Indexer owner query failed');
     }
-    return result.tokens;
-  }
-  const rows: IndexerRow[] = [];
-  for (let offset = 0; ; offset += OWNER_PAGE_SIZE) {
-    const result = await indexer.queryTokensByOwner(address, OWNER_PAGE_SIZE, offset);
-    if (!result.success && offset === 0) {
-      throw new Error(result.error || 'Indexer owner query failed');
-    }
-    if (!result.success || result.tokens.length === 0) {
-      return rows;
-    }
     rows.push(...result.tokens);
-    if (result.tokens.length < OWNER_PAGE_SIZE) {
+    if (result.tokens.length < pageSize) {
       return rows;
     }
   }
+  return rows;
 }
 
 /** createIndexerTokenSource builds the indexer provider. */

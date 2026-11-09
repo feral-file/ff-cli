@@ -135,6 +135,10 @@ before(async () => {
         res.end(JSON.stringify({ data: { jobStatus: { status: 'completed', last_error: null } } }));
         return;
       }
+      if (indexerOwnerHandler && query?.includes('owners:')) {
+        res.end(JSON.stringify(indexerOwnerHandler(query, {})));
+        return;
+      }
       if (query?.includes('tokens')) {
         indexerOps.push({ op: 'tokens', token: cidFromQuery(query) });
         res.end(JSON.stringify({ data: { tokens: { items: [], total: 0 } } }));
@@ -162,11 +166,13 @@ after(() => {
 });
 
 let destroyResponseBody = false;
+let indexerOwnerHandler: GraphQLHandler | undefined;
 
 beforeEach(() => {
   handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
   destroyResponseBody = false;
   indexerOps = [];
+  indexerOwnerHandler = undefined;
   jobIds.clear();
 });
 
@@ -321,6 +327,73 @@ const PLAYABLE_ETH_TOKEN = (tokenId: string): Record<string, unknown> => ({
     },
   ],
   artists: [],
+});
+
+test('an unclaimed address falls back to an owner lookup', async () => {
+  handler = () => ({ data: { address: null } });
+  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /No playable tokens found in wallet/);
+  assert.equal(indexerOps.length, 1);
+  assert.equal(indexerOps[0].op, 'tokens');
+});
+
+test('a failed second wallet page aborts the playlist', async () => {
+  handler = () => ({ data: { address: null } });
+  const offsets: number[] = [];
+  indexerOwnerHandler = (query) => {
+    const offset = Number(/offset:\s*(\d+)/.exec(query)?.[1]);
+    offsets.push(offset);
+    if (offset === 50) {
+      return { errors: [{ message: 'second page unavailable' }] };
+    }
+    return {
+      data: {
+        tokens: {
+          items: Array.from({ length: 50 }, (_, i) => ({
+            contract_address: VALID_ETH_CONTRACT,
+            token_number: String(i),
+            chain: 'eip155:1',
+            standard: 'erc721',
+            display: { name: `Token ${i}`, image_url: 'https://example.com/token.png' },
+          })),
+          total: 51,
+        },
+      },
+    };
+  };
+  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '51', '--output', 'wallet.json']);
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /second page unavailable/);
+  assert.doesNotMatch(result.stdout, /Playlist saved/);
+  assert.deepEqual(offsets, [0, 50]);
+});
+
+test('owner lookup saves a playlist from the configured Raster source', async () => {
+  handler = (query) => {
+    if (query.includes('ResolveAddress')) {
+      return { data: { address: { artists: [] } } };
+    }
+    assert.match(query, /TokensOwned/);
+    return {
+      data: {
+        address: {
+          tokensOwned: {
+            totalCount: 2,
+            nodes: ['1', '2'].map((id) => ({ token: PLAYABLE_ETH_TOKEN(id) })),
+            pageInfo: { hasNextPage: false, endCursor: null },
+          },
+        },
+      },
+    };
+  };
+  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json'], {
+    env: { FF_TOKEN_SOURCE: 'raster' },
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /Playlist saved to wallet\.json/);
+  assert.match(result.stdout, /1 item\b/);
+  assert.deepEqual(indexerOps, []);
 });
 
 describe('find command — Raster series flow (mock GraphQL server)', () => {
