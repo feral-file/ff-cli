@@ -282,10 +282,10 @@ async function castResolved(
         // Check structure independently so neither error wording nor malformed input drives the hint.
         isPlaylistSource &&
           privateKey &&
+          (await validatePlaylist(resolved.playlist)).valid &&
           !resolved.playlist.signature &&
           (!Array.isArray(resolved.playlist.signatures) ||
-            resolved.playlist.signatures.length === 0) &&
-          (await validatePlaylist(resolved.playlist)).valid
+            resolved.playlist.signatures.length === 0)
           ? resolved
           : undefined
       );
