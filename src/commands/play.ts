@@ -12,6 +12,7 @@ import {
   type PlaySource,
 } from '../utilities/playlist-source';
 import { castPlaylist } from '../utilities/playlist-cast';
+import { validatePlaylist } from '../utilities/playlist-verifier';
 import {
   printPlaylistSourceLoadFailure,
   printPlaylistVerificationFailure,
@@ -277,14 +278,14 @@ async function castResolved(
       printPlaylistVerificationFailure(
         { valid: false, error: result.error, details: result.details },
         isPlaylistSource ? `source: ${sourceLabel}` : undefined,
-        // Only name an absent signature after structure passed. A broken existing
-        // signature or malformed document needs its own diagnosis, not a signing hint.
+        // Missing signatures can return false or throw in dp1-js (including signatures: []).
+        // Check structure independently so neither error wording nor malformed input drives the hint.
         isPlaylistSource &&
           privateKey &&
-          result.error === 'Playlist signature verification failed' &&
           !resolved.playlist.signature &&
           (!Array.isArray(resolved.playlist.signatures) ||
-            resolved.playlist.signatures.length === 0)
+            resolved.playlist.signatures.length === 0) &&
+          (await validatePlaylist(resolved.playlist)).valid
           ? resolved
           : undefined
       );

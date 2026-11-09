@@ -4,7 +4,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { after, before, describe, test } from 'node:test';
 
 const projectRoot = resolve(__dirname, '..');
@@ -125,13 +125,62 @@ describe('display delivery signing contract', () => {
     assert.equal(result.status, 1, out);
     assert.match(out, /This playlist is unsigned/);
     assert.match(out, /configured signing key/);
-    assert.ok(out.includes(`ff-cli sign -- '${playlistPath.replace(/'/g, "'\\''")}'`), out);
+    const posixFile = `'${playlistPath.replace(/'/g, "'\\''")}'`;
+    const powershellFile = `'${playlistPath.replace(/'/g, "''")}'`;
+    assert.ok(out.includes(`POSIX shell: ff-cli sign -- ${posixFile}`), out);
+    assert.ok(out.includes(`PowerShell: ff-cli sign -- ${powershellFile}`), out);
     assert.ok(out.indexOf('ff-cli sign') < out.indexOf('--skip-verify'), out);
     assert.equal(readFileSync(playlistPath, 'utf-8'), original);
+
+    if (process.platform !== 'win32') {
+      // Parse the emitted argument with a real POSIX shell, preserving the quote and $ literally.
+      const parsed = spawnSync('/bin/sh', ['-c', `set -- ${posixFile}; printf '%s' "$1"`], {
+        encoding: 'utf-8',
+      });
+      assert.equal(parsed.status, 0, parsed.stderr);
+      assert.equal(parsed.stdout, playlistPath);
+    } else {
+      // Windows CI supplies pwsh; capture the recovery command's path without rewriting the file.
+      const parsed = spawnSync(
+        'pwsh',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `function ff-cli { ConvertTo-Json -InputObject $args[-1] -Compress }; ff-cli sign -- ${powershellFile}`,
+        ],
+        { encoding: 'utf-8' }
+      );
+      assert.equal(parsed.status, 0, parsed.stderr || parsed.error?.message);
+      assert.equal(JSON.parse(parsed.stdout), playlistPath);
+    }
 
     // The suggested argument separator must work with the real sign command.
     const signed = await runCli(dir, ['sign', '--', playlistPath]);
     assert.equal(signed.status, 0, signed.stdout + signed.stderr);
+  });
+
+  test('points an empty signatures array at signing after structure validation', async () => {
+    const playlistPath = join(dir, 'empty-signatures.json');
+    const playlist = { ...JSON.parse(readFileSync(fixturePath, 'utf-8')), signatures: [] };
+    const original = JSON.stringify(playlist);
+    writeFileSync(playlistPath, original);
+
+    const validated = await runCli(dir, ['validate', playlistPath]);
+    assert.equal(validated.status, 0, validated.stdout + validated.stderr);
+
+    const result = await runCli(dir, ['display', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /This playlist is unsigned/);
+    assert.ok(out.indexOf('ff-cli sign') < out.indexOf('--skip-verify'), out);
+    assert.equal(readFileSync(playlistPath, 'utf-8'), original);
+
+    const signed = await runCli(dir, ['sign', '--', playlistPath]);
+    assert.equal(signed.status, 0, signed.stdout + signed.stderr);
+    const verified = await runCli(dir, ['verify', playlistPath]);
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
   });
 
   test('points an unsigned hosted playlist at saving and signing a local file', async () => {
@@ -163,6 +212,8 @@ describe('display delivery signing contract', () => {
       );
       if (fixture === 'valid-signed-v11.json') {
         playlist.title = 'Tampered after signing';
+      } else {
+        playlist.signatures = [];
       }
       const playlistPath = join(dir, fixture);
       writeFileSync(playlistPath, JSON.stringify(playlist));

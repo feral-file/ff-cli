@@ -72,9 +72,12 @@ export function printPlaylistVerificationFailure(
         )
       );
     } else {
-      // Single quotes preserve shell metacharacters; -- keeps a leading dash out of option parsing.
-      const file = `'${unsignedSource.source.replace(/'/g, "'\\''")}'`;
-      console.log(chalk.yellow(`     ff-cli sign -- ${file}`));
+      // Shells disagree on literal apostrophes. Label both forms rather than infer the caller's shell.
+      // Single quotes preserve metacharacters; -- keeps a leading dash out of option parsing.
+      const posixFile = `'${unsignedSource.source.replace(/'/g, "'\\''")}'`;
+      const powershellFile = `'${unsignedSource.source.replace(/'/g, "''")}'`;
+      console.log(chalk.yellow(`     POSIX shell: ff-cli sign -- ${posixFile}`));
+      console.log(chalk.yellow(`     PowerShell: ff-cli sign -- ${powershellFile}`));
       console.log(chalk.yellow('     Then retry display with the signed file.'));
     }
   }
