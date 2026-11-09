@@ -995,7 +995,7 @@ describe('production fetch defaults ride the deadline (#101 review round 2)', ()
     assert.equal(sawSignal, true);
   });
 
-  test('relayer cast default fetch carries a deadline signal', async () => {
+  test('relayer send default fetch carries a deadline signal', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { sendPlaylistViaRelayer } = require('../src/utilities/ff1-relayer');
     let sawSignal = false;

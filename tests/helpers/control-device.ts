@@ -245,7 +245,7 @@ export type FakeAnswer =
   | { publicCode: string; status?: number };
 
 /**
- * FakeFF1 answers `ff1Envelope` casts like the device: it opens the request
+ * FakeFF1 answers `ff1Envelope` commands like the device: it opens the request
  * with the fixture device keys, enforces one use per ctr, records what it saw
  * and replies with a reply sealed under the request's rk.
  */
@@ -262,7 +262,7 @@ export class FakeFF1 {
     })
   ) {}
 
-  /** handle returns the HTTP status and JSON body for a LAN cast body. */
+  /** handle returns the HTTP status and JSON body for a LAN `/api/cast` body. */
   handle(body: { command?: string; request?: { v?: number; jwe?: string } }): {
     status: number;
     json: unknown;

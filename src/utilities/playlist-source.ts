@@ -288,7 +288,7 @@ function noteForLoadFailure(failure: unknown): string | undefined {
  *
  * `--web` skips the playlist probe, so without this check a typo or a dead
  * link handed to `--web` (the hint `display` prints for marketplace pages) would
- * be cast as an error page with a successful exit. Only the status line is
+ * be displayed as an error page with a successful exit. Only the status line is
  * needed; the body is cancelled unread. The `.json` rule does not apply: the
  * caller said this is a page.
  *

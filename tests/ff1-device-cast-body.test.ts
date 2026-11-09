@@ -5,9 +5,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { sendPlaylistToDevice } from '../src/utilities/ff1-device';
 
-// Exercises the cast response handling: an empty or non-JSON body from the
+// Exercises the `/api/cast` response handling: an empty or non-JSON body from the
 // device must not crash with "Unexpected end of JSON input". A transient empty
-// body should be retried (the device commonly returns one on the first cast
+// body should be retried (the device commonly returns one on the first request
 // after boot), and a persistently empty body should yield a clear error.
 
 interface MockResponse {
@@ -32,7 +32,7 @@ const makeResponse = (body: string, init?: Partial<MockResponse>): MockResponse 
   json: async () => JSON.parse(body),
 });
 
-// The compatibility probe (command: getDeviceStatus) runs before the cast.
+// The compatibility probe (command: getDeviceStatus) runs before the playlist is sent.
 // Returning a 500 makes assertFF1CommandCompatibility treat the device as
 // compatible without needing a version, isolating the cast-body behavior.
 const compatibilityProbeResponse = (): MockResponse =>

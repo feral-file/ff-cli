@@ -529,7 +529,7 @@ export async function requestLogUpload(
   }
 }
 
-/** castUploadLogs sends `uploadLogs` as a plaintext LAN cast and reads FF OS's `{ok}` answer. */
+/** castUploadLogs sends `uploadLogs` as a plaintext LAN `/api/cast` command and reads FF OS's `{ok}` answer. */
 async function castUploadLogs(
   device: FF1Device,
   req: Record<string, unknown>,
@@ -572,7 +572,7 @@ async function castUploadLogs(
   }
   if (!answer || typeof answer !== 'object') {
     // FF OS answers {"ok":true}. An empty or non-JSON 2xx (seen on the first
-    // cast after boot) does not say whether the command ran.
+    // request after boot) does not say whether the command ran.
     return {
       success: false,
       error: `${label} answered HTTP ${response.status} without a usable reply`,

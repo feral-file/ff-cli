@@ -350,11 +350,11 @@ describe('display delivery signing contract', () => {
   });
 
   /**
-   * A cast never passes through a feed, so the delivered document carries no `feed` signature and its own
+   * A playlist sent to a device never passes through a feed, so the delivered document carries no `feed` signature and its own
    * entry is all a player can judge. DP-1 §7.1.1 rule 1 has players verify a `feed` or `curator`
    * signature, so an `agent`-only envelope is one a role-aware player may refuse.
    *
-   * Signing REPLACES `signatures[]` rather than appending, so the cast-time signature is the only one that
+   * Signing REPLACES `signatures[]` rather than appending, so the delivery-time signature is the only one that
    * reaches the device — the builder's `curator` envelope is discarded on the way. Config here sets
    * `role: "agent"` (the value the CLI falls back to when `playlist.role` is absent) precisely so the
    * assertion fails if the delivery path ever falls back to the configured role again.

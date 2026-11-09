@@ -87,7 +87,7 @@ describe('probeDiscoveryUrlAsPlaylist — feed playlist URLs display directly', 
   });
 
   test('a URL that does not exist is refused, not redirected', async () => {
-    // The redirect also suggests `display --web`, which would cast the error page.
+    // The redirect also suggests `display --web`, which would display the error page.
     mockFetchOnce('not found', 404);
 
     await assert.rejects(() => probeDiscoveryUrlAsPlaylist(FEED_URL), /Nothing at .* \(HTTP 404\)/);

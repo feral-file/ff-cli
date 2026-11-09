@@ -20,9 +20,9 @@ import {
 import { hiddenAliasHelp } from './helpers/hidden-alias-help';
 
 /**
- * Human label for a discovery input that `display` cannot cast directly.
+ * Human label for a discovery input that `display` cannot send directly.
  *
- * `display` casts an exact source it can send as it is (a playlist file, a
+ * `display` sends an exact source as it is (a playlist file, a
  * hosted playlist URL, or a direct media/web URL). A marketplace URL, on-chain
  * coordinates, or a wallet address must be *resolved* through the indexer
  * first — that is `find`'s job. Returns a label for those inputs so `display`
@@ -80,7 +80,7 @@ export function describeDiscoveryInput(source: string): string | null {
  * (https://feed.feralfile.com/api/v1/playlists/{slug}, exactly the URLs the
  * feed hands out) to `find`, which has no feed route either; the documented
  * "hosted playlist URL displays directly" contract was unreachable for them
- * (found 2026-08-02 casting a published playlist to an FF1).
+ * (found 2026-08-02 displaying a published playlist on an FF1).
  *
  * Probing the document keeps both behaviors without a host allowlist: a URL
  * that serves DP-1 JSON (`dpVersion` marker) displays directly; a marketplace
@@ -91,7 +91,7 @@ export function describeDiscoveryInput(source: string): string | null {
  *
  * A URL that does not exist (404/410, no such host, a broken `.json` link)
  * is refused here rather than redirected: the redirect also suggests
- * `display --web`, which would cast the error page.
+ * `display --web`, which would display the error page.
  *
  * @throws {Error} When the URL does not exist (refusalForLoadFailure)
  */
@@ -189,7 +189,7 @@ export const displayCommand = new Command('display')
  * resolveDefaultSource resolves a `display` argument without `--web`: discovery
  * inputs go to `find`, everything else loads as a playlist or wraps as media.
  *
- * `display` casts an exact source as it is. A marketplace URL / on-chain coords /
+ * `display` sends an exact source as it is. A marketplace URL / on-chain coords /
  * wallet must be resolved through the indexer first, so it redirects to `find`
  * rather than silently wrapping the *page* as a web item. Exception: a
  * discovery-classified URL that actually serves a DP-1 playlist document (the
@@ -199,7 +199,7 @@ export const displayCommand = new Command('display')
  *
  * @param {string} source - The URL, path, or reference the caller passed
  * @param {string} [device] - Device name, carried into the suggested command
- * @returns {Promise<PlaySource>} What to cast; exits 1 on a discovery input
+ * @returns {Promise<PlaySource>} What to send; exits 1 on a discovery input
  */
 async function resolveDefaultSource(source: string, device?: string): Promise<PlaySource> {
   const discovery = describeDiscoveryInput(source);
@@ -210,7 +210,7 @@ async function resolveDefaultSource(source: string, device?: string): Promise<Pl
   if (discovery && !probed) {
     console.error(
       chalk.red(
-        '\n`display` casts an exact playlist or media URL — it does not search marketplaces.'
+        '\n`display` sends an exact playlist or media URL — it does not search marketplaces.'
       )
     );
     console.error(
@@ -235,7 +235,7 @@ async function resolveDefaultSource(source: string, device?: string): Promise<Pl
  * castResolved signs (for a synthesized media playlist), verifies, and sends
  * a resolved source, then reports the outcome. Exits 1 on any failure.
  *
- * @param {PlaySource} resolved - What to cast
+ * @param {PlaySource} resolved - What to send
  * @param {Object} options - The `display` options
  * @returns {Promise<void>}
  */

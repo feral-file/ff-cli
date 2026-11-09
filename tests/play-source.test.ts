@@ -172,7 +172,7 @@ describe('resolvePlaySource', () => {
   });
 
   for (const status of [404, 410]) {
-    test(`refuses a URL that answers ${status} instead of casting the error page`, async () => {
+    test(`refuses a URL that answers ${status} instead of displaying the error page`, async () => {
       const original = global.fetch;
       global.fetch = async () => new Response('gone', { status });
 

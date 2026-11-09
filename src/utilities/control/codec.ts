@@ -49,7 +49,7 @@ export const MAX_COMPACT_BYTES = 4 * 1024 * 1024;
 export const MAX_HEADER_BYTES = 4 * 1024;
 /**
  * MAX_ENVELOPE_COMPACT_BYTES is what ff-cli lets a request grow to: the LAN
- * hub caps the whole cast BODY at 4 MiB (§10), so the compact leaves room for
+ * hub caps the whole `/api/cast` BODY at 4 MiB (§10), so the compact leaves room for
  * the `{"command":"ff1Envelope","request":{"v":1,"jwe":…}}` wrapper.
  */
 export const MAX_ENVELOPE_COMPACT_BYTES = MAX_COMPACT_BYTES - 1024;
@@ -89,7 +89,7 @@ export type ControllerRole = 'owner' | 'controller';
  * `display` for a Play site's display grant (§5.7). A display grant is never
  * ff-cli's own role: it is issued only through mint pairing, cannot be
  * assigned by `approveController` or `registerController`, and may only
- * cast and revoke itself.
+ * display a playlist and revoke itself.
  */
 export type ControlRole = ControllerRole | 'display';
 

@@ -65,7 +65,7 @@ npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --publish
 # Build, display on a named device, and skip interactive prompts
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display -d "Living Room Display" -y
 
-# -y alone also displays (the scripted default); add --no-display to build and save without casting
+# -y alone also displays (the scripted default); add --no-display to build and save without displaying
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -y --no-display
 ```
 
@@ -281,7 +281,7 @@ ff-cli sign playlist.json
 ff-cli display playlist.json -d "living room"
 ```
 
-Casting does not care about the signing role. Add `-r curator` to that `sign` if the playlist is also
+Display does not care about the signing role. Add `-r curator` to that `sign` if the playlist is also
 going to a feed: `ff-cli publish` requires the owner role, for the reasons in
 [Publish to Feed Server](#publish-to-feed-server).
 
@@ -318,7 +318,7 @@ npm run dev -- display "https://example.com/video.mp4"
 npm run dev -- display playlist.json --skip-verify
 ```
 
-> **No feed server is required to cast.** A device can display any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli display "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply displaying your own playlists.
+> **No feed server is required to display.** A device can display any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli display "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply displaying your own playlists.
 
 ## Publish to Feed Server
 
