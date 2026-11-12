@@ -351,7 +351,7 @@ describe('secure displayPlaylist', () => {
       },
     ],
   ] as const) {
-    test(`play retries ${name} with a new request (new ctr and rid)`, async () => {
+    test(`display retries ${name} with a new request (new ctr and rid)`, async () => {
       enrolledRecord('controller');
       let casts = 0;
       const device = fakeDevice((claims) => {
@@ -382,7 +382,7 @@ describe('secure displayPlaylist', () => {
     });
   }
 
-  test('play retries a public busy (LAN 503) with a new request', async () => {
+  test('display retries a public busy (LAN 503) with a new request', async () => {
     enrolledRecord('controller');
     const device = fakeDevice();
     let casts = 0;
@@ -775,8 +775,30 @@ describe('legacy path against a secured FF1', () => {
       }
     );
     assert.equal(result.success, false);
-    assert.match(result.error!, /secured/);
+    assert.match(
+      result.error!,
+      /only from its owner, or the owner turned off control from its Wi-Fi/
+    );
     assert.match(result.details!, /ff-cli device pair Office/);
+    assert.deepEqual(casts, ['getDeviceStatus']);
+  });
+
+  // #3551: the hub refuses every route for a caller off the FF1's network.
+  test('a plaintext preflight refused with lan_only stops with the own-network copy', async () => {
+    const casts: string[] = [];
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn: async (_input, init) => {
+          casts.push(JSON.parse(String(init?.body)).command);
+          return json(403, { error: { code: 'lan_only' } });
+        },
+        controllerStore: { dir: storeDir },
+      }
+    );
+    assert.equal(result.success, false);
+    assert.match(result.error!, /accepts requests only from its own network/);
+    assert.match(result.details!, /same network as this FF1/);
     assert.deepEqual(casts, ['getDeviceStatus']);
   });
 

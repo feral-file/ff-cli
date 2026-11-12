@@ -137,14 +137,15 @@ async function queryTokensByContractAddress(contractAddress, quantity, duration,
  * Query tokens from an owner address.
  *
  * Fetches the tokens an address holds through the active token source, with
- * optional random selection. `quantity` of "all" (or none) walks the whole
- * wallet; a number stops early and samples from what was fetched.
+ * an optional contract allowlist. `quantity` of "all" (or none) walks the whole
+ * wallet; a number takes the first matches in provider order.
  *
  * @param {string} ownerAddress - Owner wallet address
- * @param {number|string} [quantity] - Number of random tokens to select, or "all"
+ * @param {number|string} [quantity] - Number of tokens to select, or "all"
  * @param {number} [duration] - Explicit display seconds; omit for auto timing
  * @param {Object} [options]
  * @param {boolean} [options.suppressNotFoundGuidance] - Caller will try another lookup
+ * @param {string[]} [options.includeContracts] - Contracts allowed in the playlist
  * @param {Object} [source] - Token source; defaults to the configured one
  * @returns {Promise<Array>} Array of DP-1 playlist items
  */
@@ -155,21 +156,20 @@ async function queryTokensByAddress(
   options = {},
   source = getTokenSource()
 ) {
-  const { suppressNotFoundGuidance = false } = options;
-  const fetchAll = quantity === 'all' || quantity === undefined || quantity === null;
+  const { suppressNotFoundGuidance = false, includeContracts } = options;
+  // A matching contract may first appear after the unfiltered quantity cutoff.
+  const fetchAll =
+    includeContracts !== undefined ||
+    quantity === 'all' ||
+    quantity === undefined ||
+    quantity === null;
   const limit = fetchAll ? 'all' : Math.min(quantity, MAX_LISTING);
   if (fetchAll) {
     console.log(chalk.cyan(`   Fetching all tokens from ${ownerAddress}...`));
   }
 
-  let listing;
-  try {
-    listing = await source.listTokensByOwner(ownerAddress, { limit, duration });
-  } catch (error) {
-    console.log(chalk.yellow(`   Could not fetch tokens for ${ownerAddress}: ${error.message}`));
-    printAddressGuidance(source, suppressNotFoundGuidance);
-    return [];
-  }
+  // A failed owner lookup must not trigger the empty-wallet contract fallback.
+  const listing = await source.listTokensByOwner(ownerAddress, { limit, duration });
   if (listing.results.length === 0) {
     console.log(chalk.yellow(`   No tokens found for ${ownerAddress}`));
     reportSkips([], listing.skippedUnsupported);
@@ -177,14 +177,34 @@ async function queryTokensByAddress(
     return [];
   }
 
-  const selected = pickResults(listing.results, quantity);
+  const results = includeContracts
+    ? filterOwnedContracts(listing.results, includeContracts)
+    : listing.results;
+  if (results.length === 0) {
+    console.log(chalk.yellow(`   No owned tokens match includeContracts for ${ownerAddress}`));
+  }
+  const items = itemsOf(results);
+  const selected = typeof quantity === 'number' ? items.slice(0, quantity) : items;
   const tokenCountKey = `${ownerAddress}|${quantity ?? 'all'}|${duration ?? 'auto'}`;
   if (!printedTokenCountKeys.has(tokenCountKey)) {
     console.log(chalk.dim(`Got ${selected.length} token(s)`));
     printedTokenCountKeys.add(tokenCountKey);
   }
-  reportSkips(selected, listing.skippedUnsupported);
-  return itemsOf(selected);
+  reportSkips(results, listing.skippedUnsupported);
+  return selected;
+}
+
+/**
+ * filterOwnedContracts compares EVM addresses without case and preserves case
+ * for Tezos addresses, whose base58 encoding is case-sensitive.
+ * @param {Array<Object>} results - Listed tokens
+ * @param {string[]} includeContracts - Allowed contract addresses
+ * @returns {Array<Object>} Matching tokens in provider order
+ */
+function filterOwnedContracts(results, includeContracts) {
+  const normalize = (address) => (isLikelyEvmAddress(address) ? address.toLowerCase() : address);
+  const allowed = new Set(includeContracts.map(normalize));
+  return results.filter((result) => allowed.has(normalize(result.coordinate.contractAddress)));
 }
 
 /**
@@ -214,9 +234,10 @@ async function resolveCoordinates(coords, duration, source) {
  * @param {number|string} [quantity] - Count or "all"
  * @param {number} [duration] - Explicit display seconds
  * @param {Object} source - Active token source
+ * @param {string[]} [includeContracts] - Restrict the lookup to owned tokens on these contracts
  * @returns {Promise<Array<Object>>} DP-1 items
  */
-async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
+async function queryOwnerRequirement(ownerAddress, quantity, duration, source, includeContracts) {
   if (ownerAddress && (ownerAddress.endsWith('.eth') || ownerAddress.endsWith('.tez'))) {
     logger.verbose(chalk.cyan(`\nResolving domain ${ownerAddress}...`));
     const resolution = await domainResolver.resolveDomain(ownerAddress);
@@ -229,7 +250,13 @@ async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
       return [];
     }
     console.log(chalk.green(`${resolution.domain} → ${resolution.address}`));
-    return await queryTokensByAddress(resolution.address, quantity, duration, {}, source);
+    return await queryTokensByAddress(
+      resolution.address,
+      quantity,
+      duration,
+      { includeContracts },
+      source
+    );
   }
 
   const isEvmAddress = isLikelyEvmAddress(ownerAddress);
@@ -237,10 +264,10 @@ async function queryOwnerRequirement(ownerAddress, quantity, duration, source) {
     ownerAddress,
     quantity,
     duration,
-    { suppressNotFoundGuidance: isEvmAddress },
+    { suppressNotFoundGuidance: isEvmAddress, includeContracts },
     source
   );
-  if (ownerItems.length > 0 || !isEvmAddress) {
+  if (ownerItems.length > 0 || !isEvmAddress || includeContracts) {
     return ownerItems;
   }
 
@@ -355,7 +382,13 @@ async function queryRequirement(requirement, duration, source = getTokenSource()
   const { type, ownerAddress, playlistName, quantity, artworkId } = requirement;
 
   if (type === 'query_address') {
-    return await queryOwnerRequirement(ownerAddress, quantity, duration, source);
+    return await queryOwnerRequirement(
+      ownerAddress,
+      quantity,
+      duration,
+      source,
+      requirement.includeContracts
+    );
   }
 
   if (type === 'fetch_feed') {

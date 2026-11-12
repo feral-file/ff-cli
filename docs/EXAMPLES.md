@@ -18,7 +18,7 @@ npm run dev -- config validate
 
 ## Use with a coding agent
 
-ff-cli ships a [Claude Code](https://docs.claude.com/en/docs/claude-code) / Codex skill at `skills/ff-control/SKILL.md`. Once installed, ask your agent in plain language ("Get 3 works from reas.eth and play on Living Room", "Build a playlist from this Objkt URL and publish to my feed") and it translates the request into `ff-cli find` or `ff-cli build` and runs the validate → play/publish flow for you.
+ff-cli ships a [Claude Code](https://docs.claude.com/en/docs/claude-code) / Codex skill at `skills/ff-control/SKILL.md`. Once installed, ask your agent in plain language ("Get 3 works from reas.eth and display on Living Room", "Build a playlist from this Objkt URL and publish to my feed") and it translates the request into `ff-cli find` or `ff-cli build` and runs the validate → display/publish flow for you.
 
 Recommended local install path:
 
@@ -32,19 +32,19 @@ The rest of this doc shows the deterministic commands the skill (or you) drives 
 
 ## Find an artwork
 
-`ff-cli find` resolves a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist. Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses.
+`ff-cli find` resolves a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display. Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses.
 
 ```bash
-# Paste a URL and play it on your FF1
-npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+# Paste a URL and display it on your FF1
+npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --display
 
 # Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display
 
 # Feral File artwork (public id may be hex or numeric)
-npm run dev -- find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --play
+npm run dev -- find https://feralfile.com/exhibitions/artwork/f0240e04d64717e319584957f6a83954b029254ad1260b6320472ea8c0c5b1cf --display
 
-# Save without playing
+# Save without displaying
 npm run dev -- find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 -o send-receive.json
 
 # Single on-chain token by coordinates
@@ -53,7 +53,7 @@ npm run dev -- find ethereum:0xb932a70A57673d89f4acfFBE830E8ed7f75Fb9e0:52932 -o
 # Tezos token by coordinates
 npm run dev -- find tezos:KT1BcNnzWze3vCviwiETYNwcFSwjv6RihZEQ:22 -o tez-token.json
 
-# Wallet address (owner lookup); cap the number of tokens with --limit
+# Wallet address: find one work by the artist, or list holdings if no artist claims the address
 npm run dev -- find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
 
 # Limit a large series to the first N tokens
@@ -62,11 +62,11 @@ npm run dev -- find https://www.artblocks.io/collection/ringers-by-dmitri-cherni
 # Build and publish to a configured feed server
 npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --publish
 
-# Build, play on a named device, and skip interactive prompts
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play -d "Living Room Display" -y
+# Build, display on a named device, and skip interactive prompts
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display -d "Living Room Display" -y
 
-# -y alone also plays (the scripted default); add --no-play to build and save without casting
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -y --no-play
+# -y alone also displays (the scripted default); add --no-display to build and save without casting
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 -y --no-display
 ```
 
 OpenSea and Verse accept both item and collection/series URLs:
@@ -97,7 +97,7 @@ Each requirement has a `type`:
 
 - `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
-- `query_address` — `ownerAddress`, optional `quantity` (random selection)
+- `query_address` — `ownerAddress`, optional `quantity` (first matches in provider order), optional `includeContracts` (contract address allowlist applied before quantity)
 - `fetch_feed` — `playlistName`, `quantity`
 
 `playlistSettings` may set `title`, `durationPerItem`, `preserveOrder` (set `false` to shuffle), and `deviceName`.
@@ -158,7 +158,7 @@ cat > /tmp/wallet.json <<'JSON'
       "quantity": 5
     }
   ],
-  "playlistSettings": { "title": "From a wallet", "preserveOrder": false }
+  "playlistSettings": { "title": "From a wallet" }
 }
 JSON
 
@@ -278,14 +278,14 @@ has to be re-signed:
 ```bash
 ff-cli enrich playlist.json --assume-ethereum
 ff-cli sign playlist.json
-ff-cli play playlist.json -d "living room"
+ff-cli display playlist.json -d "living room"
 ```
 
 Casting does not care about the signing role. Add `-r curator` to that `sign` if the playlist is also
 going to a feed: `ff-cli publish` requires the owner role, for the reasons in
 [Publish to Feed Server](#publish-to-feed-server).
 
-## Validate / Sign / Play
+## Validate / Sign / Display
 
 ```bash
 # Validate playlist structure
@@ -298,27 +298,27 @@ npm run dev -- verify playlist.json
 # Sign playlist (uses key/role from config, or override via --key / --role)
 npm run dev -- sign playlist.json -o signed.json
 
-# Play on the configured default device
-npm run dev -- play playlist.json
+# Display on the configured default device
+npm run dev -- display playlist.json
 
-# Play on a specific named device
-npm run dev -- play signed.json -d "Living Room Display"
+# Display on a specific named device
+npm run dev -- display signed.json -d "Living Room Display"
 
-# Play a hosted DP-1 playlist
-npm run dev -- play "https://cdn.example.com/playlist.json"
+# Display a hosted DP-1 playlist
+npm run dev -- display "https://cdn.example.com/playlist.json"
 
-# Play a playlist straight from a DP-1 feed server (the URL the feed hands out)
+# Display a playlist straight from a DP-1 feed server (the URL the feed hands out)
 # Wallet-signed (eip191) documents need --skip-verify until #103 lands
-npm run dev -- play "https://feed.feralfile.com/api/v1/playlists/<slug>" --skip-verify
+npm run dev -- display "https://feed.feralfile.com/api/v1/playlists/<slug>" --skip-verify
 
-# Play a media URL directly
-npm run dev -- play "https://example.com/video.mp4"
+# Display a media URL directly
+npm run dev -- display "https://example.com/video.mp4"
 
 # Skip verification only if you must send a non-conformant payload (not recommended)
-npm run dev -- play playlist.json --skip-verify
+npm run dev -- display playlist.json --skip-verify
 ```
 
-> **No feed server is required to cast.** A device can play any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli play "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply playing your own playlists.
+> **No feed server is required to cast.** A device can display any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli display "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply displaying your own playlists.
 
 ## Publish to Feed Server
 
@@ -921,7 +921,7 @@ says so rather than sending you after a key that does not exist. That is the sta
 published without an owner-role signature is frozen in, and it is what the `publish` owner-role gate
 above exists to prevent.
 
-## Complete Flow (build → validate → sign → play → publish)
+## Complete Flow (build → validate → sign → display → publish)
 
 ```bash
 # 1. Build a playlist (via find or build)
@@ -937,8 +937,8 @@ npm run dev -- validate playlist.json
 #    what feeds enforce today.
 npm run dev -- sign playlist.json -r curator -o signed.json
 
-# 4. Play it on a device
-npm run dev -- play signed.json -d "Living Room Display"
+# 4. Display it on a device
+npm run dev -- display signed.json -d "Living Room Display"
 
 # 5. Publish to a feed server
 npm run dev -- publish signed.json -s 0
@@ -949,17 +949,17 @@ key declared in `curators[]`. Skip step 3 and use `playlist.json` in steps 4 and
 `signed.json` on that path:
 
 ```bash
-npm run dev -- play playlist.json -d "Living Room Display"
+npm run dev -- display playlist.json -d "Living Room Display"
 npm run dev -- publish playlist.json -s 0
 ```
 
 Set `playlist.curatorName` in the config to control the name recorded in `curators[]`; it defaults
 to `ff-cli`.
 
-`ff-cli find` can collapse build + play + publish into one command:
+`ff-cli find` can collapse build + display + publish into one command:
 
 ```bash
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play -d "Living Room Display" --publish
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display -d "Living Room Display" --publish
 ```
 
 ## FF1 device management

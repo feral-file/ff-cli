@@ -1,5 +1,6 @@
 import chalk from 'chalk';
 import { isPlaylistSourceUrl, loadPlaylistSource } from '../../utilities/playlist-source';
+import type { LoadedPlaylist } from '../../utilities/playlist-source';
 import type { Playlist } from '../../types';
 
 export interface PlaylistVerificationResult {
@@ -7,19 +8,6 @@ export interface PlaylistVerificationResult {
   error?: string;
   details?: Array<{ path: string; message: string }>;
   playlist?: Playlist;
-}
-
-/**
- * Print the standard "playlist saved" footer with the next-step hint.
- *
- * Used by `chat` and `build` after they write a playlist to disk, so the
- * surface message stays consistent across both commands.
- */
-export function displayPlaylistSummary(playlist: Playlist, outputPath: string) {
-  console.log(chalk.green('\nPlaylist saved'));
-  console.log(chalk.dim(`  Output: ./${outputPath}`));
-  console.log(chalk.dim('  Next: play last | publish playlist'));
-  console.log();
 }
 
 /**
@@ -46,12 +34,17 @@ export function printPlaylistSourceLoadFailure(source: string, error: Error): vo
 }
 
 /**
- * Print playlist validation failure details consistently for commands that
- * validate structure before sending (for example `play`).
+ * printPlaylistVerificationFailure prints validation failure details for commands that
+ * validate structure before sending (for example `display`).
+ *
+ * @param verifyResult - The failed verification result.
+ * @param source - Optional source label for the failure headline.
+ * @param unsignedSource - A structurally valid unsigned source with a configured signing key.
  */
 export function printPlaylistVerificationFailure(
   verifyResult: PlaylistVerificationResult,
-  source?: string
+  source?: string,
+  unsignedSource?: Pick<LoadedPlaylist, 'source' | 'sourceType'>
 ): void {
   console.error(
     chalk.red(`\nPlaylist validation failed:${source ? ` (${source})` : ''}`),
@@ -65,7 +58,31 @@ export function printPlaylistVerificationFailure(
     });
   }
 
-  console.log(chalk.yellow('\n   Use --skip-verify to play anyway (not recommended)\n'));
+  if (unsignedSource) {
+    console.log(chalk.yellow('\n   This playlist is unsigned. Use your configured signing key:'));
+    if (unsignedSource.sourceType === 'url') {
+      // sign reads local files only; signing a downloaded copy cannot change a hosted URL.
+      console.log(
+        chalk.yellow('     Save the hosted playlist to a local file, for example playlist.json.')
+      );
+      console.log(chalk.yellow('     ff-cli sign playlist.json'));
+      console.log(
+        chalk.yellow(
+          '     Then upload the signed file to the same URL, or display the signed local file.'
+        )
+      );
+    } else {
+      // Shells disagree on literal apostrophes. Label both forms rather than infer the caller's shell.
+      // Single quotes preserve metacharacters; -- keeps a leading dash out of option parsing.
+      const posixFile = `'${unsignedSource.source.replace(/'/g, "'\\''")}'`;
+      const powershellFile = `'${unsignedSource.source.replace(/'/g, "''")}'`;
+      console.log(chalk.yellow(`     POSIX shell: ff-cli sign -- ${posixFile}`));
+      console.log(chalk.yellow(`     PowerShell: ff-cli sign -- ${powershellFile}`));
+      console.log(chalk.yellow('     Then retry display with the signed file.'));
+    }
+  }
+
+  console.log(chalk.yellow('\n   Use --skip-verify to display anyway (not recommended)\n'));
 }
 
 /**

@@ -1,6 +1,6 @@
 # ff-cli Documentation
 
-ff-cli is a set of deterministic commands for building DP-1 (Display Protocol 1) playlists and playing them on an Art Computer. There's no built-in chat — natural language belongs in your coding agent (Claude Code, Codex), which drives ff-cli through the `ff-control` skill. No LLM API key required. This doc covers install, config, and day‑to‑day usage.
+ff-cli is a set of deterministic commands for building DP-1 (Display Protocol 1) playlists and displaying them on an Art Computer. There's no built-in chat — natural language belongs in your coding agent (Claude Code, Codex), which drives ff-cli through the `ff-control` skill. No LLM API key required. This doc covers install, config, and day‑to‑day usage.
 
 For project-level planning and future agentic work, see `./PROJECT_SPEC.md`.
 
@@ -37,7 +37,7 @@ Add `--force` to replace it anyway. See
 
 See the full configuration reference here: `./CONFIGURATION.md`.
 
-During setup, you can pick FF1 devices to add. Use `ff-cli device add` to add more devices later, and `ff-cli device list` to see what's configured. The first device is the default for `play` commands (override with `-d`).
+During setup, you can pick FF1 devices to add. Use `ff-cli device add` to add more devices later, and `ff-cli device list` to see what's configured. The first device is the default for `display` commands (override with `-d`).
 
 Manual config path:
 
@@ -55,7 +55,7 @@ ff-cli config validate
     "privateKey": "your_ed25519_private_key_hex_or_base64_here",
     "curatorName": "YOUR_CURATOR_NAME"
   },
-  "feed": { "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"] },
+  "feed": { "baseURLs": ["https://feed.feralfile.com/api/v1"] },
   "ff1Devices": {
     "devices": [
       {
@@ -77,8 +77,8 @@ See `./CONFIGURATION.md` for environment variable mappings.
 # Resolve a URL, on-chain coords, or wallet and build a playlist
 ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak -o playlist.json
 
-# Build and play it on your FF1 in one step
-ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
+# Build and display it on your FF1 in one step
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --display
 
 # Build from pre-structured params (JSON file or stdin)
 ff-cli build examples/params-example.json -o playlist.json
@@ -88,20 +88,20 @@ For development in this repo:
 
 ```bash
 npm run build
-node dist/index.js find https://objkt.com/tokens/hicetnunc/111068 --play
+node dist/index.js find https://objkt.com/tokens/hicetnunc/111068 --display
 ```
 
 If you're running from source without a build, use:
 
 ```bash
-npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --play
+npm run dev -- find https://objkt.com/tokens/hicetnunc/111068 --display
 ```
 
 ## Two ways to build a playlist
 
 ff-cli is deterministic: no chat, no model orchestration. There are two entry points for assembling a playlist.
 
-1. **`ff-cli find "<input>"`** — resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist. Add `--play` to build and play in one step. This is the fastest path for a single artwork, a collection/series, or a wallet.
+1. **`ff-cli find "<input>"`** — resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display. Add `--display` to build and display in one step. This is the fastest path for a single artwork, a collection/series, or a wallet.
 2. **`ff-cli build <params.json>`** — build from pre-structured `requirements` and `playlistSettings` (JSON file or stdin). Use this when you already have the contract, token IDs, feed names, or artwork ids and want explicit control over ordering, durations, and title.
 
 Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 envelope, and validate it. Validation rejects malformed data rather than passing it through. Natural language lives in your coding agent (Claude Code, Codex) via the `ff-control` skill, which translates a request into one of these two commands.
@@ -120,17 +120,18 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Signing **appends** by default, so repeated runs accumulate endorsements. That is only correct while the signed content is unchanged: editing a signed playlist moves bytes the earlier signatures cover, and the envelope check then refuses to write the result. `--replace-signatures` discards every existing entry — including a feed's own co-signature — and signs the document as it stands. It is the required step before `publish --replace`
   - **An in-place run refuses when it would discard a still-valid signature from another key**, since only its holder could make that signature again: write the result elsewhere with `-o, --output`, which leaves the original where it is. The refusal is about what cannot be recovered — an in-place run still proceeds when the only entries dropped are your own, or ones that no longer verify
   - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, and verifies it against the document as it now stands. Your own earlier signature is replaced by the same run. Another key's entry that **still verifies** — which is every entry when the content was not edited, since the signing payload excludes `signatures` — is reported as removed; keep the previous file if you want it back. An entry that does **not** verify is reported as exactly that and no more: the command has only the document as it stands, so it cannot tell an edit from an entry that was never valid, and it does not guess. Roles are carried through as found (`agent`, `institution` and `licensor` are as valid as `curator`), and a flat legacy `signature` is reported as not checkable, since it carries no key or role at all
-- `play <source>` – Play a playlist file, playlist URL, media URL, or web page on an FF1 device (runs `verify` before sending; only the CLI-synthesized media/web URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
-  - Any URL that does not load as a playlist is sent as a single item: a media file plays as media, and anything else plays as a web page
+- `display <source>` – Display a playlist file, playlist URL, media URL, or web page on an FF1 device (`play` still works for existing scripts; runs `verify` before sending; only the CLI-synthesized media/web URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
+  - Any URL that does not load as a playlist is sent as a single item: a media file displays as media, and anything else displays as a web page
   - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never cast as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
-  - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` plays the page itself instead
-  - Options: `-d, --device <name>`, `--web` (play the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
-- `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist
+  - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
+  - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
+  - When a structurally valid loaded playlist is unsigned (including `signatures: []`) and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. Local file commands are labeled separately for POSIX shells and PowerShell so apostrophes and shell metacharacters stay literal. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
+- `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
   - Verse forms: `/items/ethereum/{contract}/{tokenId}` and `/series/{slug}`
-  - Options: `-o, --output <path>`, `-l, --limit <n>`, `-p, --play`, `--no-play` (never cast; combine with `-y` to build and save without playing), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it plays the playlist on a device, so add `--no-play` to skip casting), `--skip-verify`
-  - A wallet address picks one work by the artist at that address. For what a wallet owns, use `build` with a `query_address` requirement
+  - Options: `-o, --output <path>`, `-l, --limit <n>`, `--display`, `--no-display` (never cast; combine with `-y` to build and save without displaying; `-p`, `--play` and `--no-play` still work for existing scripts), `-d, --device <name>`, `--publish`, `-s, --server <index>`, `-y, --yes` (skip prompts; without `-o` or `--publish` it displays the playlist on a device, so add `--no-display` to skip casting), `--skip-verify`
+  - A wallet address picks one work by the artist or lists holdings when Raster finds no artist. Use `build` with `query_address` to query holdings directly.
   - Without a terminal, pass `-y`: a question with no terminal to answer it fails with exit 1 and names the flag, rather than waiting or exiting 0 with nothing built
 - `enrich <file>` – Add missing artist, title, and thumbnail metadata to a playlist that already exists. Resolves each item by its `provenance.contract` and writes an inline Ref Manifest; `source`, `duration`, `title`, and `id` are never touched. Drops the signature when it changes anything, so re-sign afterwards. With the opt-in Raster token source no still image is supplied, so `enrich` adds artist and description but no thumbnail; thumbnails come from the default indexer source
   - DP-1 `evm` names a chain family rather than a network, so those items are skipped unless `--assume-ethereum` asserts which one they are. Getting that wrong attaches another artwork's metadata
@@ -142,15 +143,19 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `-s, --server <index>`, `-o, --output <file>`. There is no `--key`: a fetch is a plain read and signs nothing
 - `unpublish <id-or-url>` – Delete a playlist from a feed server. Accepts a playlist id, a slug, or a feed URL. Requires the signing key to be an owner of the stored playlist, and confirms before deleting
   - Options: `-s, --server <index>`, `-y, --yes` (skip the confirmation), `-k, --key <privateKey>` (signs the delete authorization), `--key-file <path>` (the same key, read from a file)
+- `report` – Send a problem report privately to Feral File support and print its reference, `Support [<id>]`. The text comes from `--message` or `--file`, or from stdin when neither is given
+  - Options: `--message <text>`, `--file <path>`, `--email <address>` (where support may reply: a bare ASCII address such as `name@example.com`, no display name or angle brackets), `-d, --device <name>` (adds the Art Computer's device ID, FF OS version and branch, and asks it to upload its logs under the same reference), `--dry-run` (print the JSON and send nothing)
+  - Exits 1 only when the report did not reach support. See [Report a problem to Feral File support](#report-a-problem-to-feral-file-support)
 - `ssh <enable|disable>` – Manage SSH access on an FF1 device
   - Options: `-d, --device <name>`, `--pubkey <path>`, `--ttl <duration>`
 - `device list` – List all configured FF1 devices
 - `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
-- `device pair [name]` – Pair ff-cli with an FF1: on FF OS with secure control, show a QR code that an owner scans with "Add controller" in the Feral File app, then enroll with the role the owner picked (needs internet; the FF1 must already have an owner); on FF OS without secure control, display a one-time code for "Pair with ff-cli" in the app and store the relayer access it sends
+- `device pair [name]` – Pair ff-cli with an FF1: on FF OS with secure control, show a QR code that an owner scans with "Add controller" in the Feral File app, then enroll with the role the owner picked (needs internet; the FF1 must already have an owner); on FF OS without secure control, display a one-time code for "Pair with ff-cli" in the app and store the relayer access it sends; an FF1 with secure control but no owner yet is not paired: set it up as owner in the app first
   - Options: `--label <label>`, `--timeout <seconds>` (10–600, default 300), `--resume` (finish a pairing an owner already approved), `-y, --yes` (move a corrupt controller file aside without asking), `--topic-handoff` (force the one-time-code path, e.g. when the FF1 is not on this LAN)
 - `device controllers [name]` – List an FF1's paired controllers, Play sites with a display grant, and pending requests (owner only)
 - `device revoke <controller-id> [name]` – Revoke a controller or deny its pending request (owner only)
+- `device lan --open|--close [name]` – Open or close LAN control: when open, anyone on the FF1's network can display art and read its status without pairing (owner only)
 - `device unpair [name]` – Revoke ff-cli's own access on the FF1 (best effort), then delete its controller keys (always asks first; `-y, --yes` skips)
 - `device rename <name> <new-name>` – Rename a configured FF1 device (host, API key, and default status are untouched)
 - `device remove <name>` – Remove a configured FF1 device
@@ -161,20 +166,19 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 
 ### Find an artwork
 
-`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or wallet address into a playable DP-1 playlist.
+`ff-cli find` resolves a URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display.
 
 ```bash
-# Paste a URL and play it on your FF1
-ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --play
+# Paste a URL and display it on your FF1
+ff-cli find https://www.artblocks.io/collection/ringers-by-dmitri-cherniak --display
 
 # Tezos / hic et nunc via Objkt (the alias resolves to a KT1 contract)
-ff-cli find https://objkt.com/tokens/hicetnunc/111068 --play
+ff-cli find https://objkt.com/tokens/hicetnunc/111068 --display
 
-# Save without playing
+# Save without displaying
 ff-cli find ethereum:0xababababab20053426ad1c782de9ea8444358070:5001410 -o send-receive.json
 
-# Wallet address: one work by the artist at that address; cap the number of tokens with --limit
-# (for what a wallet owns, use build with a query_address requirement)
+# Wallet address: find one work by the artist, or list holdings if no artist claims the address
 ff-cli find 0xaeE022552B539dB18297D7481b6D547C622488B3 -l 10 -o wallet.json
 
 # Build and publish to a configured feed server
@@ -194,7 +198,7 @@ cat params.json | ff-cli build -o playlist.json
 
 - `build_playlist` — `blockchain`, `contractAddress`, `tokenIds`, optional `quantity`. Omitting `tokenIds` asks for random tokens from the contract, which only the default indexer token source supports.
 - `feral_file_artwork` — `artworkId` (a Feral File public artwork id or `/exhibitions/artwork/{id}` URL)
-- `query_address` — `ownerAddress`, optional `quantity` (random selection)
+- `query_address` — `ownerAddress`, optional `quantity` (first matches in provider order), optional `includeContracts` (contract address allowlist applied before quantity)
 - `fetch_feed` — `playlistName`, `quantity`
 
 `playlistSettings` may set `title`, `durationPerItem`, `preserveOrder` (set `false` to shuffle), and `deviceName`. Feed playlists (for example `Unsupervised`, `Social Codes`) depend on your configured feed servers and network reachability; use exact or near-exact playlist titles for best results.
@@ -246,7 +250,7 @@ reported rather than guessed at, and items carrying an external `ref` are left
 alone because `ref` outranks an inline manifest at the device. The playlist is
 validated before and after; on failure the file is left untouched. Enriching
 changes the document, so the signature is removed and the playlist must be
-re-signed before playing:
+re-signed before displaying:
 
 ```bash
 ff-cli enrich playlist.json --assume-ethereum && ff-cli sign playlist.json
@@ -255,7 +259,7 @@ ff-cli enrich playlist.json --assume-ethereum && ff-cli sign playlist.json
 That role is fine for casting. Use `ff-cli sign playlist.json -r curator` if the enriched playlist is
 also going to a feed.
 
-### Validate, sign, and play
+### Validate, sign, and display
 
 ```bash
 # Optional explicit validation (build flows already validate)
@@ -264,30 +268,30 @@ npm run dev -- validate playlist.json
 # Sign (uses key and role from config, or overrides via --key / --role)
 npm run dev -- sign playlist.json -o signed.json
 
-# Play on configured default device (verifies playlists; only media URL fallbacks may be auto-signed)
-npm run dev -- play playlist.json
+# Display on configured default device (verifies playlists; only media URL fallbacks may be auto-signed)
+npm run dev -- display playlist.json
 
-# Play on a specific named device
-npm run dev -- play playlist.json -d "Living Room Display"
+# Display on a specific named device
+npm run dev -- display playlist.json -d "Living Room Display"
 
-# The play path performs a compatibility preflight check against the target FF1.
+# The display path performs a compatibility preflight check against the target FF1.
 # If the device reports an unsupported FF1 OS version, the command fails with
 # a clear version message before any cast request is sent.
 # It also retries transient local-network errors (for example intermittent
 # mDNS/Wi-Fi resolver failures) with a short backoff before returning a final error.
 
-# Play a hosted DP-1 playlist
-npm run dev -- play "https://cdn.example.com/playlist.json"
+# Display a hosted DP-1 playlist
+npm run dev -- display "https://cdn.example.com/playlist.json"
 
-# Play a media URL or any web page directly
-npm run dev -- play "https://example.com/video.mp4"
-npm run dev -- play "https://example.com/"
+# Display a media URL or any web page directly
+npm run dev -- display "https://example.com/video.mp4"
+npm run dev -- display "https://example.com/"
 
-# Play a page on a marketplace site as a page (play would otherwise send it to find)
-npm run dev -- play --web "https://feralfile.com/"
+# Display a page on a marketplace site as a page (display would otherwise send it to find)
+npm run dev -- display --web "https://feralfile.com/"
 
 # Skip signature verification only if you must send a non-conformant payload (not recommended)
-npm run dev -- play playlist.json --skip-verify
+npm run dev -- display playlist.json --skip-verify
 ```
 
 ### Owner remote maintenance
@@ -310,14 +314,48 @@ ff-cli ssh enable --pubkey ~/.ssh/id_ed25519.pub --ttl 30m -d "Living Room Displ
 # Disable SSH access
 ff-cli ssh disable -d "Living Room Display"
 
-# `ff-cli ssh` also performs the same FF1 OS compatibility preflight used by `play`.
+# `ff-cli ssh` also performs the same FF1 OS compatibility preflight used by `display`.
 ```
 
 On newer FF OS, a claimed FF1 only accepts `ff-cli ssh` from a paired CLI: run
 `ff-cli device pair "Living Room Display"` once (an owner scans the code with
-"Add controller" in the Feral File app) before `ff-cli ssh enable|disable`. Unclaimed devices and older
-FF OS do not require pairing. On FF OS with secure control, `ssh` needs the
-**owner** role; a controller grant gets "This command needs owner access".
+"Add controller" in the Feral File app) before `ff-cli ssh enable|disable`. FF OS without secure
+control does not require pairing. On FF OS with secure control, `ssh` needs the
+**owner** role; a controller grant gets "This command needs owner access". An
+FF1 with secure control but no owner yet refuses `ssh` too: set it up as owner
+in the Feral File app, then pair ff-cli with **Add controller**.
+
+### Report a problem to Feral File support
+
+```bash
+# Report what went wrong, with the Art Computer's logs
+ff-cli report -d "Living Room Display" --message "The work displays black on the Art Computer; in a desktop browser it renders."
+
+# From a file, with an address support can reply to
+ff-cli report --file report.txt --email you@example.com
+
+# Print exactly what would be sent, and send nothing
+ff-cli report -d "Living Room Display" --file report.txt --dry-run
+```
+
+The report goes privately to Feral File support, the same pipeline the app's
+Support & Feedback feeds, and ff-cli prints its reference in the app's form,
+`Support [<id>]`. It carries the report text, `--email` when given, and the
+ff-cli, OS and Node versions; nothing else leaves the computer. A report that
+contains the configured signing key is refused.
+
+With `-d`, the report also carries the Art Computer's device ID, FF OS version
+and branch from its `/api/status`, and once the report is in, ff-cli asks that
+Art Computer to upload its logs under the same reference, with a short-lived
+key that works for that one report only. When ff-cli is paired with the Art
+Computer under secure control, the request is a sealed envelope over the LAN,
+or through the relayer when the LAN cannot reach it; otherwise it is a plain
+LAN request. The Art Computer takes it at once and uploads in the background,
+so it needs internet. On FF OS with secure control the request needs the **owner** role;
+a controller grant gets "This command needs owner access". A log request the
+Art Computer does not take prints a line and leaves the exit status at 0: the
+report itself reached support. The exit status is 1 only when the report did
+not, and the message says what to do next.
 
 ### Publish to feed server
 
@@ -483,6 +521,7 @@ ff-cli device pair office
 ff-cli device pair office --resume        # finish a pairing an owner already approved
 ff-cli device controllers office          # owner only: who can control this FF1
 ff-cli device revoke <controller-id> office
+ff-cli device lan --close office          # owner only: no control from its Wi-Fi without pairing
 ff-cli device unpair office               # revoke this ff-cli on the FF1, delete its keys
 ```
 
@@ -492,9 +531,12 @@ an FF1's first owner. ff-cli accepts only an answer bound to the code it showed
 and to the configured FF1. If nobody answers before `--timeout`, the pairing is
 not completed; run it again for a new code (it keeps the same controller keys).
 FF1s without secure control pair with a one-time code instead ("Pair with
-ff-cli" in the app); `--topic-handoff` forces that path. After pairing, `play`, `ssh` and the version preflight are sent encrypted and
+ff-cli" in the app); `--topic-handoff` forces that path. On FF OS with LAN
+control, `display` and status work without pairing from the FF1's own network
+while its owner leaves LAN control open (`ff-cli device lan`); pair to control
+it from elsewhere or once LAN control is closed. After pairing, `display`, `ssh` and the version preflight are sent encrypted and
 signed; the FF1 decides what each controller may do. `owner` covers every
-command; `controller` covers playback and status but not `ssh` or controller
+command; `controller` covers displaying art and status but not `ssh` or controller
 management. Keys are stored in `~/.config/ff-cli/controllers/<device ID>.json`
 (mode 0600). See `./CONFIGURATION.md#secure-control-pairing` for the file,
 roles, and error messages.

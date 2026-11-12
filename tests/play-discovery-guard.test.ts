@@ -1,13 +1,13 @@
 /**
- * `play` guards against discovery inputs.
+ * `display` guards against discovery inputs.
  *
- * `play` casts an exact, already-playable source (playlist file, hosted
+ * `display` casts an exact, source it can send as it is (playlist file, hosted
  * playlist URL, or a direct media/web URL). A marketplace URL, on-chain
  * coordinates, or a wallet address must be resolved through the indexer
  * first — that is `find`'s job. describeDiscoveryInput returns a label for
- * those inputs (so `play` redirects to `find`) and null for everything `play`
+ * those inputs (so `display` redirects to `find`) and null for everything `display`
  * should handle itself. These pin that split so a future parser change can't
- * silently make `play` either swallow a collection URL or reject a real file.
+ * silently make `display` either swallow a collection URL or reject a real file.
  */
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
@@ -45,7 +45,7 @@ describe('describeDiscoveryInput — redirects discovery inputs to find', () => 
   test('a recognized-but-unsupported marketplace URL is still a discovery input', () => {
     // Legacy Art Blocks /projects/{id} and unsupported-chain OpenSea links
     // parse to `unsupported` — they must redirect to `find`, not get wrapped
-    // as a web page by `play`.
+    // as a web page by `display`.
     assert.equal(
       describeDiscoveryInput('https://www.artblocks.io/projects/123'),
       'a marketplace URL'
@@ -57,7 +57,7 @@ describe('describeDiscoveryInput — redirects discovery inputs to find', () => 
   });
 });
 
-describe('describeDiscoveryInput — leaves real play targets alone', () => {
+describe('describeDiscoveryInput — leaves real display targets alone', () => {
   test('a direct media URL is NOT a discovery input', () => {
     assert.equal(describeDiscoveryInput('https://example.com/video.mp4'), null);
   });

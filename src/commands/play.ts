@@ -12,25 +12,27 @@ import {
   type PlaySource,
 } from '../utilities/playlist-source';
 import { castPlaylist } from '../utilities/playlist-cast';
+import { validatePlaylist } from '../utilities/playlist-verifier';
 import {
   printPlaylistSourceLoadFailure,
   printPlaylistVerificationFailure,
 } from './helpers/playlist-display';
+import { hiddenAliasHelp } from './helpers/hidden-alias-help';
 
 /**
- * Human label for a discovery input that `play` cannot cast directly.
+ * Human label for a discovery input that `display` cannot cast directly.
  *
- * `play` casts an exact, already-playable source (a playlist file, a hosted
- * playlist URL, or a direct media/web URL). A marketplace URL, on-chain
+ * `display` casts an exact source it can send as it is (a playlist file, a
+ * hosted playlist URL, or a direct media/web URL). A marketplace URL, on-chain
  * coordinates, or a wallet address must be *resolved* through the indexer
- * first — that is `find`'s job. Returns a label for those inputs so `play`
+ * first — that is `find`'s job. Returns a label for those inputs so `display`
  * can redirect the user instead of silently wrapping, say, an Art Blocks
- * collection *page* as a web item. Returns null for anything `play` should
+ * collection *page* as a web item. Returns null for anything `display` should
  * handle itself (plain URLs and file paths parse to null here).
  *
  * A recognized-but-`unsupported` result (e.g. a legacy Art Blocks
  * `/projects/{id}` URL, or an unsupported-chain OpenSea link) is also a
- * discovery input — it's a marketplace URL, not a playable file — so it is
+ * discovery input — it's a marketplace URL, not a file it can send — so it is
  * redirected to `find` too, which surfaces the specific reason.
  */
 export function describeDiscoveryInput(source: string): string | null {
@@ -77,11 +79,11 @@ export function describeDiscoveryInput(source: string): string | null {
  * which wrongly redirected DP-1 feed playlist URLs
  * (https://feed.feralfile.com/api/v1/playlists/{slug}, exactly the URLs the
  * feed hands out) to `find`, which has no feed route either; the documented
- * "hosted playlist URL plays directly" contract was unreachable for them
+ * "hosted playlist URL displays directly" contract was unreachable for them
  * (found 2026-08-02 casting a published playlist to an FF1).
  *
  * Probing the document keeps both behaviors without a host allowlist: a URL
- * that serves DP-1 JSON (`dpVersion` marker) plays directly; a marketplace
+ * that serves DP-1 JSON (`dpVersion` marker) displays directly; a marketplace
  * *page* fails the probe (non-JSON, or JSON with no marker) and still
  * redirects to `find` instead of being wrapped as a web item. The probe
  * costs one fetch before a redirect, only for discovery inputs that are
@@ -89,7 +91,7 @@ export function describeDiscoveryInput(source: string): string | null {
  *
  * A URL that does not exist (404/410, no such host, a broken `.json` link)
  * is refused here rather than redirected: the redirect also suggests
- * `play --web`, which would cast the error page.
+ * `display --web`, which would cast the error page.
  *
  * @throws {Error} When the URL does not exist (refusalForLoadFailure)
  */
@@ -119,14 +121,14 @@ export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlayS
 }
 
 /**
- * resolveWebPageSource wraps `source` as a web page for `play --web`, without
+ * resolveWebPageSource wraps `source` as a web page for `display --web`, without
  * the discovery redirect or the playlist probe.
  *
  * `--web` exists because the discovery parser claims whole hosts: any page on
  * feralfile.com, opensea.io, objkt.com and the like is redirected to `find`,
  * and `find` rejects every page that is not an artwork it can resolve (a
  * homepage, an exhibition overview, a profile). Before `--web` there was no
- * way to put such a page on a wall; the two commands pointed at each other.
+ * way to put such a page on display; the two commands pointed at each other.
  *
  * @param {string} source - The URL the caller passed
  * @returns {Promise<PlaySource>} A `media` source with a `text/html` item
@@ -141,17 +143,29 @@ async function resolveWebPageSource(source: string): Promise<PlaySource> {
   return buildMediaPlaySource(url, { asWebPage: true, note });
 }
 
-export const playCommand = new Command('play')
-  .description('Play a playlist file, playlist URL, media URL, or web page on an FF1 device')
+/**
+ * displayCommand puts a playlist, media URL, or web page on an FF1.
+ *
+ * The verb for art is display, not play (B&F weekly 2026-11-03; Canon
+ * reference/naming-brand.md §3.4): people play games and video, they display
+ * art. `play` was this command's name, so it stays as an alias that existing
+ * scripts and agents keep calling; hiddenAliasHelp keeps it out of every help
+ * screen so help teaches only `display`. Do not drop the alias without a
+ * decision to break those callers.
+ */
+export const displayCommand = new Command('display')
+  .alias('play')
+  .configureHelp(hiddenAliasHelp)
+  .description('Display a playlist file, playlist URL, media URL, or web page on an FF1 device')
   .argument('<source>', 'Playlist file, playlist URL, or any media or web page URL')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
   .option(
     '--web',
-    'Play the URL as a web page, even on a marketplace site where play would otherwise send you to find'
+    'Display the URL as a web page, even on a marketplace site where display would otherwise send you to find'
   )
   .option(
     '--skip-verify',
-    'Skip signature verification and auto-sign gating before playing; use only when you accept malformed envelopes'
+    'Skip signature verification and auto-sign gating before displaying; use only when you accept malformed envelopes'
   )
   .action(
     async (source: string, options: { device?: string; skipVerify?: boolean; web?: boolean }) => {
@@ -172,14 +186,14 @@ export const playCommand = new Command('play')
   );
 
 /**
- * resolveDefaultSource resolves a `play` argument without `--web`: discovery
+ * resolveDefaultSource resolves a `display` argument without `--web`: discovery
  * inputs go to `find`, everything else loads as a playlist or wraps as media.
  *
- * `play` casts an exact playable source. A marketplace URL / on-chain coords /
+ * `display` casts an exact source as it is. A marketplace URL / on-chain coords /
  * wallet must be resolved through the indexer first, so it redirects to `find`
  * rather than silently wrapping the *page* as a web item. Exception: a
  * discovery-classified URL that actually serves a DP-1 playlist document (the
- * discovery parser claims whole hosts, catching feed playlist URLs) plays
+ * discovery parser claims whole hosts, catching feed playlist URLs) displays
  * directly; see probeDiscoveryUrlAsPlaylist. The redirect names `--web` too,
  * for the caller who did mean the page.
  *
@@ -195,16 +209,18 @@ async function resolveDefaultSource(source: string, device?: string): Promise<Pl
   }
   if (discovery && !probed) {
     console.error(
-      chalk.red('\n`play` casts an exact playlist or media URL — it does not search marketplaces.')
+      chalk.red(
+        '\n`display` casts an exact playlist or media URL — it does not search marketplaces.'
+      )
     );
     console.error(
       chalk.dim(`  "${source}" looks like ${discovery}, which needs to be resolved first.`)
     );
     const deviceFlag = device ? ` -d "${device}"` : '';
-    console.log(chalk.yellow(`\nTry:  ff-cli find "${source}" --play -y${deviceFlag}`));
+    console.log(chalk.yellow(`\nTry:  ff-cli find "${source}" --display -y${deviceFlag}`));
     if (isPlaylistSourceUrl(source)) {
       console.log(
-        chalk.dim(`To show the page itself:  ff-cli play --web "${source}"${deviceFlag}`)
+        chalk.dim(`To show the page itself:  ff-cli display --web "${source}"${deviceFlag}`)
       );
     }
     process.exit(1);
@@ -220,7 +236,7 @@ async function resolveDefaultSource(source: string, device?: string): Promise<Pl
  * a resolved source, then reports the outcome. Exits 1 on any failure.
  *
  * @param {PlaySource} resolved - What to cast
- * @param {Object} options - The `play` options
+ * @param {Object} options - The `display` options
  * @returns {Promise<void>}
  */
 async function castResolved(
@@ -232,7 +248,7 @@ async function castResolved(
     ? `${resolved.sourceType}: ${resolved.source}`
     : resolved.source;
 
-  console.log(chalk.blue('\nPlay on FF1\n'));
+  console.log(chalk.blue('\nDisplay on FF1\n'));
 
   if (resolved.kind === 'media' && resolved.note) {
     console.log(chalk.yellow(resolved.note));
@@ -261,12 +277,22 @@ async function castResolved(
     if (result.stage === 'verify') {
       printPlaylistVerificationFailure(
         { valid: false, error: result.error, details: result.details },
-        isPlaylistSource ? `source: ${sourceLabel}` : undefined
+        isPlaylistSource ? `source: ${sourceLabel}` : undefined,
+        // Missing signatures can return false or throw in dp1-js (including signatures: []).
+        // Check structure independently so neither error wording nor malformed input drives the hint.
+        isPlaylistSource &&
+          privateKey &&
+          (await validatePlaylist(resolved.playlist)).valid &&
+          !resolved.playlist.signature &&
+          (!Array.isArray(resolved.playlist.signatures) ||
+            resolved.playlist.signatures.length === 0)
+          ? resolved
+          : undefined
       );
     } else if (result.stage === 'sign') {
       console.error(chalk.red(`\n${result.error}`));
     } else {
-      console.error(chalk.red('\nPlay failed:'), result.error);
+      console.error(chalk.red('\nDisplay failed:'), result.error);
       if (result.deviceDetails) {
         console.error(chalk.dim(`  Details: ${result.deviceDetails}`));
       }
@@ -278,7 +304,7 @@ async function castResolved(
     console.log(chalk.green(result.signed ? '✓ Signed and verified\n' : '✓ Verified\n'));
   }
 
-  console.log(chalk.green('✓ Playing'));
+  console.log(chalk.green('✓ Displaying'));
   if (result.deviceName) {
     console.log(chalk.dim(`  Device: ${result.deviceName}`));
   }

@@ -4,7 +4,7 @@ import { generateKeyPairSync } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { after, before, describe, test } from 'node:test';
 
 const projectRoot = resolve(__dirname, '..');
@@ -51,7 +51,7 @@ function makePrivateKeyBase64(): string {
   return privateKey.export({ format: 'der', type: 'pkcs8' }).toString('base64');
 }
 
-describe('play delivery signing contract', () => {
+describe('display delivery signing contract', () => {
   let dir: string;
   let mediaServer: ReturnType<typeof createServer>;
   let mediaUrl: string;
@@ -108,11 +108,159 @@ describe('play delivery signing contract', () => {
     const playlistPath = join(dir, 'unsigned-playlist.json');
     writeFileSync(playlistPath, readFileSync(fixturePath, 'utf-8'), 'utf-8');
 
-    const result = await runCli(dir, ['play', playlistPath]);
+    const result = await runCli(dir, ['display', playlistPath]);
 
     assert.notEqual(result.status, 0);
     assert.match(result.stdout + result.stderr, /Playlist signature verification failed/i);
     assert.doesNotMatch(result.stdout + result.stderr, /Could not reach device/i);
+  });
+
+  test('points an unsigned local file at sign with the configured key and a quoted path', async () => {
+    const playlistPath = join(dir, "unsigned ' $playlist.json");
+    const original = readFileSync(fixturePath, 'utf-8');
+    writeFileSync(playlistPath, original, 'utf-8');
+
+    const result = await runCli(dir, ['display', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /This playlist is unsigned/);
+    assert.match(out, /configured signing key/);
+    const posixFile = `'${playlistPath.replace(/'/g, "'\\''")}'`;
+    const powershellFile = `'${playlistPath.replace(/'/g, "''")}'`;
+    assert.ok(out.includes(`POSIX shell: ff-cli sign -- ${posixFile}`), out);
+    assert.ok(out.includes(`PowerShell: ff-cli sign -- ${powershellFile}`), out);
+    assert.ok(out.indexOf('ff-cli sign') < out.indexOf('--skip-verify'), out);
+    assert.equal(readFileSync(playlistPath, 'utf-8'), original);
+
+    if (process.platform !== 'win32') {
+      // Parse the emitted argument with a real POSIX shell, preserving the quote and $ literally.
+      const parsed = spawnSync('/bin/sh', ['-c', `set -- ${posixFile}; printf '%s' "$1"`], {
+        encoding: 'utf-8',
+      });
+      assert.equal(parsed.status, 0, parsed.stderr);
+      assert.equal(parsed.stdout, playlistPath);
+    } else {
+      // Windows CI supplies pwsh; capture the recovery command's path without rewriting the file.
+      const parsed = spawnSync(
+        'pwsh',
+        [
+          '-NoLogo',
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          `function ff-cli { ConvertTo-Json -InputObject $args[-1] -Compress }; ff-cli sign -- ${powershellFile}`,
+        ],
+        { encoding: 'utf-8' }
+      );
+      assert.equal(parsed.status, 0, parsed.stderr || parsed.error?.message);
+      assert.equal(JSON.parse(parsed.stdout), playlistPath);
+    }
+
+    // The suggested argument separator must work with the real sign command.
+    const signed = await runCli(dir, ['sign', '--', playlistPath]);
+    assert.equal(signed.status, 0, signed.stdout + signed.stderr);
+  });
+
+  test('points an empty signatures array at signing after structure validation', async () => {
+    const playlistPath = join(dir, 'empty-signatures.json');
+    const playlist = { ...JSON.parse(readFileSync(fixturePath, 'utf-8')), signatures: [] };
+    const original = JSON.stringify(playlist);
+    writeFileSync(playlistPath, original);
+
+    const validated = await runCli(dir, ['validate', playlistPath]);
+    assert.equal(validated.status, 0, validated.stdout + validated.stderr);
+
+    const result = await runCli(dir, ['display', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /This playlist is unsigned/);
+    assert.ok(out.indexOf('ff-cli sign') < out.indexOf('--skip-verify'), out);
+    assert.equal(readFileSync(playlistPath, 'utf-8'), original);
+
+    const signed = await runCli(dir, ['sign', '--', playlistPath]);
+    assert.equal(signed.status, 0, signed.stdout + signed.stderr);
+    const verified = await runCli(dir, ['verify', playlistPath]);
+    assert.equal(verified.status, 0, verified.stdout + verified.stderr);
+  });
+
+  test('points an unsigned hosted playlist at saving and signing a local file', async () => {
+    const playlistServer = createServer((_req, res) => {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(readFileSync(fixturePath, 'utf-8'));
+    });
+    await new Promise<void>((resolvePromise) => playlistServer.listen(0, resolvePromise));
+    const address = playlistServer.address();
+    assert.ok(address && typeof address !== 'string');
+    const url = `http://127.0.0.1:${address.port}/playlist.json`;
+    try {
+      const result = await runCli(dir, ['display', url]);
+      const out = result.stdout + result.stderr;
+      assert.equal(result.status, 1, out);
+      assert.match(out, /Save the hosted playlist to a local file/);
+      assert.match(out, /ff-cli sign playlist.json/);
+      assert.match(out, /upload the signed file|display the signed local file/);
+      assert.doesNotMatch(out, /ff-cli sign[^\n]*http/);
+    } finally {
+      playlistServer.close();
+    }
+  });
+
+  test('does not label a structurally invalid or already signed playlist as unsigned', async () => {
+    for (const fixture of ['invalid-missing-title-v10.json', 'valid-signed-v11.json']) {
+      const playlist = JSON.parse(
+        readFileSync(join(__dirname, 'fixtures/playlists', fixture), 'utf-8')
+      );
+      if (fixture === 'valid-signed-v11.json') {
+        playlist.title = 'Tampered after signing';
+      } else {
+        playlist.signatures = [];
+      }
+      const playlistPath = join(dir, fixture);
+      writeFileSync(playlistPath, JSON.stringify(playlist));
+      const result = await runCli(dir, ['display', playlistPath]);
+      const out = result.stdout + result.stderr;
+      assert.equal(result.status, 1, out);
+      assert.doesNotMatch(out, /This playlist is unsigned|ff-cli sign/);
+    }
+  });
+
+  test('preserves the validation diagnosis for a null JSON playlist with a configured key', async () => {
+    const playlistPath = join(dir, 'null-playlist.json');
+    writeFileSync(playlistPath, 'null');
+
+    const result = await runCli(dir, ['display', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /Playlist validation failed/);
+    assert.doesNotMatch(out, /Cannot read properties|This playlist is unsigned|ff-cli sign/);
+  });
+
+  test('uses the resolved environment key for the hint, but ignores an unset template key', async () => {
+    const isolatedDir = mkdtempSync(join(tmpdir(), 'ff-cli-play-sign-hint-'));
+    try {
+      const playlistPath = join(isolatedDir, 'playlist.json');
+      writeFileSync(playlistPath, readFileSync(fixturePath, 'utf-8'));
+      writeFileSync(
+        join(isolatedDir, 'config.json'),
+        JSON.stringify({ playlist: { privateKey: 'YOUR_ED25519_PRIVATE_KEY' } })
+      );
+      const withKey = await runCli(isolatedDir, ['play', playlistPath], {
+        PLAYLIST_PRIVATE_KEY: privateKeyBase64,
+      });
+      assert.equal(withKey.status, 1);
+      assert.match(withKey.stdout + withKey.stderr, /configured signing key/);
+
+      const withoutKey = await runCli(isolatedDir, ['display', playlistPath], {
+        PLAYLIST_PRIVATE_KEY: '',
+      });
+      assert.equal(withoutKey.status, 1);
+      assert.doesNotMatch(
+        withoutKey.stdout + withoutKey.stderr,
+        /configured signing key|ff-cli sign/
+      );
+    } finally {
+      rmSync(isolatedDir, { recursive: true, force: true });
+    }
   });
 
   test('auto-signs the synthesized media fallback before delivery', async () => {
@@ -176,11 +324,11 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(dir, ['play', mediaUrl]);
+      const result = await runCli(dir, ['display', mediaUrl]);
 
       assert.equal(result.status, 0);
       assert.match(result.stdout + result.stderr, /Signed and verified/i);
-      assert.match(result.stdout + result.stderr, /Playing/i);
+      assert.match(result.stdout + result.stderr, /Displaying/);
       assert.ok(deliveredBody, 'expected device request body to be captured');
 
       const request = JSON.parse(deliveredBody) as {
@@ -257,7 +405,7 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(dir, ['play', mediaUrl]);
+      const result = await runCli(dir, ['display', mediaUrl]);
 
       assert.equal(result.status, 0);
       assert.ok(deliveredBody, 'expected device request body to be captured');
@@ -328,7 +476,7 @@ describe('play delivery signing contract', () => {
       );
 
       const envKey = makePrivateKeyBase64();
-      const result = await runCli(dir, ['play', mediaUrl], { PLAYLIST_PRIVATE_KEY: envKey });
+      const result = await runCli(dir, ['display', mediaUrl], { PLAYLIST_PRIVATE_KEY: envKey });
       const out = result.stdout + result.stderr;
 
       assert.equal(result.status, 0, out);
@@ -347,7 +495,7 @@ describe('play delivery signing contract', () => {
     }
   });
 
-  test('fails closed when media playback has no signing key', async () => {
+  test('fails closed when displaying media has no signing key', async () => {
     let deviceHits = 0;
     const deviceServer = createServer((_req, res) => {
       deviceHits += 1;
@@ -383,12 +531,12 @@ describe('play delivery signing contract', () => {
         'utf-8'
       );
 
-      const result = await runCli(isolatedDir, ['play', mediaUrl]);
+      const result = await runCli(isolatedDir, ['display', mediaUrl]);
 
       assert.notEqual(result.status, 0);
       assert.match(
         result.stdout + result.stderr,
-        /Cannot sign playlist for playback: no playlist signing key is configured/i
+        /Cannot sign playlist for display: no playlist signing key is configured/i
       );
       assert.equal(deviceHits, 0);
     } finally {

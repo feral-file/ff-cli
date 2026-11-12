@@ -17,6 +17,50 @@ import {
 } from './utilities/playlist-signing-role';
 import { configuredFF1Devices, isMissingConfigValue } from './utilities/config-placeholders';
 
+/**
+ * The feed server used when neither config.json nor FEED_BASE_URLS names one. It replaced
+ * dp1-feed-operator-api-prod.autonomy-system.workers.dev, a deleted worker whose zone belongs to
+ * an account being retired: a default must never name a host someone else could register.
+ * DEFAULT_FF1_RELAYER_URL below is in the same zone but still live; the ff-cli release after
+ * the legacy relayer shutdown turns it off (ffos-user docs/ff1-control-v1.md §15.4).
+ */
+const DEFAULT_FEED_BASE_URL = 'https://feed.feralfile.com/api/v1';
+
+/**
+ * The deleted worker ff-cli 3.0.0 named. Its `setup` and `config init` copied it into every
+ * config.json they wrote, and an explicit feed wins over the default, so a configured URL on
+ * this host is read as feed.feralfile.com (path kept) instead: same operator, same API.
+ */
+const RETIRED_FEED_HOST = 'dp1-feed-operator-api-prod.autonomy-system.workers.dev';
+const RETIRED_FEED_REPLACEMENT_ORIGIN = 'https://feed.feralfile.com';
+
+let retiredFeedNoted = false;
+
+/**
+ * replaceRetiredFeedUrl maps a feed URL on RETIRED_FEED_HOST to feed.feralfile.com, keeping its
+ * path, and notes it once per run on stderr (stdout may be a script's JSON). Any other URL,
+ * including an unparseable one, is returned unchanged.
+ */
+function replaceRetiredFeedUrl(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return url;
+  }
+  if (parsed.hostname.toLowerCase() !== RETIRED_FEED_HOST) {
+    return url;
+  }
+  const replaced = `${RETIRED_FEED_REPLACEMENT_ORIGIN}${parsed.pathname.replace(/\/$/, '')}${parsed.search}`;
+  if (!retiredFeedNoted) {
+    retiredFeedNoted = true;
+    console.error(
+      `Note: ${url} is a retired feed server; using ${replaced}. Update the feed in config.json or FEED_BASE_URLS to stop this note.`
+    );
+  }
+  return replaced;
+}
+
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
   const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
@@ -44,7 +88,7 @@ function loadConfig(): Config {
     feed: {
       baseURLs: process.env.FEED_BASE_URLS
         ? process.env.FEED_BASE_URLS.split(',')
-        : ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'],
+        : [DEFAULT_FEED_BASE_URL],
     },
   };
 
@@ -209,10 +253,13 @@ export function getFeedConfig(): {
 
   // Check for new feedServers format first
   if (config.feedServers && Array.isArray(config.feedServers) && config.feedServers.length > 0) {
-    const baseURLs = config.feedServers.map((server) => server.baseUrl);
+    const servers = config.feedServers.map((server) => ({
+      ...server,
+      baseUrl: replaceRetiredFeedUrl(server.baseUrl),
+    }));
     return {
-      baseURLs,
-      servers: config.feedServers,
+      baseURLs: servers.map((server) => server.baseUrl),
+      servers,
     };
   }
 
@@ -227,11 +274,11 @@ export function getFeedConfig(): {
     urls = [feedConfig.baseURL];
   } else {
     // Default feed URL
-    urls = ['https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1'];
+    urls = [DEFAULT_FEED_BASE_URL];
   }
 
   return {
-    baseURLs: urls,
+    baseURLs: urls.map(replaceRetiredFeedUrl),
   };
 }
 
@@ -328,6 +375,52 @@ function resolveFF1RelayerConfig(config: Config): FF1RelayerSettings {
     ...(v2.endpoint ? { v2Endpoint: v2.endpoint } : {}),
     ...(v2.endpoint && v2.explicit ? { v2Explicit: true } : {}),
   };
+}
+
+const DEFAULT_SUPPORT_LOGS_URL = 'https://support-logs.feralfile.com';
+
+/**
+ * getSupportLogsConfig returns the support-logs origin `ff-cli report` posts to.
+ *
+ * `config.json` (`supportLogs.baseUrl`) wins over FF_SUPPORT_LOGS_URL, which
+ * wins over the production default, the same order as `ff1Relayer.baseUrl`.
+ * The override is for tests and staging. It does not move the Art Computer's
+ * log upload: FF OS posts its logs to the support-logs its firmware names.
+ */
+export function getSupportLogsConfig(): { baseUrl: string } {
+  return resolveSupportLogsConfig(getConfig());
+}
+
+/** Resolve and validate the effective support-logs configuration. */
+function resolveSupportLogsConfig(config: Config): { baseUrl: string } {
+  const configured = config.supportLogs as unknown;
+  if (
+    configured !== undefined &&
+    (configured === null || typeof configured !== 'object' || Array.isArray(configured))
+  ) {
+    throw new Error('supportLogs must be an object');
+  }
+  const baseUrl = (configured as { baseUrl?: unknown } | undefined)?.baseUrl;
+  if (baseUrl !== undefined && typeof baseUrl !== 'string') {
+    throw new Error('supportLogs.baseUrl must be a string');
+  }
+  const value = (
+    (baseUrl as string | undefined) ||
+    process.env.FF_SUPPORT_LOGS_URL ||
+    DEFAULT_SUPPORT_LOGS_URL
+  )
+    .trim()
+    .replace(/\/+$/, '');
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    throw new Error('supportLogs.baseUrl must be a valid HTTP(S) URL');
+  }
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('supportLogs.baseUrl must be a valid HTTP(S) URL');
+  }
+  return { baseUrl: value };
 }
 
 const TOKEN_SOURCES: readonly TokenSourceName[] = ['raster', 'indexer'];
@@ -573,6 +666,12 @@ export function validateConfig(): ValidationResult {
 
     try {
       resolveTokenSourceConfig(config);
+    } catch (error) {
+      errors.push((error as Error).message);
+    }
+
+    try {
+      resolveSupportLogsConfig(config);
     } catch (error) {
       errors.push((error as Error).message);
     }

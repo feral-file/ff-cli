@@ -32,6 +32,8 @@ const PUBLIC_CONTROL_CODES = new Set([
   'enrollment_required',
   'envelope_required',
   'locked',
+  // The hub refuses a caller that is not on the FF1's own network (#3551).
+  'lan_only',
 ]);
 
 interface SendPlaylistParams {
@@ -487,7 +489,7 @@ async function sendPlaylistSecurely(
  * @param body - Response text
  * @returns The code, or undefined
  */
-function publicControlCode(status: number, body: string): string | undefined {
+export function publicControlCode(status: number, body: string): string | undefined {
   if (status !== 401 && status !== 403) {
     return undefined;
   }

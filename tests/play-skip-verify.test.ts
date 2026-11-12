@@ -25,7 +25,7 @@ function runCli(
   return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
 
-describe('play --skip-verify', () => {
+describe('display --skip-verify', () => {
   test('bypasses playlist verification and still reaches delivery', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'ff-cli-play-skip-'));
     try {
@@ -62,11 +62,11 @@ describe('play --skip-verify', () => {
         'utf-8'
       );
 
-      const result = runCli(dir, ['play', playlistPath, '--skip-verify']);
+      const result = runCli(dir, ['display', playlistPath, '--skip-verify']);
 
       assert.notEqual(result.status, 0);
       assert.doesNotMatch(result.stdout + result.stderr, /Playlist validation failed/i);
-      assert.match(result.stdout + result.stderr, /Play failed|Could not reach device/i);
+      assert.match(result.stdout + result.stderr, /Display failed|Could not reach device/i);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

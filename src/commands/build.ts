@@ -15,7 +15,7 @@ Params (JSON file, or piped on stdin):
   {"requirements": [ ...one or more... ], "playlistSettings": { ... }}
 
 Requirement types:
-  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all").
+  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all") and includeContracts (array of contract addresses).
                       {"type":"query_address","ownerAddress":"0x…","quantity":5}
   build_playlist      Tokens from a contract. blockchain ("ethereum" or "tezos"), contractAddress, tokenIds.
                       {"type":"build_playlist","blockchain":"ethereum","contractAddress":"0x…","tokenIds":["1","2"]}
@@ -25,7 +25,7 @@ Requirement types:
 
 playlistSettings (all optional):
   title, durationPerItem (seconds), preserveOrder (default true; false shuffles),
-  deviceName (play on that FF1 after building)
+  deviceName (display on that FF1 after building)
 
 Exit status: 1 when a requirement finds nothing or fails, when named tokenIds
 do not all resolve, or when the send to deviceName fails. The playlist is still

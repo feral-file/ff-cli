@@ -15,7 +15,7 @@ It is derived from the behavior and interfaces implemented in this repository as
 - Project: `ff-cli`
 - Type: Node.js CLI
 - System role: a control and integration surface for FF1 and DP-1 workflows
-- Primary purpose: turn resolved sources or structured parameters into valid DP-1 playlists deterministically, then validate them and optionally sign, publish, and play them through FF1 and feed paths
+- Primary purpose: turn resolved sources or structured parameters into valid DP-1 playlists deterministically, then validate them and optionally sign, publish, and display them through FF1 and feed paths
 
 There is no built-in natural-language interface and no model orchestration. Natural language belongs in the user's coding agent (Claude Code, Codex), which drives ff-cli's deterministic commands via the `ff-control` skill. ff-cli requires no LLM API key.
 
@@ -25,11 +25,11 @@ In the Feral File architecture bands, `ff-cli` sits primarily in the presentatio
 
 The CLI supports the broader Feral File goal of making it effortless to live with digital art every day.
 
-Its value is reducing friction in the publish-to-play path:
+Its value is reducing friction in the publish-to-display path:
 
 - assemble playlists quickly
 - keep outputs DP-1 conformant
-- make FF1 playback and feed publishing easier to exercise
+- make displaying on FF1 and feed publishing easier to exercise
 - provide deterministic tooling that agents and scripts can drive reliably
 
 The CLI should strengthen the Gold Path, not invent a parallel product model.
@@ -39,7 +39,7 @@ The CLI should strengthen the Gold Path, not invent a parallel product model.
 Current likely users:
 
 - internal engineers working on FF1, DP-1, feed, and device flows
-- operators and launch teammates validating publish-to-play behavior
+- operators and launch teammates validating publish-to-display behavior
 - advanced users or partners building and testing playlists
 - developers using the CLI as a reference implementation for DP-1 and FF1 command flows
 
@@ -50,7 +50,7 @@ Primary use cases:
 - validate or verify a local or hosted DP-1 playlist
 - sign a playlist with an Ed25519 key
 - publish a validated playlist to a configured feed server
-- play a playlist or direct media URL on a configured FF1 device
+- display a playlist or direct media URL on a configured FF1 device
 - manage local config and FF1 SSH access
 - exercise compatibility checks against FF1 OS versions before risky commands
 
@@ -73,11 +73,11 @@ Use these terms consistently:
 
 The current code and internal context imply these practical goals:
 
-- Make playlist creation and playback testing fast enough for daily use.
+- Make playlist creation and display testing fast enough for daily use.
 - Keep the path from intent to valid DP-1 output deterministic and inspectable.
 - Preserve openness by relying on DP-1 as the compatibility layer instead of a CLI-specific format.
-- Support FF1 as the reference playback target without making correctness depend on proprietary-only infrastructure.
-- Serve as a reference surface for publish, verify, and play flows used elsewhere in the Feral File stack.
+- Support FF1 as the reference display target without making correctness depend on proprietary-only infrastructure.
+- Serve as a reference surface for publish, verify, and display flows used elsewhere in the Feral File stack.
 
 ### Current behavior
 
@@ -103,13 +103,13 @@ Based on the code today, the CLI is responsible for:
 
 - loading configuration from `config.json`, `.env`, and defaults, with `config.json` taking precedence
 - resolving marketplace URLs, on-chain coordinates, and wallet addresses into playlists (`find`)
-- running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and playback
+- running feed fetches, address queries, contract-based NFT queries, domain resolution, playlist building, verification, publishing, and display
 - supporting a deterministic build path from structured JSON (`build`)
 - building DP-1 playlist envelopes from NFT metadata or direct media URLs via `dp1-js` document and leaf builders (so constructed playlists stay schema-conformant), including inline Ref Manifests on items that carry token-source metadata
 - validating and verifying playlist structure and signatures
 - signing playlists when a private key is configured
 - publishing validated playlists to configured feed servers
-- discovering configured FF1 devices and sending playlists or direct media playback requests
+- discovering configured FF1 devices and sending playlists or direct media display requests
 - pairing as an FF1 controller through owner-initiated registration: the CLI
   shows a QR of its public keys and a one-time secret, an owner adds it in the
   Feral File app, and the CLI pins the FF1 profile only from the owner's sealed
@@ -187,7 +187,7 @@ substituted for a chain the row already named.
 
 ### Delivery
 
-- `play` (handles playlist files, playlist URLs, and media URLs)
+- `display` (handles playlist files, playlist URLs, and media URLs; `play` is a hidden alias kept for existing scripts and agents)
 - `fetch`
 - `publish` (`--replace` sends an owner-bound replacement instead of a create)
 - `unpublish`
@@ -257,6 +257,13 @@ replacement.
 ### Device operations
 
 - `ssh enable|disable`
+
+### Support
+
+- `report` (posts a problem report to Feral File's support-logs, which mints the `Support [<id>]`
+  reference and a token scoped to that one report; with `-d`, the Art Computer is then asked to upload
+  its logs under the same reference with its existing `uploadLogs` command. ff-cli holds no support
+  credential, since a key in a public package is public)
 
 ### Inline Ref Manifests
 
@@ -423,7 +430,7 @@ and nothing else. `enrich` is the repair path for those.
 - The playlist is validated before lookup and the enriched candidate is
   validated before writing. On either failure the diagnostics are printed and
   the file is left untouched, rather than replaced with a document that sign,
-  publish, and play would each reject later.
+  publish, and display would each reject later.
 
 ## Deterministic-first behavior
 
@@ -500,16 +507,16 @@ Important constraints from the broader FF system:
 ### Current behavior
 
 - reliability matters more than novelty
-- the publish-to-play path should stay simple and testable
-- the CLI should help prove the path from canonical JSON to FF1 playback
+- the publish-to-display path should stay simple and testable
+- the CLI should help prove the path from canonical JSON to FF1 display
 - compatibility checks fail clearly when incompatibility is confirmed
 - if FF1 OS version cannot be determined during preflight, the CLI currently proceeds and logs a warning instead of hard-blocking the command
 
 ### Design direction
 
 - reliability matters more than novelty
-- the publish-to-play path should stay simple and testable
-- the CLI should help prove the path from canonical JSON to FF1 playback
+- the publish-to-display path should stay simple and testable
+- the CLI should help prove the path from canonical JSON to FF1 display
 - compatibility messaging should remain explicit enough that operators can distinguish confirmed incompatibility from uncertain device state
 
 ## Code and design constraints

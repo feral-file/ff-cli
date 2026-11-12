@@ -70,6 +70,64 @@ function fakeSource(
 const EVM_ADDRESS = '0xaeE022552B539dB18297D7481b6D547C622488B3';
 
 describe('queryRequirement owner-to-contract fallback', () => {
+  test('filters owned tokens by contract before applying quantity', async () => {
+    const { source } = fakeSource('indexer', { canListContracts: true });
+    source.listTokensByOwner = async (_address, opts) => {
+      assert.equal(opts.limit, 'all');
+      return {
+        results: ['1', '2', '3'].map((tokenId) =>
+          resolved({
+            chain: 'ethereum',
+            contractAddress: tokenId === '1' ? '0xother' : EVM_ADDRESS,
+            tokenId,
+          })
+        ),
+        skippedUnsupported: 0,
+      };
+    };
+    const items = await utilities.queryRequirement(
+      {
+        type: 'query_address',
+        ownerAddress: EVM_ADDRESS,
+        quantity: 1,
+        includeContracts: [EVM_ADDRESS.toLowerCase()],
+      },
+      undefined,
+      source
+    );
+    assert.deepEqual(
+      items.map((item: { id: string }) => item.id),
+      ['item-2']
+    );
+  });
+
+  test('a contract allowlist with no matches never lists unowned tokens', async () => {
+    const { source, calls } = fakeSource('indexer', { canListContracts: true });
+    const items = await utilities.queryRequirement(
+      { type: 'query_address', ownerAddress: EVM_ADDRESS, includeContracts: [EVM_ADDRESS] },
+      undefined,
+      source
+    );
+    assert.deepEqual(items, []);
+    assert.deepEqual(calls.contract, []);
+  });
+
+  test('a failed owner listing never falls back to listing unowned tokens', async () => {
+    const { source, calls } = fakeSource('indexer', { canListContracts: true });
+    source.listTokensByOwner = async () => {
+      throw new Error('Owner listing unavailable');
+    };
+    await assert.rejects(
+      utilities.queryRequirement(
+        { type: 'query_address', ownerAddress: EVM_ADDRESS },
+        undefined,
+        source
+      ),
+      /Owner listing unavailable/
+    );
+    assert.deepEqual(calls.contract, []);
+  });
+
   test('falls back to a contract listing for EVM addresses with no owned tokens', async () => {
     const { source, calls } = fakeSource('indexer', { canListContracts: true });
     const items = await utilities.queryRequirement(

@@ -328,7 +328,7 @@ async function syncDirectory(directory: string, filesystem: AtomicWriteFs): Prom
  *
  * Enrichment refuses to work on a document DP-1 rejects, and refuses to write
  * one. Writing an invalid playlist would replace the operator's file with
- * something sign, publish, and play all reject later, having reported success.
+ * something sign, publish, and display all reject later, having reported success.
  */
 function reportInvalid(
   stage: string,
@@ -495,7 +495,7 @@ export const enrichCommand = new Command('enrich')
       // fails at the device, which is the worst place to discover it.
       if (result.signatureInvalidated) {
         console.log(chalk.yellow('\n  Signature removed — the document changed.'));
-        console.log(chalk.dim(`  Re-sign before playing: ff-cli sign ${destination}`));
+        console.log(chalk.dim(`  Re-sign before displaying: ff-cli sign ${destination}`));
       }
       console.log();
     } catch (error) {

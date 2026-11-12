@@ -163,7 +163,7 @@ export async function loadPlaylistSource(source: string): Promise<LoadedPlaylist
 }
 
 /**
- * Resolved source for the `play` command.
+ * Resolved source for the `display` command.
  *
  * `playlist` — the source loaded as a DP-1 playlist (a local file or a
  *   hosted playlist URL).
@@ -186,14 +186,14 @@ export type PlaySource =
       source: string;
       /**
        * Set when ff-cli could not read the URL itself and is sending it
-       * anyway, so the caller can say so instead of reporting a clean play.
+       * anyway, so the caller can say so instead of reporting a clean display.
        */
       note?: string;
     };
 
 /**
  * buildMediaPlaySource wraps a URL in a synthesized single-item playlist, the
- * shape `play` sends for a direct media file or web page.
+ * shape `display` sends for a direct media file or web page.
  *
  * @param {string} url - Trimmed http(s) URL
  * @param {Object} [options] - Item options
@@ -230,11 +230,11 @@ function looksLikePlaylistUrl(url: string): boolean {
 }
 
 /**
- * refusalForLoadFailure returns the error `play` must stop with when a URL it
+ * refusalForLoadFailure returns the error `display` must stop with when a URL it
  * tried to load is known not to exist, or null when it may still be sent.
  *
  * Wrapping a URL that does not exist sends the device an error page and
- * reports "Playing", the silent wrong result an agent trusting exit codes
+ * reports "Displaying", the silent wrong result an agent trusting exit codes
  * cannot catch. These are refused:
  * - HTTP 404 or 410: nothing is there.
  * - DNS failure (ENOTFOUND): the host does not exist. A temporary resolver
@@ -267,7 +267,7 @@ export function refusalForLoadFailure(url: string, failure: unknown): Error | nu
 }
 
 /**
- * noteForLoadFailure returns the line `play` prints when it sends a URL it
+ * noteForLoadFailure returns the line `display` prints when it sends a URL it
  * could not read itself, or undefined when the URL was read in full and is
  * simply not a playlist (an ordinary page or media file).
  *
@@ -283,11 +283,11 @@ function noteForLoadFailure(failure: unknown): string | undefined {
 }
 
 /**
- * checkWebPageUrl fetches a URL that `play --web` is about to send, refusing
+ * checkWebPageUrl fetches a URL that `display --web` is about to send, refusing
  * one that does not exist and returning a note when it could not be read.
  *
  * `--web` skips the playlist probe, so without this check a typo or a dead
- * link handed to `--web` (the hint `play` prints for marketplace pages) would
+ * link handed to `--web` (the hint `display` prints for marketplace pages) would
  * be cast as an error page with a successful exit. Only the status line is
  * needed; the body is cancelled unread. The `.json` rule does not apply: the
  * caller said this is a page.
@@ -321,7 +321,7 @@ export async function checkWebPageUrl(url: string): Promise<string | undefined> 
 }
 
 /**
- * Resolve a `play` command argument to a playable source.
+ * Resolve a `display` command argument to a source it can send.
  *
  * Files are always treated as playlists. URLs are tried as playlists first;
  * a URL whose body is not a playlist (an ordinary web page, a video, an

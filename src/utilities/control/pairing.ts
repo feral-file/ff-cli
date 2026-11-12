@@ -117,12 +117,73 @@ export function chooseControllerKeys(
 export const CONTROL_PROBE_TIMEOUT_MS = 5_000;
 
 /**
+ * CONTROL_PROBE_NAME_TIMEOUT_MS bounds the read by a `.local` name. macOS answers such a lookup
+ * after about 5 s, the whole of CONTROL_PROBE_TIMEOUT_MS, so the name gets room for the lookup.
+ */
+export const CONTROL_PROBE_NAME_TIMEOUT_MS = 12_000;
+
+/**
+ * lanReadTimeoutMs is the deadline for one LAN read of host: a `.local` name gets room for the
+ * macOS lookup (CONTROL_PROBE_NAME_TIMEOUT_MS), anything else shortMs.
+ *
+ * @param host - Device base URL, e.g. http://ff1-abcd1234.local:1111
+ * @param shortMs - Deadline for an address or a unicast name
+ * @returns Milliseconds
+ */
+export function lanReadTimeoutMs(host: string, shortMs: number = CONTROL_PROBE_TIMEOUT_MS): number {
+  try {
+    return new URL(host).hostname.toLowerCase().endsWith('.local')
+      ? CONTROL_PROBE_NAME_TIMEOUT_MS
+      : shortMs;
+  } catch {
+    return shortMs;
+  }
+}
+
+/**
+ * probeBases lists where to read the status: for a `.local` host, an address discovery
+ * recorded comes first (no name lookup; IPv4 preferred, since a first-listed IPv6 entry may be
+ * link-local or unreachable), then the name itself.
+ *
+ * Trade-off: unlike the name, which carries the device ID, a stale address may now belong to
+ * another FF1 in the same home, whose answer then picks the UI. That is a wrong prompt, never
+ * a grant: the status only chooses which pairing to offer, and both paths verify the device.
+ * The read carries the configured API key, so such a device would see it, as one answering on
+ * a reused name would.
+ * Worst case before the code shows: CONTROL_PROBE_TIMEOUT_MS + CONTROL_PROBE_NAME_TIMEOUT_MS.
+ */
+function probeBases(device: FF1Device): Array<{ base: string; byName: boolean }> {
+  let url: URL | null = null;
+  try {
+    url = new URL(device.host);
+  } catch {
+    url = null;
+  }
+  const byName = url !== null && url.hostname.toLowerCase().endsWith('.local');
+  const bases: Array<{ base: string; byName: boolean }> = [];
+  const recorded = byName ? (device.addresses ?? []).filter((value) => value.trim() !== '') : [];
+  const address = recorded.find((value) => !value.includes(':')) ?? recorded[0];
+  if (url && address) {
+    const host = address.includes(':') ? `[${address}]` : address;
+    bases.push({
+      base: `${url.protocol}//${host}${url.port ? `:${url.port}` : ''}`,
+      byName: false,
+    });
+  }
+  bases.push({ base: device.host, byName });
+  return bases;
+}
+
+/**
  * ControlSupport is what the FF1's LAN status says about pairing: `secure`
  * (the control protocol with an owner: owner-initiated registration),
- * `plaintext` (no `control` block, or `control.state` legacy: no owner, so
- * plaintext is accepted and the legacy topic handoff applies), or `unknown`.
+ * `plaintext` (no `control` block: FF OS without secure control, where the
+ * legacy topic handoff applies), `unowned` (`control.state` legacy: secure
+ * control with no owner yet; nothing can pair until someone sets it up as
+ * owner in the app, and the topic handoff is not offered because the relayer
+ * topic is inert on that firmware, #3551), or `unknown`.
  */
-export type ControlSupport = 'secure' | 'plaintext' | 'unknown';
+export type ControlSupport = 'secure' | 'plaintext' | 'unowned' | 'unknown';
 
 /**
  * probeControlSupport reads `getDeviceStatus` in plaintext over the LAN
@@ -131,14 +192,40 @@ export type ControlSupport = 'secure' | 'plaintext' | 'unknown';
  * secure. The answer is unauthenticated and only picks the pairing UI; no
  * profile is ever taken from it.
  *
- * @param device - Device with host and optional API key
- * @param fetchFn - Fetch (tests); defaults to a short deadline
+ * A `.local` host is read at the address discovery recorded first, then by
+ * name (see probeBases); the first read that is not `unknown` decides.
+ *
+ * @param device - Device with host, optional addresses and API key
+ * @param fetchFn - Fetch (tests); defaults to a per-read deadline
  * @returns The pairing path the status points to
  */
 export async function probeControlSupport(
   device: FF1Device,
-  fetchFn: typeof fetch = (input, init) =>
-    fetchWithTimeout(input, init ?? {}, CONTROL_PROBE_TIMEOUT_MS)
+  fetchFn?: typeof fetch
+): Promise<ControlSupport> {
+  let support: ControlSupport = 'unknown';
+  for (const { base, byName } of probeBases(device)) {
+    const fetchAt: typeof fetch =
+      fetchFn ??
+      ((input, init) =>
+        fetchWithTimeout(
+          input,
+          init ?? {},
+          byName ? lanReadTimeoutMs(base) : CONTROL_PROBE_TIMEOUT_MS
+        ));
+    support = await probeControlSupportAt(device, base, fetchAt);
+    if (support !== 'unknown') {
+      return support;
+    }
+  }
+  return support;
+}
+
+/** probeControlSupportAt is one status read at base (see probeControlSupport). */
+async function probeControlSupportAt(
+  device: FF1Device,
+  base: string,
+  fetchFn: typeof fetch
 ): Promise<ControlSupport> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (device.apiKey) {
@@ -147,7 +234,7 @@ export async function probeControlSupport(
   let body: unknown;
   let ok: boolean;
   try {
-    const response = await fetchFn(`${device.host}/api/cast`, {
+    const response = await fetchFn(`${base}/api/cast`, {
       method: 'POST',
       headers,
       body: JSON.stringify({ command: 'getDeviceStatus', request: {} }),
@@ -175,9 +262,7 @@ export async function probeControlSupport(
   if (status.control === undefined) {
     return 'plaintext';
   }
-  return isPlainObject(status.control) && status.control.state === 'legacy'
-    ? 'plaintext'
-    : 'secure';
+  return isPlainObject(status.control) && status.control.state === 'legacy' ? 'unowned' : 'secure';
 }
 
 /**

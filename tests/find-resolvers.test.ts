@@ -555,7 +555,7 @@ describe('resolveNeortArt', () => {
     );
   });
 
-  test('art with no playable asset at all → throws', async () => {
+  test('art with no displayable asset at all → throws', async () => {
     const mock = mockFetchByUrl([
       {
         match: 'api.neort.io',
@@ -574,7 +574,7 @@ describe('resolveNeortArt', () => {
     ]);
     await assert.rejects(
       () => withMockedFetch(mock, () => resolveNeortArt('broken123')),
-      /no playable asset/
+      /no displayable asset/
     );
   });
 });

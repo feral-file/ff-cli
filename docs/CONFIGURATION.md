@@ -31,6 +31,8 @@ npm run dev -- config show
   - Which service `find`, `build`, and `enrich` read token data from. Defaults to `indexer`. See [tokenSource](#tokensource).
 - **ipfsGateways** (object)
   - Gateways used to turn bare `ipfs://` sources into HTTPS URLs. See [ipfsGateways](#ipfsgateways).
+- **supportLogs** (object)
+  - Where `ff-cli report` sends a problem report. See [supportLogs](#supportlogs).
 
 ## browser
 
@@ -43,7 +45,7 @@ Optional settings used where headless/browser‑like behavior is needed.
 
 Used for signing DP‑1 playlists.
 
-- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` or `--key-file <path>` to override it for a single run — see [Where the signing key can come from](#where-the-signing-key-can-come-from). The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `play` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `play` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
+- `playlist.privateKey` (string, Ed25519 private key in hex or base64): Used by the `sign` command to create DP-1 v1.1.0 multi-signatures, and as the default signing key for the owner-bound feed mutations (`publish --replace`, `unpublish`), which sign an authorization intent at request time. Those commands and `sign` all take `-k, --key` or `--key-file <path>` to override it for a single run — see [Where the signing key can come from](#where-the-signing-key-can-come-from). The `verify` command may derive the matching public key from this value (or `PLAYLIST_PRIVATE_KEY`) when you omit `--public-key`; **dp1-js applies that derived key only when verifying legacy flat `signature` strings**, not when checking `signatures[]` envelopes. If that derivation fails, `verify` prints a warning on stderr and continues without derived key material. The derived public key is emitted as PEM so Node can decode it without ambiguity. Hex may include or omit the `0x` prefix. You can also set this via `PLAYLIST_PRIVATE_KEY` in `.env`. `display` verifies playlists before delivery and only auto-signs the synthesized media URL fallback when signing is configured. `display` and `publish` verify before delivery or upload and reject unsigned or broken playlists.
 
   **Signing and key encoding:** Signing paths (`sign`, deterministic `build` when configured, and `-k/--key` overrides) accept the private key in any of these encodings:
   - **base64 PKCS#8 DER** — recommended; what `ff-cli setup` generates.
@@ -184,7 +186,8 @@ DP‑1 Feed API configuration.
 
 - `feed.baseURLs` (string[]): Array of DP‑1 Feed Operator API v1 base URLs. The CLI queries all feeds in parallel.
 - Legacy support: `feed.baseURL` (string) is still accepted and normalized to an array.
-- Default: `https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1` if not set.
+- Default: `https://feed.feralfile.com/api/v1` if not set.
+- A configured URL on `dp1-feed-operator-api-prod.autonomy-system.workers.dev` (the deleted server ff-cli 3.0.0's `setup` wrote into `config.json`) is read as `https://feed.feralfile.com` with the same path, with a one-line note on stderr until you update it.
 - Compatibility: API v1 of the DP‑1 Feed Operator server. See the repository for endpoints and behavior: [dp1-feed](https://github.com/display-protocol/dp1-feed).
 
 Endpoints used by the CLI:
@@ -215,15 +218,15 @@ defaulting to index 0 would silently write to whichever feed happens to be first
 Environment variable alternative:
 
 ```env
-FEED_BASE_URLS=https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1,https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1
+FEED_BASE_URLS=https://feed.feralfile.com/api/v1,https://feed.example.com/api/v1
 ```
 
 ## tokenSource
 
-Token data for `find`, `build`, and `enrich` (title, artist, description, playable source, on-chain provenance, and a still image where the service supplies one) comes from one service per run:
+Token data for `find`, `build`, and `enrich` (title, artist, description, the source to display, on-chain provenance, and a still image where the service supplies one) comes from one service per run:
 
 - `indexer` (default): the Feral File indexer (ff-indexer-v2). A token it has not seen yet triggers an indexing job, so a first build of unseen tokens can take minutes.
-- `raster` (opt-in, under evaluation): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build does not wait for indexing jobs. Raster's data still has known bugs, tracked on [feral-file#3546](https://github.com/feral-file/feral-file/issues/3546): some Feral File works point at a retired image host and play black, and evolving works play an older snapshot. No still image is supplied: Raster's preview renditions refuse non-browser clients, so items and `enrich` get no thumbnail from Raster.
+- `raster` (opt-in, under evaluation): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build does not wait for indexing jobs. Raster's data still has known bugs, tracked on [feral-file#3546](https://github.com/feral-file/feral-file/issues/3546): some Feral File works point at a retired image host and display black, and evolving works display an older snapshot. No still image is supplied: Raster's preview renditions refuse non-browser clients, so items and `enrich` get no thumbnail from Raster.
 
 ```json
 { "tokenSource": "raster" }
@@ -268,6 +271,24 @@ IPFS_GATEWAY_FERAL_FILE=https://ipfs.feralfile.com/ipfs/
 IPFS_GATEWAY_DEFAULT=https://ipfs.filebase.io/ipfs/
 ```
 
+## supportLogs
+
+`ff-cli report` posts to Feral File's support-logs service, `https://support-logs.feralfile.com` by default. No configuration or key is needed; set `supportLogs.baseUrl` only to point at a staging or test service. It does not move an Art Computer's log upload, which goes to the support-logs its FF OS names.
+
+```json
+{
+  "supportLogs": {
+    "baseUrl": "https://support-logs.feralfile.com"
+  }
+}
+```
+
+Environment variable alternative:
+
+```env
+FF_SUPPORT_LOGS_URL=https://support-logs.feralfile.com
+```
+
 ## Raster API
 
 `find` resolves tokens, series, and artist addresses through Raster's public GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)), and with the default `tokenSource` so do `build` and `enrich`. No configuration is required; two environment variables adjust the integration:
@@ -283,7 +304,7 @@ RASTER_API_URL=https://api.raster.art/graphql
 
 ## ff1Devices
 
-Configure devices you want to play content on.
+Configure devices you want to display art on.
 
 - `ff1Devices.devices` (array of objects):
   - `name` (string): Friendly device label. Free‑form; pick anything memorable.
@@ -316,11 +337,15 @@ You can also manage devices independently with:
     app; ff-cli pins the FF1's control profile from the owner's sealed answer
     and enrolls as a **controller**. Needs an internet connection; see
     [Secure control pairing](#secure-control-pairing).
-  - FF OS without secure control (or with it switched on but no owner yet):
-    display a one-time code and key-bound security check; in Feral File
+  - FF OS without secure control: display a one-time code and key-bound security check; in Feral File
     mobile choose **Pair with ff-cli**, enter the code, and confirm both values
     match before sharing. The app sends the relayer topic, which ff-cli stores
     in the operating system credential vault.
+  - FF OS with secure control but no owner yet: nothing to pair with. ff-cli
+    stops with "Set this FF1 up as owner in the Feral File app, then add this
+    computer with Add controller." (the one-time code is not offered: the
+    relayer topic does nothing on that FF OS). Until then, `display` works
+    without pairing from the FF1's network.
   - Status unreadable (FF1 off the LAN): the QR path, with a hint. Pass
     `--topic-handoff` to force the one-time-code path.
 
@@ -337,6 +362,13 @@ You can also manage devices independently with:
   cast to the FF1; `ff-cli device revoke` removes it like any controller.
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
+- `ff-cli device lan --open|--close [name]` – Open or close LAN control (owner
+  only). Open (the default on the FF1): anyone on the FF1's network can display
+  art and read its status without pairing; resetting it, changing its Wi-Fi,
+  `ssh` and turning it off stay the owner's. Closed: only paired controllers,
+  on its network too. Sent sealed with ff-cli's owner grant; without a grant
+  ff-cli stops before sending anything. Prints the state the FF1 reports.
+  Close it on shared networks such as offices, hotels and museums.
 - `ff-cli device unpair [name]` – Revoke ff-cli's own access on the FF1 (best
   effort) and delete its controller keys. It always asks first (owner keys get
   a stronger warning); `-y, --yes` skips the question.
@@ -359,7 +391,7 @@ Selection rules when sending:
 
 Device cast contract:
 
-The device exposes a single HTTP endpoint, `POST http://<device>:1111/api/cast`. `ff-cli play` casts a DP-1 playlist with:
+The device exposes a single HTTP endpoint, `POST http://<device>:1111/api/cast`. `ff-cli display` casts a DP-1 playlist with:
 
 ```jsonc
 POST http://<device>:1111/api/cast
@@ -377,7 +409,7 @@ Content-Type: application/json
 
 The `intent` field is **required** — without it the device returns `{"message":{"ok":false}}` with no further explanation. `dp1_call` may be the playlist inline (as above) or a hosted playlist URL string; ff-cli sends the resolved playlist object.
 
-When LAN delivery is unreachable, `play` prints an explicit notice and retries
+When LAN delivery is unreachable, `display` prints an explicit notice and retries
 the same command through `ff1Relayer.baseUrl`. The per-device topic is read from
 the operating system credential vault, never `config.json`. Pair it from the
 mobile app first:
@@ -470,10 +502,10 @@ On the first cast after boot the device may return an empty body. ff-cli retries
 
 Compatibility checks:
 
-- `play` and `ssh` perform a compatibility preflight before sending commands to FF1. The CLI gets the device version by calling `POST /api/cast` with `{ "command": "getDeviceStatus", "request": {} }` and reads `message.installedVersion` from the response.
+- `display` and `ssh` perform a compatibility preflight before sending commands to FF1. The CLI gets the device version by calling `POST /api/cast` with `{ "command": "getDeviceStatus", "request": {} }` and reads `message.installedVersion` from the response.
 
 - Minimum supported FF1 OS versions:
-  - `play` (`displayPlaylist`): `1.0.0` or newer
+  - `display` (`displayPlaylist`): `1.0.0` or newer
   - `ssh` (`sshAccess`): `1.0.9` or newer
 
 - If the CLI cannot get a version from the device (e.g. network or malformed response), it continues and sends the command.
@@ -481,7 +513,7 @@ Compatibility checks:
 - `ssh` sends the relayer topic stored by `ff-cli device pair` (OS keyring) in the `X-FF1-Topic` header. A claimed FF1 on newer FF OS rejects plaintext `sshAccess` without it (HTTP 401 `topic_required`). With no stored topic the request is sent without the header, which unclaimed devices and older FF OS accept.
 
 - When ff-cli is paired as a controller (a controller file exists for the
-  device), the preflight, `play` and `ssh` are all sent as secure envelopes
+  device), the preflight, `display` and `ssh` are all sent as secure envelopes
   instead; see below.
 
 ### Secure control pairing
@@ -548,7 +580,7 @@ controller ID for an owner to revoke.
 Roles:
 
 - **owner** – every command, including `ssh` and controller management.
-- **controller** – playback (`play`) and device status. `ssh`,
+- **controller** – displaying art (`display`) and device status. `ssh`,
   `device controllers` and `device revoke` need an owner grant.
 
 Controller keys live in one file per FF1:
@@ -580,7 +612,7 @@ question, or `--yes`) before a new pairing.
 
 Requests go to `POST /api/cast` as
 `{"command":"ff1Envelope","request":{"v":1,"jwe":"…"}}` on the LAN. When the
-LAN is unreachable, `play`, enrolling (`device pair`), `device controllers`,
+LAN is unreachable, `display`, enrolling (`device pair`), `device controllers`,
 `device revoke` and unpair's self-revoke go through the relayer instead (they are encrypted and signed
 either way); the version preflight and `ssh` stay LAN-only. Each attempt,
 including every retry, is a new request with a new counter. FF1s on older FF OS
@@ -590,14 +622,16 @@ Errors and what to do:
 
 | Message                                                                                                                         | Cause                                                                                                                                                                                     | Fix                                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| "This FF1 is secured and only accepts requests from paired controllers."                                                        | The FF1 refuses plaintext and ff-cli is not paired                                                                                                                                        | `ff-cli device pair <name>`; an owner scans the code with **Add controller**                                                                                                                                                               |
+| "This FF1 accepts this command only from its owner, or the owner turned off control from its Wi-Fi." | ff-cli is not paired and the command is owner only (`ssh`), or the owner closed LAN control (`ff-cli device lan --close`) | `ff-cli device pair <name>`; an owner scans the code with **Add controller** |
+| "This FF1 accepts requests only from its own network."                   | The FF1 serves only callers on its own network, and this computer (or the device host) is outside it | Run ff-cli on the FF1's network, with the device host set to its address there |
+| "… has no owner yet, so ff-cli cannot pair with it." / "… has no owner yet, and SSH access needs one." | Secure control with no owner yet: there is no owner to add ff-cli | Set the FF1 up as owner in the Feral File app, then `ff-cli device pair <name>` and add it with **Add controller** |
 | "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys                                                                                                                                                            | `ff-cli device pair <name>` (or `--resume`); an owner scans the code with **Add controller**. If the owner gave the FF1 up (it shows a setup code, or no one has set it up since), `ff-cli device unpair <name>` to use it without pairing |
 | "Pairing was not completed: no owner answered…"                                                                                 | No verified answer reached ff-cli before `--timeout`                                                                                                                                      | Run `ff-cli device pair <name>` again (needs internet)                                                                                                                                                                                     |
 | "Pairing is not available: … relay v2 is turned off"                                                                            | Relay v2 is off: `ff1Relayer.v2Endpoint`/`FF1_RELAY_V2_ENDPOINT` is empty, the relayer settings are invalid, or `ff1Relayer.baseUrl` is not a bare HTTPS origin and no v2 endpoint is set | Remove the empty override, or set an HTTPS/WSS origin (see [Relay v2](#relay-v2))                                                                                                                                                          |
 | "This command needs owner access…"                                                                                              | `ssh` or controller management with a controller grant                                                                                                                                    | An owner grants the owner role in the app                                                                                                                                                                                                  |
 | "The FF1 could not open the request." / "…rejected the request signature."                                                      | The FF1's control identity changed (for example a factory reset), or the device address now reaches another FF1. These answers are not authenticated: anyone on the path can send one     | Check the device address first. If the FF1 was factory reset: `ff-cli device pair <name>` (the current keys stay until the new pairing is finished). Do not unpair                                                                         |
 | "The reply did not verify against the paired FF1 identity…"                                                                     | A reply not signed by the pinned FF1 (wrong device, or a forged relayer reply)                                                                                                            | Check the device host; if the FF1 was reset, `ff-cli device pair <name>`. Do not unpair                                                                                                                                                    |
-| "The FF1 is busy; try again."                                                                                                   | The FF1 was checking too many requests at once and did not run this one (`play` retries it automatically with a new request)                                                              | Run the command again                                                                                                                                                                                                                      |
+| "The FF1 is busy; try again."                                                                                                   | The FF1 was checking too many requests at once and did not run this one (`display` retries it automatically with a new request)                                                           | Run the command again                                                                                                                                                                                                                      |
 | "The FF1 has no grant for ff-cli, although an owner's Feral File app reported adding it."                                       | An owner removed ff-cli again before it enrolled                                                                                                                                          | `ff-cli device pair <name>`                                                                                                                                                                                                                |
 | "The FF1 rejected the request counter as already used."                                                                         | The counter is still behind after ff-cli moved it ahead once (another computer uses a copy of the file)                                                                                   | Stop the other copy; run the command again. Do not unpair                                                                                                                                                                                  |
 | "The FF1 rejected the request as malformed."                                                                                    | Usually a clock more than 5 minutes ahead of the FF1's                                                                                                                                    | Fix the clock on this computer (or let the FF1 finish setting its time), then retry                                                                                                                                                        |
@@ -610,10 +644,10 @@ Examples:
 
 ```bash
 # Send to first device
-npm run dev -- play playlist.json
+npm run dev -- display playlist.json
 
-# Play on a specific device by exact name
-npm run dev -- play playlist.json -d "Living Room Display"
+# Display on a specific device by exact name
+npm run dev -- display playlist.json -d "Living Room Display"
 ```
 
 Minimal `config.json` example (selected fields):
@@ -626,7 +660,7 @@ Minimal `config.json` example (selected fields):
     "role": "curator"
   },
   "feed": {
-    "baseURLs": ["https://dp1-feed-operator-api-prod.autonomy-system.workers.dev/api/v1"]
+    "baseURLs": ["https://feed.feralfile.com/api/v1"]
   },
   "ff1Devices": {
     "devices": [

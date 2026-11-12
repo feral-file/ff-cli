@@ -1,6 +1,6 @@
 /**
  * Command actions for FF1 controller pairing and management
- * (`ff-cli device pair|controllers|revoke|unpair`, feral-file#3551).
+ * (`ff-cli device pair|controllers|revoke|unpair|lan`, feral-file#3551).
  *
  * Copy rules: never print private key material or the relayer topic; print
  * the controllerId (a public thumbprint) freely. The controller QR and its
@@ -50,6 +50,7 @@ import {
   chooseControllerKeys,
   defaultControllerLabel,
   enrollRegistered,
+  lanReadTimeoutMs,
   prepareRegisteredController,
   probeControlSupport,
   registrationRecordOf,
@@ -76,7 +77,7 @@ import {
   findSecureController,
   runSecureCommand,
 } from '../../utilities/control/secure-transport';
-import { pairCommand } from '../../utilities/control/control-errors';
+import { ownerSetupGuidance, pairCommand } from '../../utilities/control/control-errors';
 
 type PairDevice = FF1Device & { id: string };
 
@@ -138,7 +139,8 @@ export function requirePairableDevice(name?: string): PairDevice {
   const device = selected.device;
   if (!device.id) {
     throw new CommandFailure(
-      `Device "${device.name || device.host}" has no stable device ID. Re-add it with ff-cli device add before pairing.`
+      `Device "${device.name || device.host}" has no stable device ID.`,
+      'Re-add it with `ff-cli device add` (discovery records the ID), or with `--host` and `--id FF1-XXXXXXXX` (the app shows it under Device Information).'
     );
   }
   return device as PairDevice;
@@ -225,10 +227,12 @@ export async function runPair(
 /**
  * pairDevice is runPair after flag parsing. It picks the pairing path from
  * the FF1's LAN status: an FF1 without the control protocol (no `control`
- * block), or with it but no owner yet (`legacy`), accepts plaintext and gets
- * the legacy short-code topic handoff; a secured one gets owner-initiated
- * registration. An unreadable status falls back to registration, and
- * --topic-handoff forces the legacy path.
+ * block) accepts plaintext and gets the legacy short-code topic handoff; a
+ * secured one gets owner-initiated registration. One with the protocol but
+ * no owner yet (`legacy`) is refused with the owner-setup guidance: nothing
+ * can add ff-cli until an owner exists, and its relayer topic is inert, so
+ * the handoff would hand over nothing (#3551). An unreadable status falls
+ * back to registration, and --topic-handoff forces the legacy path.
  *
  * @param device - Device with ID
  * @param options - Parsed label and wait, and the resume, yes and topicHandoff flags
@@ -256,11 +260,32 @@ export async function pairDevice(
   // The status is unauthenticated, so it may never downgrade a device this
   // computer holds (or may hold) a grant for: any controller record or saved
   // pairing keys means the QR flow, whatever the LAN answers.
-  if (holdsControlState(device.id, deps.controllerStore ?? {})) {
+  const held = heldControlState(device.id, deps.controllerStore ?? {});
+  if (held) {
+    // Leftover pairing keys are often an earlier pairing that was stopped, not a
+    // grant: on an FF1 without secure control that QR can never complete, and
+    // nothing told the user how out. Read the status only to say so.
+    if (
+      held === 'pairing keys' &&
+      (await probeControlSupport(device, deps.fetchFn)) === 'plaintext'
+    ) {
+      console.log(
+        chalk.yellow(
+          `\nAn earlier pairing with ${deviceLabel(device)} left its keys here, so ff-cli shows the secure pairing code again. ` +
+            `The FF1’s LAN status, which is not authenticated, shows no secure control: if that is right, run \`${pairCommand(deviceLabel(device))} --topic-handoff\` instead.`
+        )
+      );
+    }
     await pairByRegistration(device, options, deps);
     return;
   }
   const support = await probeControlSupport(device, deps.fetchFn);
+  if (support === 'unowned') {
+    throw new CommandFailure(
+      `${deviceLabel(device)} has no owner yet, so ff-cli cannot pair with it.`,
+      `${ownerSetupGuidance(deviceLabel(device))} Until then, ff-cli can display art on it from the same network without pairing.`
+    );
+  }
   if (support !== 'unknown') {
     console.log(
       chalk.dim(
@@ -285,16 +310,21 @@ export async function pairDevice(
 }
 
 /**
- * holdsControlState reports whether this computer has a controller record
- * (main or staged, even corrupt) or saved pairing keys for the device. An
- * unreadable file throws: its keys may be fine.
+ * heldControlState reports what this computer holds for the device: a
+ * controller record (main or staged, even corrupt), else saved pairing keys,
+ * else nothing. An unreadable file throws: its keys may be fine.
  */
-function holdsControlState(deviceId: string, store: ControllerStoreOptions): boolean {
-  return (
+function heldControlState(
+  deviceId: string,
+  store: ControllerStoreOptions
+): 'record' | 'pairing keys' | null {
+  if (
     loadUnlessCorrupt(deviceId, store) !== null ||
-    loadUnlessCorrupt(deviceId, stagingStore(store)) !== null ||
-    hasPairingKeys(deviceId, store)
-  );
+    loadUnlessCorrupt(deviceId, stagingStore(store)) !== null
+  ) {
+    return 'record';
+  }
+  return hasPairingKeys(deviceId, store) ? 'pairing keys' : null;
 }
 
 /**
@@ -813,7 +843,7 @@ function reportEnrollment(device: PairDevice, result: EnrollResult): void {
         chalk.dim(
           role === 'owner'
             ? 'Owner access covers every command, including ssh and controller management.\n'
-            : 'Controller access covers playback and device status. SSH and controller management need an owner grant.\n'
+            : 'Controller access covers displaying art and device status. SSH and controller management need an owner grant.\n'
         )
       );
       return;
@@ -867,11 +897,15 @@ async function withInterrupt<T>(fn: (signal: AbortSignal) => Promise<T>): Promis
  * requireEnrolledController loads the device's enrolled controller record.
  *
  * @param device - Device with ID
+ * @param store - Controller store location (tests)
  * @returns The record
  * @throws {CommandFailure} When ff-cli is not paired with the device
  */
-function requireEnrolledController(device: PairDevice): ControllerRecord {
-  const secure = findSecureController(device);
+function requireEnrolledController(
+  device: PairDevice,
+  store: ControllerStoreOptions = {}
+): ControllerRecord {
+  const secure = findSecureController(device, store);
   if (secure.failure) {
     throw new CommandFailure(secure.failure.error, secure.failure.details);
   }
@@ -1084,6 +1118,142 @@ export async function runRevoke(ctl: string, name: string | undefined): Promise<
     console.log(chalk.dim('That was this ff-cli. Run `ff-cli device unpair` to delete its keys.'));
   }
   console.log();
+}
+
+/** LanOptions are the `device lan` flags. */
+export interface LanOptions {
+  open?: boolean;
+  close?: boolean;
+}
+
+/**
+ * parseLanSwitch reads `--open` / `--close`; exactly one is required, so a
+ * bare `device lan` never flips the switch by accident.
+ *
+ * @param options - Flags
+ * @returns True to open LAN control
+ * @throws {CommandFailure} When neither or both are given
+ */
+export function parseLanSwitch(options: LanOptions): boolean {
+  if (Boolean(options.open) === Boolean(options.close)) {
+    throw new CommandFailure(
+      'Choose one of --open or --close.',
+      'For example: `ff-cli device lan --close office`.'
+    );
+  }
+  return Boolean(options.open);
+}
+
+/**
+ * runLan is `ff-cli device lan --open|--close [name]` (owner only): sends the
+ * owner-tier `setLanControl {"open":bool}` (#3551 owner switch) sealed with
+ * the stored grant and prints the state the FF1 reports.
+ *
+ * The switch decides whether anyone on the FF1's network may send the
+ * undoable commands (display, status reads, …) without a grant. Without a
+ * stored grant ff-cli refuses locally: a plaintext setLanControl would be
+ * refused anyway, and the guidance (pair, owner role) is what helps. A
+ * controller grant is not refused locally: the FF1 answers permission_denied,
+ * which carries the same advice as for `device controllers`. A verified
+ * `internal_error` may still have changed the switch, so the status is read
+ * and reported (lanStateAfterInternalError); the command fails either way.
+ *
+ * @param name - Optional device name
+ * @param options - `--open` / `--close`
+ * @param deps - Transport seams (tests)
+ */
+export async function runLan(
+  name: string | undefined,
+  options: LanOptions,
+  deps: SecureTransportDeps = {}
+): Promise<void> {
+  const open = parseLanSwitch(options);
+  const device = requirePairableDevice(name);
+  const record = requireEnrolledController(device, deps.controllerStore);
+  const result = await runOwnerCommand(device, record, 'setLanControl', { open }, deps);
+  // Only a verified reply: controld sends internal_error sealed, never as a
+  // public error, so a public one is forged and gets the ordinary failure.
+  if (!result.success && result.verified && result.code === 'internal_error') {
+    throw await lanStateAfterInternalError(device, deps.fetchFn);
+  }
+  if (!result.success) {
+    throw ownerFailure(result);
+  }
+  // The reply is verified against the pinned profile, so its `open` is the
+  // FF1's state; print that rather than echoing the flag.
+  const state = (result.response as { open?: unknown } | undefined)?.open;
+  if (typeof state !== 'boolean') {
+    throw new CommandFailure(
+      `${deviceLabel(device)} did not report its LAN control state.`,
+      'Its FF OS may not support `device lan` yet. Update it in the Feral File app and try again.'
+    );
+  }
+  console.log(
+    chalk.green(
+      `\n✓ LAN control on ${deviceLabel(device)} is ${chalk.bold(state ? 'open' : 'closed')}.`
+    )
+  );
+  console.log(
+    chalk.dim(
+      state
+        ? 'Anyone on its network can display art and read its status without pairing. Only its owner can reset it, change its Wi-Fi or turn it off.\n'
+        : 'Only paired controllers can control it, on its network too.\n'
+    )
+  );
+}
+
+/**
+ * lanStateAfterInternalError builds the failure for a verified
+ * `internal_error` reply to setLanControl. The FF1 may have applied the
+ * switch anyway: lan.json can be renamed into place before the directory
+ * fsync fails, and the FF1 then follows the file it committed (spec §5.5:
+ * the owner re-reads the status). So the open `GET /api/status` is read
+ * once and its `control.lan` is reported. That member is public and
+ * unauthenticated; it only informs the owner here and decides nothing, so a
+ * signed status request is not worth its cost. The command still fails.
+ *
+ * @param device - Device with ID
+ * @param fetchFn - Fetch (tests); defaults to the LAN read deadline
+ * @returns The failure to throw
+ */
+async function lanStateAfterInternalError(
+  device: PairDevice,
+  fetchFn?: typeof fetch
+): Promise<CommandFailure> {
+  const lan = await readLanControlState(device, fetchFn);
+  if (lan) {
+    return new CommandFailure(
+      `The FF1 reported an error, but the switch may have changed. It now reports: ${lan}.`,
+      'Run the command again to set the state you want.'
+    );
+  }
+  return new CommandFailure(
+    'The FF1 reported an error, but the switch may have changed, and its status could not be read.',
+    'Run the command again to set the state you want; it prints the state the FF1 reports.'
+  );
+}
+
+/**
+ * readLanControlState reads `control.lan` from the FF1's LAN `GET /api/status`,
+ * or undefined when the read fails or the member is absent.
+ */
+async function readLanControlState(
+  device: PairDevice,
+  fetchFn: typeof fetch = (input, init) =>
+    fetchWithTimeout(input, init ?? {}, lanReadTimeoutMs(device.host))
+): Promise<'open' | 'closed' | undefined> {
+  try {
+    const headers: Record<string, string> = device.apiKey ? { 'API-KEY': device.apiKey } : {};
+    const response = await fetchFn(`${device.host}/api/status`, { headers });
+    if (!response.ok) {
+      return undefined;
+    }
+    const lan = ((await response.json()) as { control?: { lan?: unknown } } | null)?.control?.lan;
+    return lan === 'open' || lan === 'closed' ? lan : undefined;
+  } catch (error) {
+    logger.debug(`LAN status read failed: ${(error as Error).message}`);
+    return undefined;
+  }
 }
 
 /**

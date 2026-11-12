@@ -34,6 +34,8 @@ import {
   chooseControllerKeys,
   prepareRegisteredController,
   probeControlSupport,
+  lanReadTimeoutMs,
+  CONTROL_PROBE_NAME_TIMEOUT_MS,
 } from '../src/utilities/control/pairing';
 import {
   type PairingChannel,
@@ -664,7 +666,7 @@ describe('pairing path selection', () => {
     );
     assert.equal(
       await probeControlSupport(device, lan({ control: { v: 1, state: 'legacy' } })),
-      'plaintext'
+      'unowned'
     );
     assert.equal(
       await probeControlSupport(device, lan({ control: { v: 1, state: 'enrolled' } })),
@@ -677,7 +679,7 @@ describe('pairing path selection', () => {
     );
     assert.equal(
       await probeControlSupport(device, status({ control: { v: 1, state: 'legacy' } })),
-      'plaintext'
+      'unowned'
     );
     for (const state of ['enrolled', 'enforced', 'locked']) {
       assert.equal(
@@ -711,6 +713,75 @@ describe('pairing path selection', () => {
     );
   });
 
+  // macOS answers a `.local` lookup after about 5 s, the probe's whole budget, so an FF1 added
+  // by discovery read as "unknown" and an FF1 without secure control was shown the secure code.
+  // The address discovery recorded is tried first; the name is the fallback.
+  test('a .local FF1 is probed at its recorded address first, then by name', async () => {
+    const local = {
+      ...device,
+      host: 'http://ff1-abcd1234.local:1111',
+      addresses: ['192.168.1.5'],
+    };
+    const urls: string[] = [];
+    assert.equal(
+      await probeControlSupport(local, async (input) => {
+        urls.push(String(input));
+        return json(200, { installedVersion: '2.0.11', contract: '2' });
+      }),
+      'plaintext'
+    );
+    assert.deepEqual(urls, ['http://192.168.1.5:1111/api/cast']);
+
+    urls.length = 0;
+    assert.equal(
+      await probeControlSupport(local, async (input) => {
+        urls.push(String(input));
+        if (urls.length === 1) {
+          throw new Error('connect ECONNREFUSED');
+        }
+        return json(200, { installedVersion: '2.0.11', contract: '2' });
+      }),
+      'plaintext'
+    );
+    assert.deepEqual(urls, [
+      'http://192.168.1.5:1111/api/cast',
+      'http://ff1-abcd1234.local:1111/api/cast',
+    ]);
+
+    // An address that answers without a usable status (HTTP 500) also falls back to the name.
+    urls.length = 0;
+    assert.equal(
+      await probeControlSupport(local, async (input) => {
+        urls.push(String(input));
+        return urls.length === 1
+          ? json(500, { error: 'internal' })
+          : json(200, { installedVersion: '2.0.11', contract: '2' });
+      }),
+      'plaintext'
+    );
+    assert.equal(urls.length, 2);
+
+    // A `.local` name gets room for the macOS lookup; an address or unicast name does not.
+    assert.equal(lanReadTimeoutMs('http://ff1-abcd1234.local:1111'), CONTROL_PROBE_NAME_TIMEOUT_MS);
+    assert.equal(lanReadTimeoutMs('http://FF1-ABCD1234.LOCAL'), CONTROL_PROBE_NAME_TIMEOUT_MS);
+    assert.equal(lanReadTimeoutMs('http://192.168.1.5:1111', 3_000), 3_000);
+    assert.equal(lanReadTimeoutMs('http://ff1.example.com', 3_000), 3_000);
+    assert.equal(lanReadTimeoutMs('not a url', 3_000), 3_000);
+
+    // IPv4 is preferred over an IPv6 entry listed first; an IPv6-only record is bracketed.
+    for (const [addresses, first] of [
+      [['fe80::1', '192.168.1.5'], 'http://192.168.1.5:1111/api/cast'],
+      [['2001:db8::5'], 'http://[2001:db8::5]:1111/api/cast'],
+    ] as const) {
+      urls.length = 0;
+      await probeControlSupport({ ...local, addresses: [...addresses] }, async (input) => {
+        urls.push(String(input));
+        return json(200, { installedVersion: '2.0.11', contract: '2' });
+      });
+      assert.equal(urls[0], first);
+    }
+  });
+
   test('an FF1 without secure control gets the topic handoff, and no controller keys', async () => {
     const world = ownerWorld(approve());
     const handoffs: number[] = [];
@@ -734,6 +805,35 @@ describe('pairing path selection', () => {
     assert.equal(world.channels.length, 0);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
     assert.equal(fs.existsSync(path.join(storeDir, 'pairing')), false);
+  });
+
+  // #3551: an FF1 with secure control but no owner yet cannot pair (no owner to add ff-cli),
+  // and its relayer topic is inert, so the one-time code is not offered either.
+  test('an FF1 with secure control and no owner gets the owner-setup guidance, no pairing', async () => {
+    const world = ownerWorld(approve());
+    await assert.rejects(
+      pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: statusFetch(() => json(200, { control: { v: 1, state: 'legacy' } })),
+        receiveTopicHandoff: async () => {
+          throw new Error('must not offer the topic handoff');
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CommandFailure);
+        assert.match(error.message, /Office has no owner yet/);
+        assert.match(
+          error.details!,
+          /Set this FF1 up as owner in the Feral File app, then add this computer with Add controller/
+        );
+        assert.match(error.details!, /ff-cli device pair Office/);
+        assert.match(error.details!, /display art on it from the same network without pairing/);
+        return true;
+      }
+    );
+    assert.equal(world.channels.length, 0);
+    assert.deepEqual(world.topics, []);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
   });
 
   for (const held of ['main record', 'staged record', 'pairing keys'] as const) {
@@ -763,10 +863,33 @@ describe('pairing path selection', () => {
           throw new Error('must not downgrade');
         },
       });
-      assert.equal(statusReads, 0);
+      // A record means a grant may exist: the status is not even read. Leftover pairing keys
+      // (an earlier pairing that was stopped) read it only to say how to choose the handoff.
+      assert.equal(statusReads, held === 'pairing keys' ? 1 : 0);
       assert.equal(world.channels.length, 1);
     });
   }
+
+  test('leftover pairing keys and a status without secure control name --topic-handoff', async () => {
+    pairingKeys(DEVICE_ID, { dir: storeDir });
+    const world = ownerWorld(approve());
+    const fetchFn = world.deps.fetchFn!;
+    const output = await captureLog(() =>
+      pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: async (input, init) =>
+          JSON.parse(String(init?.body)).command === 'getDeviceStatus'
+            ? json(200, { installedVersion: '2.0.11', contract: '2' })
+            : fetchFn(input, init),
+        receiveTopicHandoff: async () => {
+          throw new Error('must not downgrade');
+        },
+      })
+    );
+    assert.equal(world.channels.length, 1);
+    assert.match(output, /earlier pairing/);
+    assert.match(output, /--topic-handoff/);
+  });
 
   test('the chosen path names the unauthenticated status', async () => {
     const world = ownerWorld(approve());
