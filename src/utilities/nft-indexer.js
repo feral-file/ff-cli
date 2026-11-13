@@ -33,6 +33,7 @@ const {
   detectTokenStandard,
   extractArtistName,
   getBestMediaUrl,
+  isUsableSourceUrl,
   normalizeCidStandard,
   resolveTokenStandard,
 } = require('./token-item');
@@ -392,6 +393,9 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
     let indexerData = await queryTokenDataFromIndexer(tokenCID);
 
     // If token not found, trigger async indexing and poll
+    // indexedThisRun records that this call enqueued the indexing job, which
+    // is the only time renditions are known to be in flight (ff-cli#132).
+    const indexedThisRun = !indexerData;
     if (!indexerData) {
       logger.info(`[NFT Indexer] Token not in database, triggering async indexing...`);
 
@@ -447,9 +451,10 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
 
     logger.info(`[NFT Indexer] ✓ Token found in database`);
 
-    // If token found but no media_assets yet, poll until indexer has renditions or timeout
-    if (!Array.isArray(indexerData.media_assets) || indexerData.media_assets.length === 0) {
-      logger.info('[NFT Indexer] Media assets not available, polling...');
+    if (shouldWaitForMediaAssets(indexerData, indexedThisRun)) {
+      logger.info(
+        `[NFT Indexer] Waiting up to ${POLLING_TIMEOUT_MS / 1000}s for media assets on ${tokenCID}...`
+      );
       indexerData = await pollForMediaAssets(tokenCID, options.mediaPoll ?? {});
 
       if (!indexerData) {
@@ -471,6 +476,33 @@ async function getNFTTokenInfoSingle(params, duration, options = {}) {
       error: error.message,
     };
   }
+}
+
+/**
+ * shouldWaitForMediaAssets decides whether a token lookup polls for renditions.
+ *
+ * The wait is worth its minute only when it can change the item: this run
+ * just enqueued indexing, so renditions are in flight, or the row has no URL a
+ * DP-1 source can use yet. A token the indexer already holds with a usable
+ * display URL and no `media_assets` (older Feral File software works, for
+ * one) never gains renditions, so polling it ran to the timeout and returned
+ * the row it started with: about 60 s per build requirement (ff-cli#132).
+ * Do not widen this back to "no media_assets" alone.
+ *
+ * @param {Object} indexerData - Token row from the indexer
+ * @param {boolean} indexedThisRun - True when this call triggered the indexing job
+ * @returns {boolean} True when the caller should poll for media assets
+ */
+function shouldWaitForMediaAssets(indexerData, indexedThisRun) {
+  const hasMediaAssets =
+    Array.isArray(indexerData.media_assets) && indexerData.media_assets.length > 0;
+  if (hasMediaAssets) {
+    return false;
+  }
+  if (indexedThisRun) {
+    return true;
+  }
+  return !isUsableSourceUrl(getBestMediaUrl(indexerData.display || {}, []).url);
 }
 
 /**
@@ -995,6 +1027,7 @@ module.exports = {
   resolveTokenBatch,
   // Single token processing
   getNFTTokenInfoSingle,
+  shouldWaitForMediaAssets,
   // Additional functions
   getCollectionInfo,
   searchNFTs,
