@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
 import { buildPlaylistDirect } from '../main';
+import { setVerbose } from '../logger';
 
 /**
  * BUILD_PARAMS_HELP documents the params file in `build --help`.
@@ -72,6 +73,12 @@ export const buildCommand = new Command('build')
 
         params = JSON.parse(stdin);
       }
+
+      // The logger is verbose-gated and nothing else turns it on for build.
+      // Without this, `-v` hid every indexer line, including the wait for
+      // media assets, so a slow build could not say what it was waiting on
+      // (ff-cli#132).
+      setVerbose(options.verbose);
 
       if (options.verbose) {
         console.log(chalk.blue('\nParameters:'));
