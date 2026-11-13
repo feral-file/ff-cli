@@ -21,6 +21,7 @@ import {
   dropStagedController,
   loadController,
   markEnrolled,
+  normalizeDeviceId,
   loadPairingKeys,
   nextCounter,
   pairingKeys,
@@ -182,7 +183,8 @@ function resultJson(qr: ControllerQr, extra: Record<string, unknown> = {}): stri
  */
 function ownerWorld(
   onScan: (qr: ControllerQr, channel: FakeChannel, registered: Set<string>) => void,
-  enrollRes: Record<string, unknown> = {}
+  enrollRes: Record<string, unknown> = {},
+  deviceProfile = keys.device.profile
 ) {
   const registered = new Set<string>();
   const topics: Array<[string, string]> = [];
@@ -190,7 +192,7 @@ function ownerWorld(
   const keyring = new Map<string, string>();
   const channels: FakeChannel[] = [];
   const fake = new FakeFF1(
-    { dev: DEVICE_ID, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+    { dev: deviceProfile.dev, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
     {},
     (claims) => {
       assert.equal(claims.op, 'enroll');
@@ -202,7 +204,7 @@ function ownerWorld(
       }
       return {
         ok: true,
-        res: { role: 'controller', nk: NK, profile: keys.device.profile, ...enrollRes },
+        res: { role: 'controller', nk: NK, profile: deviceProfile, ...enrollRes },
       };
     }
   );
@@ -400,6 +402,22 @@ describe('device pair (owner-initiated registration)', () => {
     assert.equal(loadController(DEVICE_ID, { dir: storeDir })!.role, 'controller');
   });
 
+  test('a custom device ID pairs, enrolls and reloads its controller record', async () => {
+    const customProfile = { ...keys.device.profile, dev: 'studio-display' };
+    const world = ownerWorld(approve({ profile: customProfile }), {}, customProfile);
+    await pairDevice({ ...device, id: 'studio-display' }, options, world.deps);
+    const saved = loadController('studio-display', { dir: storeDir });
+    assert.equal(saved?.deviceId, 'studio-display');
+    assert.equal(saved?.profile.dev, 'studio-display');
+    assert.equal(saved?.role, 'controller');
+    assert.equal(world.channels[0].closed, true);
+  });
+
+  test('custom device IDs keep their wire spelling and store lookup spelling', () => {
+    assert.equal(normalizeDeviceId('studio-display'), 'studio-display');
+    assert.equal(normalizeDeviceId('ff1-fixture1'), 'FF1-FIXTURE1');
+  });
+
   test('a result for another FF1 is not accepted, and the wait times out', async () => {
     const other = { ...keys.device.profile, dev: 'FF1-OTHER0001' };
     const world = ownerWorld(approve({ profile: other }));
@@ -411,6 +429,7 @@ describe('device pair (owner-initiated registration)', () => {
     );
     assert.match(output, /An owner added ff-cli to a different FF1 \("FF1-OTHER0001"\)/);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
+    assert.match(output, /--id/);
     assert.equal(loadController('FF1-OTHER0001', { dir: storeDir }), null);
     assert.equal(world.fake.seen.length, 0);
   });

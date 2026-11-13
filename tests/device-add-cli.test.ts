@@ -75,6 +75,42 @@ describe('ff1 device add manual ID — CLI integration', () => {
     });
   });
 
+  test('accepts a custom device ID without changing its case', () => {
+    withConfig([], (cwd, configPath) => {
+      const result = runDeviceAdd(
+        cwd,
+        '--host',
+        '192.168.1.20',
+        '--name',
+        'studio-display',
+        '--id',
+        'studio-display'
+      );
+      assert.equal(result.status, 0, result.stderr || result.stdout);
+      assert.equal(
+        JSON.parse(readFileSync(configPath, 'utf8')).ff1Devices.devices[0].id,
+        'studio-display'
+      );
+    });
+  });
+
+  test('rejects IDs too long to name a controller file without changing config', () => {
+    withConfig([], (cwd, configPath) => {
+      const result = runDeviceAdd(
+        cwd,
+        '--host',
+        '192.168.1.20',
+        '--name',
+        'studio-display',
+        '--id',
+        'a'.repeat(65)
+      );
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, /1-64/);
+      assert.deepEqual(JSON.parse(readFileSync(configPath, 'utf8')).ff1Devices.devices, []);
+    });
+  });
+
   test('manual host update without --id preserves the paired device ID', () => {
     withConfig(
       [{ name: 'office', host: 'http://192.168.1.20:1111', id: 'FF1-SKYZ2E3A' }],
@@ -145,15 +181,18 @@ describe('ff1 device add manual ID — CLI integration', () => {
     );
   });
 
-  test('a learned ID never replaces the stored ID of the row being updated', async () => {
+  test('a conflicting LAN ID refuses the update and explains explicit recovery', async () => {
     await withStatusServer('FF1-OTHER0001', (host, requests) =>
       withConfigAsync(
         [{ name: 'office', host: 'http://192.168.1.20:1111', id: 'FF1-SKYZ2E3A' }],
         async (cwd, read) => {
           const result = await runDeviceAddAsync(cwd, '--host', host, '--name', 'office');
-          assert.equal(result.status, 0, result.stderr || result.stdout);
-          assert.equal(requests(), 0);
+          assert.equal(result.status, 1);
+          assert.match(result.stderr, /reports.*FF1-OTHER0001/);
+          assert.match(result.stderr, /--id/);
+          assert.equal(requests(), 1);
           assert.equal(read()[0].id, 'FF1-SKYZ2E3A');
+          assert.equal(read()[0].host, 'http://192.168.1.20:1111');
         }
       )
     );
