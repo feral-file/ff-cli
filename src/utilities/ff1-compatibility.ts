@@ -277,6 +277,8 @@ async function detectFF1Version(
  * cast (ff1-control-v1 §4.4, HTTP 403 `enrollment_required`). That answer
  * means every plaintext command will be refused, so the preflight stops with
  * the pairing guidance instead of sending the real command into the same 403.
+ * `lan_only` (the caller is not on the FF1's network, #3551) refuses every
+ * command the same way.
  * Any other failure keeps the historical "could not verify" behavior.
  *
  * @param status - HTTP status
@@ -294,7 +296,7 @@ function refusalFromPublicError(
   }
   try {
     const code = (JSON.parse(body) as { error?: { code?: unknown } })?.error?.code;
-    if (code === 'enrollment_required' || code === 'locked') {
+    if (code === 'enrollment_required' || code === 'locked' || code === 'lan_only') {
       return { refusal: describeControlCode(code, label) };
     }
   } catch {

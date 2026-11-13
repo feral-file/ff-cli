@@ -153,6 +153,7 @@ export interface BuildPlaylistRequirement {
 export interface QueryAddressRequirement {
   type: 'query_address';
   ownerAddress: string;
+  includeContracts?: string[];
   quantity?: number | string;
 }
 

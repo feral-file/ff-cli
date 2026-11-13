@@ -55,8 +55,27 @@ function shellArg(label: string): string {
   return /[\s"'$`\\]/.test(label) ? JSON.stringify(label) : label;
 }
 
+/**
+ * ownerSetupGuidance is the next step when an FF1 runs secure control but has
+ * no owner yet (`control.state` legacy): ff-cli cannot become its first owner
+ * (§5.6 pairing needs an owner to add it), and on FF OS with LAN control the
+ * one-time-code topic handoff no longer gives anything (the relayer topic is
+ * inert), so the owner is set up in the app first and then adds ff-cli.
+ *
+ * @param deviceLabel - Device name used in commands
+ * @returns The guidance sentence
+ */
+export function ownerSetupGuidance(deviceLabel: string): string {
+  return `Set this FF1 up as owner in the Feral File app, then add this computer with Add controller (\`${pairCommand(deviceLabel)}\` shows the code).`;
+}
+
 const HEADLINES: Record<string, string> = {
-  enrollment_required: 'This FF1 is secured and only accepts requests from paired controllers.',
+  // enrollment_required has two causes on FF OS with LAN control (#3551):
+  // the command is owner tier and this request carries no owner grant, or
+  // the owner turned LAN control off (setLanControl). The public error
+  // cannot tell them apart, so the copy names both.
+  enrollment_required:
+    'This FF1 accepts this command only from its owner, or the owner turned off control from its Wi-Fi.',
   envelope_required: 'This FF1 is secured and only accepts requests from paired controllers.',
   unknown_controller: 'This FF1 does not know this ff-cli controller.',
   access_revoked: "This ff-cli controller's access to the FF1 was revoked or has expired.",
@@ -75,6 +94,9 @@ const HEADLINES: Record<string, string> = {
     'The FF1 could not confirm it recorded the request; a command was not run, but a pairing or controller change may have been applied.',
   invitation_invalid: 'The FF1 rejected the invitation.',
   command_failed: 'The FF1 ran the command, but it failed.',
+  // lan_only: the FF1's hub serves only local-network sources (#3551). It is
+  // answered before any envelope is opened, so pairing does not change it.
+  lan_only: 'This FF1 accepts requests only from its own network.',
 };
 
 /**
@@ -118,6 +140,8 @@ function followUp(code: string, pair: string): string | undefined {
       // (or the address now reaches another FF1), so the advice never
       // deletes keys: a new pairing keeps the current ones until it is finished.
       return `Check that the device address still reaches this FF1. If it was factory reset, run \`${pair}\`; the current keys are kept until the new pairing is finished. Do not unpair.`;
+    case 'lan_only':
+      return 'Run ff-cli from a computer on the same network as this FF1, and check that the device host is its address on that network.';
     case 'locked':
       return 'The FF1 needs attention: restart it, and if the problem stays, factory reset it from the Feral File app.';
     case 'rate_limited':

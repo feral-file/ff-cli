@@ -683,6 +683,64 @@ test('getNFTTokenInfoSingle: mock polls media_assets when first hit has empty li
   }
 });
 
+// ff-cli#132: an already-indexed token with a usable display URL and no
+// media_assets used to poll to the 60 s timeout and return the same row.
+test('getNFTTokenInfoSingle: already indexed with a usable source and no media_assets does not poll', async () => {
+  const { getNFTTokenInfoSingle } = nftIndexer;
+  const originalFetch = global.fetch;
+  let tokenCalls = 0;
+  const row = mockTokenRow({
+    media_assets: [],
+    display: {
+      name: 'Earmark #99',
+      description: '',
+      mime_type: 'text/html',
+      image_url: '',
+      animation_url: 'https://cdn.example.com/previews/index.html',
+      artists: [],
+    },
+  });
+
+  global.fetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+    const { query } = graphqlRequestFromInit(init);
+    assert.ok(query.includes('tokens('), 'expected only tokens queries');
+    tokenCalls += 1;
+    return jsonResponse({ data: { tokens: { items: [row], total: 1 } } });
+  };
+
+  try {
+    const result = await getNFTTokenInfoSingle(
+      {
+        chain: 'ethereum',
+        contractAddress: row.contract_address as string,
+        tokenId: row.token_number as string,
+      },
+      10,
+      // A real interval: if the wait comes back, this test hangs to the timeout.
+      { mediaPoll: { intervalMs: 50, timeoutMs: 200 } }
+    );
+    assert.equal(result.success, true);
+    assert.equal(tokenCalls, 1);
+    if (!result.success || !('item' in result) || !result.item) {
+      assert.fail('expected DP1 item');
+    }
+    assert.equal(result.item.source, 'https://cdn.example.com/previews/index.html');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('shouldWaitForMediaAssets: waits only when renditions can still arrive or nothing is playable', () => {
+  const { shouldWaitForMediaAssets } = nftIndexer;
+  const playable = { display: { animation_url: 'https://example.com/a.html' }, media_assets: [] };
+  const empty = { display: { animation_url: '', image_url: '' }, media_assets: [] };
+
+  assert.equal(shouldWaitForMediaAssets(mockTokenRow(), true), false);
+  assert.equal(shouldWaitForMediaAssets(playable, false), false);
+  assert.equal(shouldWaitForMediaAssets(playable, true), true);
+  assert.equal(shouldWaitForMediaAssets(empty, false), true);
+});
+
 test('convertToDP1Item: carries indexer description, artist, and still image inline', () => {
   const { mapIndexerDataToStandardFormat, convertToDP1Item } = nftIndexer;
   // eslint-disable-next-line @typescript-eslint/no-require-imports

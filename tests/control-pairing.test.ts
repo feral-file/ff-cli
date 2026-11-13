@@ -666,7 +666,7 @@ describe('pairing path selection', () => {
     );
     assert.equal(
       await probeControlSupport(device, lan({ control: { v: 1, state: 'legacy' } })),
-      'plaintext'
+      'unowned'
     );
     assert.equal(
       await probeControlSupport(device, lan({ control: { v: 1, state: 'enrolled' } })),
@@ -679,7 +679,7 @@ describe('pairing path selection', () => {
     );
     assert.equal(
       await probeControlSupport(device, status({ control: { v: 1, state: 'legacy' } })),
-      'plaintext'
+      'unowned'
     );
     for (const state of ['enrolled', 'enforced', 'locked']) {
       assert.equal(
@@ -805,6 +805,35 @@ describe('pairing path selection', () => {
     assert.equal(world.channels.length, 0);
     assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
     assert.equal(fs.existsSync(path.join(storeDir, 'pairing')), false);
+  });
+
+  // #3551: an FF1 with secure control but no owner yet cannot pair (no owner to add ff-cli),
+  // and its relayer topic is inert, so the one-time code is not offered either.
+  test('an FF1 with secure control and no owner gets the owner-setup guidance, no pairing', async () => {
+    const world = ownerWorld(approve());
+    await assert.rejects(
+      pairDevice(device, options, {
+        ...world.deps,
+        fetchFn: statusFetch(() => json(200, { control: { v: 1, state: 'legacy' } })),
+        receiveTopicHandoff: async () => {
+          throw new Error('must not offer the topic handoff');
+        },
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CommandFailure);
+        assert.match(error.message, /Office has no owner yet/);
+        assert.match(
+          error.details!,
+          /Set this FF1 up as owner in the Feral File app, then add this computer with Add controller/
+        );
+        assert.match(error.details!, /ff-cli device pair Office/);
+        assert.match(error.details!, /display art on it from the same network without pairing/);
+        return true;
+      }
+    );
+    assert.equal(world.channels.length, 0);
+    assert.deepEqual(world.topics, []);
+    assert.equal(loadController(DEVICE_ID, { dir: storeDir }), null);
   });
 
   for (const held of ['main record', 'staged record', 'pairing keys'] as const) {

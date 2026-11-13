@@ -337,11 +337,15 @@ You can also manage devices independently with:
     app; ff-cli pins the FF1's control profile from the owner's sealed answer
     and enrolls as a **controller**. Needs an internet connection; see
     [Secure control pairing](#secure-control-pairing).
-  - FF OS without secure control (or with it switched on but no owner yet):
-    display a one-time code and key-bound security check; in Feral File
+  - FF OS without secure control: display a one-time code and key-bound security check; in Feral File
     mobile choose **Pair with ff-cli**, enter the code, and confirm both values
     match before sharing. The app sends the relayer topic, which ff-cli stores
     in the operating system credential vault.
+  - FF OS with secure control but no owner yet: nothing to pair with. ff-cli
+    stops with "Set this FF1 up as owner in the Feral File app, then add this
+    computer with Add controller." (the one-time code is not offered: the
+    relayer topic does nothing on that FF OS). Until then, `display` works
+    without pairing from the FF1's network.
   - Status unreadable (FF1 off the LAN): the QR path, with a hint. Pass
     `--topic-handoff` to force the one-time-code path.
 
@@ -358,6 +362,13 @@ You can also manage devices independently with:
   cast to the FF1; `ff-cli device revoke` removes it like any controller.
 - `ff-cli device revoke <controller-id> [name]` – Revoke a controller, or deny
   its pending request (owner only).
+- `ff-cli device lan --open|--close [name]` – Open or close LAN control (owner
+  only). Open (the default on the FF1): anyone on the FF1's network can display
+  art and read its status without pairing; resetting it, changing its Wi-Fi,
+  `ssh` and turning it off stay the owner's. Closed: only paired controllers,
+  on its network too. Sent sealed with ff-cli's owner grant; without a grant
+  ff-cli stops before sending anything. Prints the state the FF1 reports.
+  Close it on shared networks such as offices, hotels and museums.
 - `ff-cli device unpair [name]` – Revoke ff-cli's own access on the FF1 (best
   effort) and delete its controller keys. It always asks first (owner keys get
   a stronger warning); `-y, --yes` skips the question.
@@ -611,7 +622,9 @@ Errors and what to do:
 
 | Message                                                                                                                         | Cause                                                                                                                                                                                     | Fix                                                                                                                                                                                                                                        |
 | ------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| "This FF1 is secured and only accepts requests from paired controllers."                                                        | The FF1 refuses plaintext and ff-cli is not paired                                                                                                                                        | `ff-cli device pair <name>`; an owner scans the code with **Add controller**                                                                                                                                                               |
+| "This FF1 accepts this command only from its owner, or the owner turned off control from its Wi-Fi." | ff-cli is not paired and the command is owner only (`ssh`), or the owner closed LAN control (`ff-cli device lan --close`) | `ff-cli device pair <name>`; an owner scans the code with **Add controller** |
+| "This FF1 accepts requests only from its own network."                   | The FF1 serves only callers on its own network, and this computer (or the device host) is outside it | Run ff-cli on the FF1's network, with the device host set to its address there |
+| "… has no owner yet, so ff-cli cannot pair with it." / "… has no owner yet, and SSH access needs one." | Secure control with no owner yet: there is no owner to add ff-cli | Set the FF1 up as owner in the Feral File app, then `ff-cli device pair <name>` and add it with **Add controller** |
 | "…does not know this ff-cli controller", "…was revoked or has expired", "…has not been approved", "…still waiting for approval" | No active grant for these keys                                                                                                                                                            | `ff-cli device pair <name>` (or `--resume`); an owner scans the code with **Add controller**. If the owner gave the FF1 up (it shows a setup code, or no one has set it up since), `ff-cli device unpair <name>` to use it without pairing |
 | "Pairing was not completed: no owner answered…"                                                                                 | No verified answer reached ff-cli before `--timeout`                                                                                                                                      | Run `ff-cli device pair <name>` again (needs internet)                                                                                                                                                                                     |
 | "Pairing is not available: … relay v2 is turned off"                                                                            | Relay v2 is off: `ff1Relayer.v2Endpoint`/`FF1_RELAY_V2_ENDPOINT` is empty, the relayer settings are invalid, or `ff1Relayer.baseUrl` is not a bare HTTPS origin and no v2 endpoint is set | Remove the empty override, or set an HTTPS/WSS origin (see [Relay v2](#relay-v2))                                                                                                                                                          |

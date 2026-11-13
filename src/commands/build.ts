@@ -2,6 +2,7 @@ import { Command } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
 import { buildPlaylistDirect } from '../main';
+import { setVerbose } from '../logger';
 
 /**
  * BUILD_PARAMS_HELP documents the params file in `build --help`.
@@ -15,7 +16,7 @@ Params (JSON file, or piped on stdin):
   {"requirements": [ ...one or more... ], "playlistSettings": { ... }}
 
 Requirement types:
-  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all").
+  query_address       What a wallet owns. ownerAddress (0x… or tz…), optional quantity (number up to 100, or "all") and includeContracts (array of contract addresses).
                       {"type":"query_address","ownerAddress":"0x…","quantity":5}
   build_playlist      Tokens from a contract. blockchain ("ethereum" or "tezos"), contractAddress, tokenIds.
                       {"type":"build_playlist","blockchain":"ethereum","contractAddress":"0x…","tokenIds":["1","2"]}
@@ -72,6 +73,12 @@ export const buildCommand = new Command('build')
 
         params = JSON.parse(stdin);
       }
+
+      // The logger is verbose-gated and nothing else turns it on for build.
+      // Without this, `-v` hid every indexer line, including the wait for
+      // media assets, so a slow build could not say what it was waiting on
+      // (ff-cli#132).
+      setVerbose(options.verbose);
 
       if (options.verbose) {
         console.log(chalk.blue('\nParameters:'));
