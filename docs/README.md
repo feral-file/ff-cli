@@ -151,6 +151,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
 - `device list` – List all configured FF1 devices
 - `device add` – Add a device with mDNS or manual `--host`, `--name`, and `--id`
   - Options: `--host <host>`, `--name <name>`, `--id <id>`
+  - Custom FF OS IDs such as `studio-display` are accepted and keep their case. A manual address update checks LAN status for an ID conflict and refuses to overwrite a different saved identity. Verify the ID in the app, then repeat with an explicit `--id` to correct a stale entry; pairing still verifies the owner-provided profile against that ID.
 - `device pair [name]` – Pair ff-cli with an FF1: on FF OS with secure control, show a QR code that an owner scans with "Add controller" in the Feral File app, then enroll with the role the owner picked (needs internet; the FF1 must already have an owner); on FF OS without secure control, display a one-time code for "Pair with ff-cli" in the app and store the relayer access it sends; an FF1 with secure control but no owner yet is not paired: set it up as owner in the app first
   - Options: `--label <label>`, `--timeout <seconds>` (10–600, default 300), `--resume` (finish a pairing an owner already approved), `-y, --yes` (move a corrupt controller file aside without asking), `--topic-handoff` (force the one-time-code path, e.g. when the FF1 is not on this LAN)
 - `device controllers [name]` – List an FF1's paired controllers, Play sites with a display grant, and pending requests (owner only)

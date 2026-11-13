@@ -1,3 +1,4 @@
+import { normalizeDeviceId } from './control/controller-store';
 import { normalizeDeviceHost } from './device-normalize';
 
 /**
@@ -32,7 +33,7 @@ export function findExistingDeviceEntry(
   discoveredAddresses?: string[]
 ): { host?: string; name?: string; id?: string; addresses?: string[] } | undefined {
   const sameDeviceId = (left?: string, right?: string) =>
-    Boolean(left && right && left.trim().toUpperCase() === right.trim().toUpperCase());
+    Boolean(left && right && normalizeDeviceId(left) === normalizeDeviceId(right));
   // 1. mDNS device ID — stable hardware identity, checked before URL so stale
   //    host entries for other devices at the same IP do not shadow the result.
   if (discoveredId) {
