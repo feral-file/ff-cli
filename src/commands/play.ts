@@ -6,6 +6,7 @@ import {
   buildMediaPlaySource,
   checkWebPageUrl,
   isPlaylistSourceUrl,
+  loadDeclaredPlaylist,
   loadPlaylistSource,
   refusalForLoadFailure,
   resolvePlaySource,
@@ -93,7 +94,14 @@ export function describeDiscoveryInput(source: string): string | null {
  * is refused here rather than redirected: the redirect also suggests
  * `display --web`, which would cast the error page.
  *
- * @throws {Error} When the URL does not exist (refusalForLoadFailure)
+ * A marketplace page that declares its own DP-1 playlist resolves to that
+ * playlist (loadDeclaredPlaylist), ahead of the redirect to `find`. This is
+ * what makes a feralfile.com exhibition address display its works: the page
+ * names its playlist, and `find` has no route for those addresses, so the
+ * redirect was a dead end for them.
+ *
+ * @throws {Error} When the URL does not exist (refusalForLoadFailure), or the
+ *   page declares a playlist that does not load (loadDeclaredPlaylist)
  */
 export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlaySource | null> {
   if (!isPlaylistSourceUrl(source)) {
@@ -116,7 +124,7 @@ export async function probeDiscoveryUrlAsPlaylist(source: string): Promise<PlayS
     if (refusal) {
       throw refusal;
     }
-    return null;
+    return loadDeclaredPlaylist(source.trim(), error);
   }
 }
 
@@ -252,6 +260,10 @@ async function castResolved(
 
   if (resolved.kind === 'media' && resolved.note) {
     console.log(chalk.yellow(resolved.note));
+  }
+
+  if (resolved.kind === 'playlist' && resolved.declaredBy) {
+    console.log(chalk.dim(`Page declares a DP-1 playlist: ${resolved.source}`));
   }
 
   if (!options.skipVerify && isPlaylistSource) {
