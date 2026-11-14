@@ -27,16 +27,19 @@
 /** The title a page gives the link to its DP-1 playlist. */
 const PLAYLIST_LINK_TITLE = 'dp-1 playlist';
 
-const LINK_TAG = /<link\b[^>]*>/gi;
+/**
+ * Elements whose body is text, not markup: a `<link>` written inside one (markup
+ * in a JavaScript string, a `<title>`) declares nothing, so the tokenizer skips
+ * from the start tag to the matching end tag.
+ */
+const RAW_TEXT_ELEMENTS = new Set(['script', 'style', 'textarea', 'title']);
 
 /**
- * Text a browser never reads as elements: comments, and the raw-text bodies
- * of script, style, textarea and title. A `<link>` written inside any of them
- * (a commented-out declaration, markup in a JavaScript string) declares
- * nothing, so it is removed before links are matched.
+ * One attribute: a name, then optionally `=` and a double-quoted, single-quoted
+ * or unquoted value. Sticky, so a tag is read attribute by attribute from a
+ * known position and a `>` inside a quoted value never ends the tag.
  */
-const NON_ELEMENT_TEXT =
-  /<!--[\s\S]*?(?:-->|$)|<(script|style|textarea|title)\b[^>]*>[\s\S]*?(?:<\/\1\s*>|$)/gi;
+const ATTRIBUTE = /\s*([^\s"'<>/=]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]*)))?/y;
 
 const NAMED_REFERENCES: Record<string, string> = {
   amp: '&',
@@ -56,7 +59,9 @@ const NAMED_REFERENCES: Record<string, string> = {
  * @returns {string} The decoded value; unknown references are left as written
  */
 function decodeCharacterReferences(value: string): string {
-  return value.replace(/&(?:#(\d+)|#x([0-9a-f]+)|([a-z]+));/gi, (whole, dec, hex, name) => {
+  // Numeric references decode without the closing semicolon, as in a browser
+  // (`&#38b=2` is `&b=2`); named ones are decoded only when written with it.
+  return value.replace(/&(?:#(\d+);?|#x([0-9a-f]+);?|([a-z]+);)/gi, (whole, dec, hex, name) => {
     if (name) {
       return NAMED_REFERENCES[name.toLowerCase()] ?? whole;
     }
@@ -64,25 +69,68 @@ function decodeCharacterReferences(value: string): string {
     return codePoint > 0 && codePoint <= 0x10ffff ? String.fromCodePoint(codePoint) : whole;
   });
 }
-const ATTRIBUTE = /([^\s"'<>/=]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'<>]+))/g;
+
+/** A start tag read from a page: its lower-cased name and attributes. */
+interface StartTag {
+  name: string;
+  attributes: Map<string, string>;
+}
 
 /**
- * parseAttributes reads the attributes of one HTML tag into a map keyed by
- * lower-cased name. The first occurrence of a name wins, as in a browser.
+ * readStartTags walks an HTML document and yields each start tag a browser
+ * would see as an element, in document order.
  *
- * @param {string} tag - One tag's source text, e.g. `<link rel="x" href="y">`
- * @returns {Map<string, string>} Attribute values, character references decoded
+ * This is a small tokenizer, not a regex over the whole text, because the
+ * cases a regex gets wrong are the ones that matter here: a `>` inside a
+ * quoted attribute value ends a regex match early and hides a real link, and
+ * `<link …>` written inside another element's attribute value, a comment, or
+ * a script is not an element at all and must not be followed. It handles
+ * comments, quoted attributes, and raw-text elements; it does not build a
+ * tree, which finding a `<link>` does not need. ff-cli has no HTML parser
+ * dependency, and this job does not justify adding one.
+ *
+ * @param {string} html - The page's source text
+ * @returns {Generator<StartTag>} Start tags; attribute names lower-cased, the
+ *   first occurrence of a name winning, values character-reference decoded
  */
-function parseAttributes(tag: string): Map<string, string> {
-  const attributes = new Map<string, string>();
-  for (const match of tag.matchAll(ATTRIBUTE)) {
-    const name = match[1].toLowerCase();
-    if (!attributes.has(name)) {
-      const raw = match[2] ?? match[3] ?? match[4] ?? '';
-      attributes.set(name, decodeCharacterReferences(raw));
+function* readStartTags(html: string): Generator<StartTag> {
+  let position = 0;
+  while ((position = html.indexOf('<', position)) !== -1) {
+    if (html.startsWith('<!--', position)) {
+      const end = html.indexOf('-->', position + 4);
+      position = end === -1 ? html.length : end + 3;
+      continue;
+    }
+    const nameMatch = /^<([a-z][^\s/>]*)/i.exec(html.slice(position, position + 64));
+    if (!nameMatch) {
+      position += 1;
+      continue;
+    }
+    const name = nameMatch[1].toLowerCase();
+    const attributes = new Map<string, string>();
+    position += nameMatch[0].length;
+    for (;;) {
+      ATTRIBUTE.lastIndex = position;
+      const attribute = ATTRIBUTE.exec(html);
+      if (!attribute) {
+        break;
+      }
+      position = ATTRIBUTE.lastIndex;
+      const attributeName = attribute[1].toLowerCase();
+      if (!attributes.has(attributeName)) {
+        const raw = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+        attributes.set(attributeName, decodeCharacterReferences(raw));
+      }
+    }
+    // Whatever is left before `>` is a stray `/`, quote or `=`; skip it.
+    const close = html.indexOf('>', position);
+    position = close === -1 ? html.length : close + 1;
+    yield { name, attributes };
+    if (RAW_TEXT_ELEMENTS.has(name)) {
+      const end = html.toLowerCase().indexOf(`</${name}`, position);
+      position = end === -1 ? html.length : end;
     }
   }
-  return attributes;
 }
 
 /**
@@ -103,20 +151,26 @@ export type DeclaredPlaylist = { url: string } | { invalid: string };
  * page seen so far needs it. An `href` that does not parse, or that is not
  * http(s), comes back as `invalid`: a page can never point `display` at a
  * local file or another scheme, and the caller refuses instead of falling
- * back to the page. A matching link with no `href` at all declares nothing.
+ * back to the page. So does an `href` that is present but empty. A matching
+ * link with no `href` attribute at all declares nothing.
  *
  * @param {string} html - The page's source text
  * @param {string} pageUrl - The URL the page was served from
  * @returns {DeclaredPlaylist | null} The declaration, if any
  */
 export function findDeclaredPlaylist(html: string, pageUrl: string): DeclaredPlaylist | null {
-  for (const tag of html.replace(NON_ELEMENT_TEXT, ' ').match(LINK_TAG) ?? []) {
-    const attributes = parseAttributes(tag);
+  for (const { name, attributes } of readStartTags(html)) {
+    if (name !== 'link') {
+      continue;
+    }
     const rel = (attributes.get('rel') ?? '').toLowerCase().split(/\s+/);
     const title = (attributes.get('title') ?? '').trim().toLowerCase();
     const href = attributes.get('href')?.trim();
-    if (!rel.includes('alternate') || title !== PLAYLIST_LINK_TITLE || !href) {
+    if (!rel.includes('alternate') || title !== PLAYLIST_LINK_TITLE || href === undefined) {
       continue;
+    }
+    if (!href) {
+      return { invalid: '(empty href)' };
     }
     try {
       const resolved = new URL(href, pageUrl);

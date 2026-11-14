@@ -102,6 +102,32 @@ describe('findDeclaredPlaylist', () => {
     });
   });
 
+  test('an empty href is an invalid declaration; a missing href declares nothing', () => {
+    const empty = `<link rel="alternate" title="DP-1 playlist" href="  ">`;
+    assert.deepEqual(findDeclaredPlaylist(empty, OTHER_PAGE), { invalid: '(empty href)' });
+    const missing = `<link rel="alternate" title="DP-1 playlist">`;
+    assert.equal(findDeclaredPlaylist(missing, OTHER_PAGE), null);
+  });
+
+  test('a ">" inside a quoted attribute does not end the tag', () => {
+    const html = `<link data-label="Art > Home" rel="alternate" title="DP-1 playlist" href="/p.json">`;
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/p.json',
+    });
+  });
+
+  test("link markup inside another element's attribute value declares nothing", () => {
+    const html = `<div data-example='<link rel="alternate" title="DP-1 playlist" href="/p.json">'></div>`;
+    assert.equal(findDeclaredPlaylist(html, OTHER_PAGE), null);
+  });
+
+  test('a numeric character reference without a semicolon is decoded', () => {
+    const html = `<link rel="alternate" href="/p.json?a=1&#38b=2" title="DP-1 playlist">`;
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/p.json?a=1&b=2',
+    });
+  });
+
   test('a link inside a comment or a script declares nothing', () => {
     const link = `<link rel="alternate" href="/p.json" title="DP-1 playlist">`;
     assert.equal(findDeclaredPlaylist(`<head><!-- ${link} --></head>`, OTHER_PAGE), null);
