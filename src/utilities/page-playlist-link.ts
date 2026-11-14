@@ -127,8 +127,12 @@ function* readStartTags(html: string): Generator<StartTag> {
     position = close === -1 ? html.length : close + 1;
     yield { name, attributes };
     if (RAW_TEXT_ELEMENTS.has(name)) {
-      const end = html.toLowerCase().indexOf(`</${name}`, position);
-      position = end === -1 ? html.length : end;
+      // Search the original text: lower-casing the page first can change its
+      // length (Turkish İ becomes two code units) and shift every offset.
+      const endTag = new RegExp(`</${name}`, 'gi');
+      endTag.lastIndex = position;
+      const end = endTag.exec(html);
+      position = end ? end.index : html.length;
     }
   }
 }

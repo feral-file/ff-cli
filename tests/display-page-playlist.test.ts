@@ -128,6 +128,13 @@ describe('findDeclaredPlaylist', () => {
     });
   });
 
+  test('a title whose lower-cased form is longer does not shift the scan past the link', () => {
+    const html = `<TITLE>İSTANBUL BİENALİ: BİRLİKTE DÜŞÜNMEK İÇİN BİR SERGİ</TITLE><link rel="alternate" href="/p.json" title="DP-1 playlist">`;
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/p.json',
+    });
+  });
+
   test('a link inside a comment or a script declares nothing', () => {
     const link = `<link rel="alternate" href="/p.json" title="DP-1 playlist">`;
     assert.equal(findDeclaredPlaylist(`<head><!-- ${link} --></head>`, OTHER_PAGE), null);
