@@ -1,4 +1,5 @@
 import { fetchWithTimeout } from './http';
+import { findDeclaredPlaylist } from './page-playlist-link';
 import { promises as fs } from 'fs';
 import type { Playlist } from '../types';
 
@@ -50,22 +51,35 @@ export type PlaylistUrlLoadErrorKind = 'status' | 'network' | 'read' | 'json';
  *   mid-download). Nothing was learned about the URL, so it is not "not a
  *   playlist" either.
  * - `json`: an OK answer, read in full, that is not JSON. This is what every
- *   ordinary web page and media file produces.
+ *   ordinary web page and media file produces. `body` holds the text that was
+ *   read and `finalUrl` the URL it was served from after redirects, so a
+ *   caller can look for the playlist a web page declares (see
+ *   loadDeclaredPlaylist) without fetching the page a second time.
  */
 export class PlaylistUrlLoadError extends Error {
   readonly kind: PlaylistUrlLoadErrorKind;
   readonly status?: number;
   readonly code?: string;
+  readonly body?: string;
+  readonly finalUrl?: string;
 
   constructor(
     message: string,
-    detail: { kind: PlaylistUrlLoadErrorKind; status?: number; code?: string }
+    detail: {
+      kind: PlaylistUrlLoadErrorKind;
+      status?: number;
+      code?: string;
+      body?: string;
+      finalUrl?: string;
+    }
   ) {
     super(message);
     this.name = 'PlaylistUrlLoadError';
     this.kind = detail.kind;
     this.status = detail.status;
     this.code = detail.code;
+    this.body = detail.body;
+    this.finalUrl = detail.finalUrl;
   }
 }
 
@@ -121,7 +135,9 @@ async function loadPlaylistUrl(url: string): Promise<LoadedPlaylist> {
   } catch (error) {
     throw new PlaylistUrlLoadError(
       `Invalid JSON from playlist URL ${url}: ${(error as Error).message}`,
-      { kind: 'json' }
+      // response.url is empty for a Response built by hand (tests); the
+      // requested URL is then the only base there is.
+      { kind: 'json', body: playlistText, finalUrl: response.url || url }
     );
   }
 }
@@ -179,6 +195,12 @@ export type PlaySource =
       playlist: Playlist;
       sourceType: 'file' | 'url';
       source: string;
+      /**
+       * Set when the caller passed a web page and `source` is the playlist
+       * that page declares (see loadDeclaredPlaylist): the page's URL, so the
+       * caller can say which page led to which playlist.
+       */
+      declaredBy?: string;
     }
   | {
       kind: 'media';
@@ -283,6 +305,70 @@ function noteForLoadFailure(failure: unknown): string | undefined {
 }
 
 /**
+ * loadDeclaredPlaylist loads the DP-1 playlist a web page declares for itself,
+ * or returns null when the failed load was not a page that declares one.
+ *
+ * `display <page address>` means "display what this page presents". A page
+ * that names its playlist (see page-playlist-link) gets that playlist, on any
+ * host; a page that names none keeps the older behavior, and `--web` still
+ * shows the page itself.
+ *
+ * A declared playlist that cannot be loaded, that is not a DP-1 document, or
+ * whose link is not a usable http(s) URL, is an error, never a fall back to the page: the page said the works are
+ * there, so sending the page instead would report "Displaying" for the wrong
+ * thing, the silent wrong result refusalForLoadFailure exists to prevent. The
+ * error names `--web` for the caller who did mean the page.
+ *
+ * The declared playlist goes through the same signature check as any hosted
+ * playlist; being linked from a page grants it nothing.
+ *
+ * @param {string} pageUrl - The URL the caller passed
+ * @param {unknown} failure - What loading `pageUrl` as a playlist threw
+ * @returns {Promise<PlaySource | null>} The declared playlist, or null
+ * @throws {Error} When the page declares a playlist that does not load as one
+ */
+export async function loadDeclaredPlaylist(
+  pageUrl: string,
+  failure: unknown
+): Promise<PlaySource | null> {
+  const loadFailure = failure as Partial<PlaylistUrlLoadError> | null;
+  if (loadFailure?.kind !== 'json' || typeof loadFailure.body !== 'string') {
+    return null;
+  }
+  const declared = findDeclaredPlaylist(loadFailure.body, loadFailure.finalUrl ?? pageUrl);
+  if (!declared) {
+    return null;
+  }
+
+  const target = 'url' in declared ? declared.url : declared.invalid;
+  const refuse = (reason: string): Error =>
+    new Error(
+      `${pageUrl} declares a DP-1 playlist at ${target}, but ${reason}. ` +
+        `Nothing was sent to the device. To show the page itself: ff-cli display --web "${pageUrl}"`
+    );
+  if ('invalid' in declared) {
+    throw refuse('that is not an http(s) URL');
+  }
+  const declaredUrl = declared.url;
+  let loaded: LoadedPlaylist;
+  try {
+    loaded = await loadPlaylistUrl(declaredUrl);
+  } catch (error) {
+    throw refuse(`it could not be loaded (${(error as Error).message})`);
+  }
+  if (typeof (loaded.playlist as { dpVersion?: unknown } | null)?.dpVersion !== 'string') {
+    throw refuse('that document is not a DP-1 playlist (no dpVersion)');
+  }
+  return {
+    kind: 'playlist',
+    playlist: loaded.playlist,
+    sourceType: 'url',
+    source: declaredUrl,
+    declaredBy: pageUrl,
+  };
+}
+
+/**
  * checkWebPageUrl fetches a URL that `display --web` is about to send, refusing
  * one that does not exist and returning a note when it could not be read.
  *
@@ -323,10 +409,12 @@ export async function checkWebPageUrl(url: string): Promise<string | undefined> 
 /**
  * Resolve a `display` command argument to a source it can send.
  *
- * Files are always treated as playlists. URLs are tried as playlists first;
- * a URL whose body is not a playlist (an ordinary web page, a video, an
- * image) is wrapped in a synthesized single-item playlist so direct media
- * URLs and web pages still work.
+ * Files are always treated as playlists. URLs are tried as playlists first.
+ * A URL whose body is a web page that declares its DP-1 playlist resolves to
+ * that playlist (see loadDeclaredPlaylist). Any other URL whose body is not a
+ * playlist (an ordinary web page, a video, an image) is wrapped in a
+ * synthesized single-item playlist so direct media URLs and web pages still
+ * work.
  *
  * The "URL → playlist or media" path uses throw-and-fallback because there
  * is no cheap way to distinguish a 200-OK media file from a malformed
@@ -344,7 +432,8 @@ export async function checkWebPageUrl(url: string): Promise<string | undefined> 
  *   length per DP-1 §4.1, static media uses the configured default)
  * @returns Resolved playlist + metadata describing how it was loaded
  * @throws Error When `source` is empty, is a non-URL file path that cannot be loaded,
- *   or is a URL that does not exist (see above)
+ *   is a URL that does not exist (see above), or is a page whose declared
+ *   playlist does not load
  */
 export async function resolvePlaySource(
   source: string,
@@ -377,6 +466,10 @@ export async function resolvePlaySource(
     const refusal = refusalForLoadFailure(trimmed, error);
     if (refusal) {
       throw refusal;
+    }
+    const declared = await loadDeclaredPlaylist(trimmed, error);
+    if (declared) {
+      return declared;
     }
     return buildMediaPlaySource(trimmed, {
       duration: defaultDuration,

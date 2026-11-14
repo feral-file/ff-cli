@@ -121,9 +121,10 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - **An in-place run refuses when it would discard a still-valid signature from another key**, since only its holder could make that signature again: write the result elsewhere with `-o, --output`, which leaves the original where it is. The refusal is about what cannot be recovered — an in-place run still proceeds when the only entries dropped are your own, or ones that no longer verify
   - `--replace-signatures` names each discarded entry by role and the last 8 characters of its `kid`, and verifies it against the document as it now stands. Your own earlier signature is replaced by the same run. Another key's entry that **still verifies** — which is every entry when the content was not edited, since the signing payload excludes `signatures` — is reported as removed; keep the previous file if you want it back. An entry that does **not** verify is reported as exactly that and no more: the command has only the document as it stands, so it cannot tell an edit from an entry that was never valid, and it does not guess. Roles are carried through as found (`agent`, `institution` and `licensor` are as valid as `curator`), and a flat legacy `signature` is reported as not checkable, since it carries no key or role at all
 - `display <source>` – Display a playlist file, playlist URL, media URL, or web page on an FF1 device (`play` still works for existing scripts; runs `verify` before sending; only the CLI-synthesized media/web URL fallback is auto-signed when a signing key is configured; use `--skip-verify` to bypass the gate)
-  - Any URL that does not load as a playlist is sent as a single item: a media file displays as media, and anything else displays as a web page
+  - A web page that declares its DP-1 playlist displays that playlist, not the page. A page declares it in its head with `<link rel="alternate" type="application/json" href="…/playlist.json" title="DP-1 playlist">`; the `href` may be relative. Feral File exhibition pages do, so `display https://feralfile.com/exhibitions/<slug>` displays the exhibition. The declared playlist is verified like any hosted playlist, and one that does not load is an error. `--web` displays the page itself
+  - Any other URL that does not load as a playlist is sent as a single item: a media file displays as media, and anything else displays as a web page
   - A URL that answers 404 or 410, a host that does not resolve, and a `.json` URL that does not load as a playlist are refused, so a missing page is never cast as an error page. `--web` checks the first two as well. Other failures to read the URL (a 403 from bot protection, a 5xx, a timeout) still send it, with a note, because the device fetches it itself
-  - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
+  - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) that declare no playlist are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
   - When a structurally valid loaded playlist is unsigned (including `signatures: []`) and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. Local file commands are labeled separately for POSIX shells and PowerShell so apostrophes and shell metacharacters stay literal. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
@@ -286,6 +287,9 @@ npm run dev -- display "https://cdn.example.com/playlist.json"
 # Display a media URL or any web page directly
 npm run dev -- display "https://example.com/video.mp4"
 npm run dev -- display "https://example.com/"
+
+# Display the playlist a page declares (Feral File exhibition pages declare theirs)
+npm run dev -- display "https://feralfile.com/exhibitions/e-volved-formulae-8an"
 
 # Display a page on a marketplace site as a page (display would otherwise send it to find)
 npm run dev -- display --web "https://feralfile.com/"
