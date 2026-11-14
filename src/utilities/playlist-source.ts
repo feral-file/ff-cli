@@ -1,5 +1,5 @@
 import { fetchWithTimeout } from './http';
-import { findDeclaredPlaylistUrl } from './page-playlist-link';
+import { findDeclaredPlaylist } from './page-playlist-link';
 import { promises as fs } from 'fs';
 import type { Playlist } from '../types';
 
@@ -52,7 +52,8 @@ export type PlaylistUrlLoadErrorKind = 'status' | 'network' | 'read' | 'json';
  *   playlist" either.
  * - `json`: an OK answer, read in full, that is not JSON. This is what every
  *   ordinary web page and media file produces. `body` holds the text that was
- *   read, so a caller can look for the playlist a web page declares (see
+ *   read and `finalUrl` the URL it was served from after redirects, so a
+ *   caller can look for the playlist a web page declares (see
  *   loadDeclaredPlaylist) without fetching the page a second time.
  */
 export class PlaylistUrlLoadError extends Error {
@@ -60,10 +61,17 @@ export class PlaylistUrlLoadError extends Error {
   readonly status?: number;
   readonly code?: string;
   readonly body?: string;
+  readonly finalUrl?: string;
 
   constructor(
     message: string,
-    detail: { kind: PlaylistUrlLoadErrorKind; status?: number; code?: string; body?: string }
+    detail: {
+      kind: PlaylistUrlLoadErrorKind;
+      status?: number;
+      code?: string;
+      body?: string;
+      finalUrl?: string;
+    }
   ) {
     super(message);
     this.name = 'PlaylistUrlLoadError';
@@ -71,6 +79,7 @@ export class PlaylistUrlLoadError extends Error {
     this.status = detail.status;
     this.code = detail.code;
     this.body = detail.body;
+    this.finalUrl = detail.finalUrl;
   }
 }
 
@@ -126,7 +135,9 @@ async function loadPlaylistUrl(url: string): Promise<LoadedPlaylist> {
   } catch (error) {
     throw new PlaylistUrlLoadError(
       `Invalid JSON from playlist URL ${url}: ${(error as Error).message}`,
-      { kind: 'json', body: playlistText }
+      // response.url is empty for a Response built by hand (tests); the
+      // requested URL is then the only base there is.
+      { kind: 'json', body: playlistText, finalUrl: response.url || url }
     );
   }
 }
@@ -302,8 +313,8 @@ function noteForLoadFailure(failure: unknown): string | undefined {
  * host; a page that names none keeps the older behavior, and `--web` still
  * shows the page itself.
  *
- * A declared playlist that cannot be loaded, or that is not a DP-1 document,
- * is an error, never a fall back to the page: the page said the works are
+ * A declared playlist that cannot be loaded, that is not a DP-1 document, or
+ * whose link is not a usable http(s) URL, is an error, never a fall back to the page: the page said the works are
  * there, so sending the page instead would report "Displaying" for the wrong
  * thing, the silent wrong result refusalForLoadFailure exists to prevent. The
  * error names `--web` for the caller who did mean the page.
@@ -324,16 +335,21 @@ export async function loadDeclaredPlaylist(
   if (loadFailure?.kind !== 'json' || typeof loadFailure.body !== 'string') {
     return null;
   }
-  const declaredUrl = findDeclaredPlaylistUrl(loadFailure.body, pageUrl);
-  if (!declaredUrl) {
+  const declared = findDeclaredPlaylist(loadFailure.body, loadFailure.finalUrl ?? pageUrl);
+  if (!declared) {
     return null;
   }
 
+  const target = 'url' in declared ? declared.url : declared.invalid;
   const refuse = (reason: string): Error =>
     new Error(
-      `${pageUrl} declares a DP-1 playlist at ${declaredUrl}, but ${reason}. ` +
+      `${pageUrl} declares a DP-1 playlist at ${target}, but ${reason}. ` +
         `Nothing was sent to the device. To show the page itself: ff-cli display --web "${pageUrl}"`
     );
+  if ('invalid' in declared) {
+    throw refuse('that is not an http(s) URL');
+  }
+  const declaredUrl = declared.url;
   let loaded: LoadedPlaylist;
   try {
     loaded = await loadPlaylistUrl(declaredUrl);

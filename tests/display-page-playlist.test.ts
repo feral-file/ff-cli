@@ -12,7 +12,7 @@
 import assert from 'node:assert/strict';
 import { describe, test, afterEach } from 'node:test';
 import { describeDiscoveryInput, probeDiscoveryUrlAsPlaylist } from '../src/commands/play';
-import { findDeclaredPlaylistUrl } from '../src/utilities/page-playlist-link';
+import { findDeclaredPlaylist } from '../src/utilities/page-playlist-link';
 import { resolvePlaySource } from '../src/utilities/playlist-source';
 
 const FF_PAGE = 'https://feralfile.com/exhibitions/e-volved-formulae-8an';
@@ -57,38 +57,58 @@ function mockFetch(routes: Record<string, { body: string; status?: number }>): s
   return requested;
 }
 
-describe('findDeclaredPlaylistUrl', () => {
+describe('findDeclaredPlaylist', () => {
   test('returns the playlist link and ignores the channel link', () => {
-    assert.equal(findDeclaredPlaylistUrl(ffPageHtml, FF_PAGE), FF_PLAYLIST);
+    assert.deepEqual(findDeclaredPlaylist(ffPageHtml, FF_PAGE), { url: FF_PLAYLIST });
   });
 
   test('resolves a relative href against the page URL', () => {
     const html = `<link rel="alternate" type="application/json" href="../playlists/test-001.json" title="DP-1 playlist">`;
-    assert.equal(
-      findDeclaredPlaylistUrl(html, OTHER_PAGE),
-      'https://example.org/shows/playlists/test-001.json'
-    );
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/shows/playlists/test-001.json',
+    });
   });
 
   test('accepts single quotes, any attribute order, and title case differences', () => {
     const html = `<LINK title=' dp-1 Playlist ' href='/p.json?a=1&amp;b=2' rel='Alternate nofollow'>`;
-    assert.equal(findDeclaredPlaylistUrl(html, OTHER_PAGE), 'https://example.org/p.json?a=1&b=2');
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/p.json?a=1&b=2',
+    });
   });
 
   test('a page with only a channel link declares no playlist', () => {
     const html = `<link rel="alternate" type="application/json" href="/channel.json" title="DP-1 channel">`;
-    assert.equal(findDeclaredPlaylistUrl(html, OTHER_PAGE), null);
+    assert.equal(findDeclaredPlaylist(html, OTHER_PAGE), null);
   });
 
   test('a link that is not rel=alternate is ignored', () => {
     const html = `<link rel="stylesheet" href="/p.json" title="DP-1 playlist">`;
-    assert.equal(findDeclaredPlaylistUrl(html, OTHER_PAGE), null);
+    assert.equal(findDeclaredPlaylist(html, OTHER_PAGE), null);
   });
 
-  test('a non-http(s) href is skipped', () => {
-    const html = `<link rel="alternate" href="file:///etc/passwd" title="DP-1 playlist">
-<link rel="alternate" href="javascript:alert(1)" title="DP-1 playlist">`;
-    assert.equal(findDeclaredPlaylistUrl(html, OTHER_PAGE), null);
+  test('a non-http(s) or unparseable href is an invalid declaration, not an absent one', () => {
+    const file = `<link rel="alternate" href="file:///etc/passwd" title="DP-1 playlist">`;
+    assert.deepEqual(findDeclaredPlaylist(file, OTHER_PAGE), { invalid: 'file:///etc/passwd' });
+    const broken = `<link rel="alternate" href="https://[broken/playlist.json" title="DP-1 playlist">`;
+    assert.deepEqual(findDeclaredPlaylist(broken, OTHER_PAGE), {
+      invalid: 'https://[broken/playlist.json',
+    });
+  });
+
+  test('numeric character references in the href are decoded', () => {
+    const html = `<link rel="alternate" href="/q.json?a=1&#38;b=2&#x26;c=3" title="DP-1 playlist">`;
+    assert.deepEqual(findDeclaredPlaylist(html, OTHER_PAGE), {
+      url: 'https://example.org/q.json?a=1&b=2&c=3',
+    });
+  });
+
+  test('a link inside a comment or a script declares nothing', () => {
+    const link = `<link rel="alternate" href="/p.json" title="DP-1 playlist">`;
+    assert.equal(findDeclaredPlaylist(`<head><!-- ${link} --></head>`, OTHER_PAGE), null);
+    assert.equal(findDeclaredPlaylist(`<script>const s = '${link}';</script>`, OTHER_PAGE), null);
+    assert.deepEqual(findDeclaredPlaylist(`<!-- old --><script>x</script>${link}`, OTHER_PAGE), {
+      url: 'https://example.org/p.json',
+    });
   });
 });
 
@@ -164,6 +184,37 @@ describe('display follows the playlist a page declares', () => {
         return true;
       }
     );
+  });
+
+  test('a relative href resolves against the URL the page was finally served from', async () => {
+    const declared = 'https://example.org/show/playlist.json';
+    global.fetch = (async (input: string | URL | Request) => {
+      const url = String(input);
+      if (url === 'https://example.org/show') {
+        const response = new Response(
+          `<link rel="alternate" href="playlist.json" title="DP-1 playlist">`
+        );
+        Object.defineProperty(response, 'url', { value: 'https://example.org/show/' });
+        return response;
+      }
+      return new Response(url === declared ? JSON.stringify(playlist) : 'no', {
+        status: url === declared ? 200 : 404,
+      });
+    }) as unknown as typeof fetch;
+
+    const resolved = await resolvePlaySource('https://example.org/show');
+    assert.equal(resolved.kind, 'playlist');
+    assert.equal(resolved.source, declared);
+  });
+
+  test('a declared href that is not a usable URL is an error, not the page', async () => {
+    mockFetch({
+      [OTHER_PAGE]: {
+        body: `<link rel="alternate" href="https://[broken/playlist.json" title="DP-1 playlist">`,
+      },
+    });
+
+    await assert.rejects(() => resolvePlaySource(OTHER_PAGE), /not an http\(s\) URL/);
   });
 
   test('a declared document without dpVersion is an error, not the page', async () => {
