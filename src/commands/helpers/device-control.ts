@@ -633,17 +633,19 @@ const CONTROLLER_LINK_BASE = 'https://link.feralfile.com/controller';
  * the app's (ff-app `ff1ControllerCodeLink`): everything rides in the
  * fragment, which a browser never sends to a server, so the pairing secret
  * stays out of the link host's logs; each value is percent-encoded once.
- * `d` names the Art Computer so the app skips its picker; the app refuses an
- * id it does not own, so it is left out when it is not a plain device id.
+ * `d` names the Art Computer so the app skips its picker, in the spelling the
+ * app knows it by (`normalizeDeviceId`); the app refuses an id it does not
+ * own, so it is left out when it is not a plain device id.
  *
  * @param payload - The `ff1-ctl:1|…` pairing payload
  * @param deviceId - The FF1's device id (its hostname, e.g. `FF1-8EVTK3RE`)
  * @returns The link
  */
 export function controllerApprovalLink(payload: string, deviceId: string): string {
-  const target = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(deviceId)
-    ? `d=${encodeURIComponent(deviceId)}&`
-    : '';
+  // The app matches `d` against its own device ids exactly, and those are the
+  // hostname's upper-case spelling; discovery stores `ff1-…` in lower case.
+  const id = normalizeDeviceId(deviceId);
+  const target = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id) ? `d=${encodeURIComponent(id)}&` : '';
   return `${CONTROLLER_LINK_BASE}#${target}c=${encodeURIComponent(payload)}`;
 }
 

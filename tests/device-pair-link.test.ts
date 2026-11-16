@@ -33,6 +33,11 @@ describe('controllerApprovalLink', () => {
     assert.ok(!fragment.includes('|') && !fragment.includes(' '));
   });
 
+  test('names the device as the app knows it when discovery stored lower case', () => {
+    const link = controllerApprovalLink(PAYLOAD, ' ff1-nfzmnqsp ');
+    assert.ok(link.startsWith('https://link.feralfile.com/controller#d=FF1-NFZMNQSP&c='));
+  });
+
   test('omits a device id the app would refuse, so the owner picks instead', () => {
     const link = controllerApprovalLink(PAYLOAD, 'not a device id!');
     assert.ok(link.startsWith('https://link.feralfile.com/controller#c='));
