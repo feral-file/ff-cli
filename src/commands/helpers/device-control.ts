@@ -620,21 +620,80 @@ function renderQr(payload: string): string {
   return rendered;
 }
 
-/** showPairingCode prints what the owner scans or pastes, and what happens next. */
+/** The app link the Feral File app opens at Add controller (ff-app `controllerCodeDeepLinks`). */
+const CONTROLLER_LINK_BASE = 'https://link.feralfile.com/controller';
+
+/**
+ * controllerApprovalLink wraps a pairing payload in the app link an owner can
+ * tap or scan with a phone's own camera.
+ *
+ * The bare `ff1-ctl:1|…` payload only works inside the app's own scanner or
+ * paste field, which the owner has to find first. The link opens the app at
+ * Add controller for this Art Computer with the code filled in. Its shape is
+ * the app's (ff-app `ff1ControllerCodeLink`): everything rides in the
+ * fragment, which a browser never sends to a server, so the pairing secret
+ * stays out of the link host's logs; each value is percent-encoded once.
+ * `d` names the Art Computer so the app skips its picker; the app refuses an
+ * id it does not own, so it is left out when it is not a plain device id.
+ *
+ * @param payload - The `ff1-ctl:1|…` pairing payload
+ * @param deviceId - The FF1's device id (its hostname, e.g. `FF1-8EVTK3RE`)
+ * @returns The link
+ */
+export function controllerApprovalLink(payload: string, deviceId: string): string {
+  const target = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(deviceId)
+    ? `d=${encodeURIComponent(deviceId)}&`
+    : '';
+  return `${CONTROLLER_LINK_BASE}#${target}c=${encodeURIComponent(payload)}`;
+}
+
+/**
+ * showPairingCode prints what the owner has to do, the link that does it, and
+ * what ff-cli is waiting for.
+ *
+ * Written for a person who has never paired before and may not be looking at
+ * this terminal: an agent often runs `device pair`, and the owner sees only
+ * what the agent passes on (found 2026-11-15, when an owner on the same
+ * network waited through three timeouts without knowing an approval in the
+ * app was wanted). So the first thing printed is who must act and where, the
+ * link is one copyable line, and the QR, which only a person at the terminal
+ * can use, is drawn only on a terminal and carries the same link, so a
+ * phone's ordinary camera opens it.
+ */
 function showPairingCode(
   device: PairDevice,
   material: PairingMaterial,
   timeoutMs: number,
   keysNote: string,
-  showQr: (payload: string) => void = (payload) => console.log(renderQr(payload))
+  showQr?: (payload: string) => void
 ): void {
   const payload = controllerQrString(material.qr);
-  console.log(chalk.blue(`\nAdd ff-cli to ${deviceLabel(device)}\n`));
+  const link = controllerApprovalLink(payload, device.id);
+  const name = deviceLabel(device);
+  const minutes = Math.round(timeoutMs / 60_000);
+  console.log(chalk.blue(`\nApprove this computer on ${name}\n`));
   console.log(
-    'On an owner’s phone, open this FF1 in the Feral File app, choose “Add controller”, and scan this code:\n'
+    `An owner of ${name} approves this in the Feral File app. Nothing appears in the app until the owner opens this link on their phone:\n`
   );
-  showQr(payload);
-  console.log('\nOr paste this text into the app:\n');
+  console.log(`  ${link}\n`);
+  console.log(
+    'In the app, choose Owner to allow ssh and device management, or Can display to only display art, then tap Add.'
+  );
+  if (showQr) {
+    // An injected presenter (tests, embedders) gets the bare protocol payload,
+    // the same value it always received; what to draw from it is its call.
+    showQr(payload);
+  } else if (process.stdout.isTTY) {
+    console.log('\nOr point the phone’s camera at this code:\n');
+    console.log(renderQr(link));
+  } else {
+    console.log(
+      '\nIf you are an agent: give the person the link above and the line before it. They cannot see this output.'
+    );
+  }
+  console.log(
+    `\nIf the link does not open the app: open the app, open ${name}, choose “Add controller”, and paste this text:\n`
+  );
   console.log(`  ${payload}\n`);
   console.log(chalk.dim(`Name the owner sees: ${material.qr.label}`));
   console.log(
@@ -642,7 +701,7 @@ function showPairingCode(
   );
   console.log(
     chalk.dim(
-      `Waiting up to ${Math.round(timeoutMs / 1000)}s for an owner. This needs an internet connection. Press Ctrl-C to stop.`
+      `Waiting up to ${minutes} minutes for the approval. This needs an internet connection. Press Ctrl-C to stop.`
     )
   );
 }

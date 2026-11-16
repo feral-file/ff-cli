@@ -640,7 +640,7 @@ describe('device pair (owner-initiated registration)', () => {
   });
 
   test('flag validation', () => {
-    assert.equal(parseTimeoutMs(undefined), 300_000);
+    assert.equal(parseTimeoutMs(undefined), 600_000);
     assert.equal(parseTimeoutMs('10'), 10_000);
     assert.equal(parseTimeoutMs('600'), 600_000);
     for (const bad of ['9', '601', '1.5', 'x']) {

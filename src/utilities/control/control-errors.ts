@@ -110,7 +110,7 @@ export function describeControlCode(code: string, deviceLabel: string): ControlF
   const headline = HEADLINES[code] ?? `The FF1 refused the request (${code}).`;
   const pair = pairCommand(deviceLabel);
   if (PAIRING_CODES.has(code)) {
-    const details = `Run \`${pair}\` and have an owner scan the code it shows with Add controller in the Feral File app.`;
+    const details = `This computer has not been approved on this FF1, or was approved only to display. Run \`${pair}\`: it prints a link the owner opens on their phone, which opens Add controller in the Feral File app (choose Owner for ssh and device management).`;
     if (code !== 'access_revoked') {
       return { code, error: headline, details };
     }

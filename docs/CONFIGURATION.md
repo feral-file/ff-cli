@@ -332,9 +332,12 @@ You can also manage devices independently with:
 - `ff-cli device default <name>` – Promote a device to the top of the list so it is used when `-d` is omitted.
 - `ff-cli device pair [name]` – Pair ff-cli with an FF1. ff-cli reads the
   FF1's status on the LAN to pick the path:
-  - FF OS with secure control and an owner: show a QR code (and the same text
-    to paste) that an owner scans with **Add controller** in the Feral File
-    app; ff-cli pins the FF1's control profile from the owner's sealed answer
+  - FF OS with secure control and an owner: print a
+    `https://link.feralfile.com/controller#…` link that opens the Feral File
+    app at **Add controller** for that FF1 (on a terminal, also a QR code of
+    the same link for the phone's camera, and the bare text to paste). Nothing
+    appears in the app until an owner opens the link; they choose Owner or
+    Can display and tap Add. ff-cli waits up to 10 minutes by default. ff-cli pins the FF1's control profile from the owner's sealed answer
     and enrolls as a **controller**. Needs an internet connection; see
     [Secure control pairing](#secure-control-pairing).
   - FF OS without secure control: display a one-time code and key-bound security check; in Feral File
