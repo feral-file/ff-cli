@@ -526,10 +526,10 @@ v1). The FF1 itself decides who may do what; the LAN and the relayer only carry
 encrypted, signed requests. ff-cli takes part as a controller:
 
 ```bash
-ff-cli device pair office                 # show the QR, wait for an owner, enroll
+ff-cli device pair office                 # print the link, wait for an owner, enroll
 ff-cli device pair office --label studio  # name the owner sees (default: hostname); 1-64 characters,
                                           # no control or invisible formatting (bidi, zero-width) characters
-ff-cli device pair office --timeout 600   # wait longer for an owner (seconds, 10-600; default 300)
+ff-cli device pair office --timeout 120   # wait less for an owner (seconds, 10-600; default 600)
 ff-cli device pair office --resume        # finish a pairing an owner already approved
 ff-cli device pair office --yes           # move a corrupt controller file aside without asking
 ```

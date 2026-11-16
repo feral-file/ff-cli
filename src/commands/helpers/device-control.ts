@@ -620,6 +620,39 @@ function renderQr(payload: string): string {
   return rendered;
 }
 
+/** qrWidth is how many terminal columns a rendered QR needs. */
+function qrWidth(rendered: string): number {
+  return Math.max(...rendered.split('\n').map((line) => line.length));
+}
+
+/**
+ * qrFits reports whether a rendered QR can be drawn without wrapping.
+ *
+ * @param rendered - The QR as `renderQr` returns it
+ * @param columns - The terminal's width; unknown counts as wide enough
+ * @returns True when no line would wrap
+ */
+export function qrFits(rendered: string, columns: number | undefined): boolean {
+  return !columns || qrWidth(rendered) <= columns;
+}
+
+/**
+ * waitLabel says how long `device pair` waits, exactly: whole minutes when
+ * the wait is whole minutes, otherwise seconds, so a short `--timeout` is
+ * never rounded to "0 minutes" or up to a minute it does not have.
+ *
+ * @param timeoutMs - The wait in milliseconds
+ * @returns e.g. `10 minutes`, `1 minute`, `90 seconds`
+ */
+export function waitLabel(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000);
+  if (seconds % 60 === 0 && seconds > 0) {
+    const minutes = seconds / 60;
+    return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+  }
+  return `${seconds} second${seconds === 1 ? '' : 's'}`;
+}
+
 /** The app link the Feral File app opens at Add controller (ff-app `controllerCodeDeepLinks`). */
 const CONTROLLER_LINK_BASE = 'https://link.feralfile.com/controller';
 
@@ -672,7 +705,6 @@ function showPairingCode(
   const payload = controllerQrString(material.qr);
   const link = controllerApprovalLink(payload, device.id);
   const name = deviceLabel(device);
-  const minutes = Math.round(timeoutMs / 60_000);
   console.log(chalk.blue(`\nApprove this computer on ${name}\n`));
   console.log(
     `An owner of ${name} approves this in the Feral File app. Nothing appears in the app until the owner opens this link on their phone:\n`
@@ -686,8 +718,16 @@ function showPairingCode(
     // the same value it always received; what to draw from it is its call.
     showQr(payload);
   } else if (process.stdout.isTTY) {
-    console.log('\nOr point the phone’s camera at this code:\n');
-    console.log(renderQr(link));
+    const qr = renderQr(link);
+    // A code wider than the terminal wraps and cannot be scanned.
+    if (qrFits(qr, process.stdout.columns)) {
+      console.log('\nOr point the phone’s camera at this code:\n');
+      console.log(qr);
+    } else {
+      console.log(
+        `\nThis terminal is too narrow to draw the code a phone’s camera could scan (it needs ${qrWidth(qr)} columns). Send the link above to the phone, or widen the terminal and run this again.`
+      );
+    }
   } else {
     console.log(
       '\nIf you are an agent: give the person the link above and the line before it. They cannot see this output.'
@@ -703,7 +743,7 @@ function showPairingCode(
   );
   console.log(
     chalk.dim(
-      `Waiting up to ${minutes} minutes for the approval. This needs an internet connection. Press Ctrl-C to stop.`
+      `Waiting up to ${waitLabel(timeoutMs)} for the approval. This needs an internet connection. Press Ctrl-C to stop.`
     )
   );
 }
