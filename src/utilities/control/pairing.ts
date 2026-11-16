@@ -59,8 +59,13 @@ import { type ControlFailure, describeControlCode, pairCommand } from './control
 import type { RegistrationResult } from './registration';
 import { isB64uOfLength, isPlainObject } from './strict-json';
 
-/** DEFAULT_PAIR_TIMEOUT_MS is how long `device pair` waits for an owner by default. */
-export const DEFAULT_PAIR_TIMEOUT_MS = 5 * 60_000;
+/**
+ * DEFAULT_PAIR_TIMEOUT_MS is how long `device pair` waits for an owner by
+ * default: the most the relay allows. Five minutes ran out on an owner who
+ * was reading the approval screen for the first time (2026-11-15), and a
+ * shorter default buys nothing: the offer ends the moment it is approved.
+ */
+export const DEFAULT_PAIR_TIMEOUT_MS = 10 * 60_000;
 /** MAX_PAIR_TIMEOUT_MS bounds `--timeout`: the relay keeps nothing, so a QR is a short-lived offer. */
 export const MAX_PAIR_TIMEOUT_MS = 10 * 60_000;
 /** ENROLL_ATTEMPTS bounds the enroll retries after a verified result (network blips). */

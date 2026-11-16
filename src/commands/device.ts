@@ -33,14 +33,14 @@ const deviceCommand = new Command('device').description('Manage configured FF1 d
 deviceCommand
   .command('pair')
   .description(
-    'Pair ff-cli with a configured FF1: on secure control, show a code an owner scans with "Add controller" in the Feral File app (needs internet and an owner); on FF OS without secure control, receive relayer access through a one-time code'
+    'Pair ff-cli with a configured FF1: on secure control, print a link an owner opens on their phone to approve it in the Feral File app (needs internet and an owner); on FF OS without secure control, receive relayer access through a one-time code'
   )
   .argument('[name]', 'Configured device name (uses the default device when omitted)')
   .option(
     '--label <label>',
     "Name the owner sees when adding ff-cli (default: this computer's hostname)"
   )
-  .option('--timeout <seconds>', 'How long to wait for an owner, 10-600 (default: 300)')
+  .option('--timeout <seconds>', 'How long to wait for an owner, 10-600 (default: 600)')
   .option('--resume', 'Finish a pairing an owner already approved, without a new code')
   .option('-y, --yes', 'Move a corrupt controller file aside without asking')
   .option(
