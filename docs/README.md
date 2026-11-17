@@ -127,7 +127,9 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) that declare no playlist are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
   - When a structurally valid loaded playlist is unsigned (including `signatures: []`) and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. Local file commands are labeled separately for POSIX shells and PowerShell so apostrophes and shell metacharacters stay literal. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
-- `download <source>` – Keep a playlist on an FF1 device so it displays with no network (the Feral File app calls this Download; the device stores the works in its offline cache). `<source>` is a playlist file or a playlist URL; a media URL or web page is refused
+- `download <file>` – Keep a playlist on an FF1 device so it displays with no network (the Feral File app calls this Download; the device stores the works in its offline cache). `<file>` is a playlist file that lists its items
+  - A URL is refused: save the playlist first (`ff-cli fetch <id-or-url> -o playlist.json` for one published to a feed) and download the file, so the command checks exactly the items the device was given. A dynamic playlist, an item with no `source`, and an inline `data:` source with no comma are refused too, before anything is sent
+  - `--timeout` bounds the whole wait, status requests included. Addresses are printed without their query string, since a source can be a signed URL
   - By default it waits until every item is held, printing one line per item (title, state, bytes, and whether coverage is complete), then a summary
   - Exits 0 only when every item is `ready` with complete coverage. Exits 1 when any item failed, is held incompletely, was not queued by the device, or was still downloading at the timeout; the message counts each. With `--no-wait` it prints the queued count and exits 0 once the device has queued the playlist
   - Options: `-d, --device <name>`, `--no-wait` (queue and exit), `--timeout <seconds>` (default 180)
@@ -310,8 +312,9 @@ npm run dev -- display playlist.json --skip-verify
 ff-cli display playlist.json -d "Living Room Display"
 ff-cli download playlist.json -d "Living Room Display"
 
-# A hosted playlist URL works the same way
-ff-cli download "https://cdn.example.com/playlist.json"
+# A playlist published to a feed: save it, then download the file
+ff-cli fetch <id-or-url> -o playlist.json
+ff-cli download playlist.json
 
 # Queue the download and return at once
 ff-cli download playlist.json --no-wait

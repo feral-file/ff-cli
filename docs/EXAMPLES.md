@@ -324,8 +324,9 @@ npm run dev -- display playlist.json --skip-verify
 # After displaying, keep the playlist on the device and wait until every item is held
 npm run dev -- download playlist.json -d "Living Room Display"
 
-# From a hosted playlist URL
-npm run dev -- download "https://cdn.example.com/playlist.json"
+# A playlist published to a feed: save it, then download the file (download takes a file, not a URL)
+npm run dev -- fetch <id-or-url> -o playlist.json
+npm run dev -- download playlist.json
 
 # Queue and return at once; run it again without --no-wait to check
 npm run dev -- download playlist.json --no-wait
