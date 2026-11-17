@@ -66,6 +66,37 @@ export class RasterUnreachableError extends Error {
   }
 }
 
+/**
+ * RasterRefusedError means Raster answered but declined to serve this client:
+ * 401/403 (Raster's GraphQL API began requiring an `x-api-key` around
+ * 2026-11-13, feral-file#3612) or 429 (rate limited). Like unreachability, the
+ * request was fine and Raster simply is not available to us right now, so
+ * callers degrade the same way. Other HTTP errors stay plain `Error`: a 400
+ * means our query is wrong, and a 5xx keeps its status for diagnosis (the
+ * body-read tests lock that in).
+ */
+export class RasterRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'RasterRefusedError';
+  }
+}
+
+/** HTTP statuses with which Raster refuses a well-formed request. */
+const RASTER_REFUSAL_STATUSES = new Set([401, 403, 429]);
+
+/**
+ * isRasterUnavailable reports whether an error means Raster cannot serve this
+ * run (unreachable or refusing), which is the one case where find continues
+ * without Raster's enrichment instead of failing.
+ *
+ * @param error - Any thrown value
+ * @returns true for RasterUnreachableError and RasterRefusedError
+ */
+export function isRasterUnavailable(error: unknown): boolean {
+  return error instanceof RasterUnreachableError || error instanceof RasterRefusedError;
+}
+
 export interface RasterArtist {
   id: string;
   name: string;
@@ -141,9 +172,14 @@ export async function rasterQuery<T>(
   if (!response.ok) {
     // Body text is best-effort context; the HTTP status alone is the error.
     // A body read that rejects here must not mask the status — and an HTTP
-    // error is an API-level failure, deliberately NOT RasterUnreachableError.
+    // error is an API-level failure, deliberately NOT RasterUnreachableError;
+    // a refusal (401/403/429) gets its own type so find can still degrade.
     const body = await response.text().catch(() => '');
-    throw new Error(`Raster API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`);
+    const message = `Raster API ${response.status} ${response.statusText}: ${body.slice(0, 200)}`;
+    if (RASTER_REFUSAL_STATUSES.has(response.status)) {
+      throw new RasterRefusedError(message);
+    }
+    throw new Error(message);
   }
   // The network-error boundary extends through body consumption: a response
   // whose stream stalls past the headers or terminates mid-body rejects
@@ -371,7 +407,8 @@ export function buildTokenByRefBatchQuery(count: number): string {
  * the caller, which is why more than RASTER_TOKEN_BATCH_SIZE refs is refused
  * instead of split here.
  *
- * @throws RasterUnreachableError on network failure; Error on API failure
+ * @throws RasterUnreachableError on network failure; RasterRefusedError when
+ *   Raster refuses (401/403/429); Error on any other API failure
  */
 export async function fetchTokensByRef(refs: RasterTokenRef[]): Promise<(RasterToken | null)[]> {
   if (refs.length > RASTER_TOKEN_BATCH_SIZE) {
