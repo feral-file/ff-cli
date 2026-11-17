@@ -7,10 +7,10 @@
  * ffos-user docs/controld-inbound-controller-messages.md, "Offline Artwork
  * Caching Inbound Messages". The parts this module depends on:
  *
- * - `downloadPlaylist` takes `{ dp1_call: <playlist> }` or
- *   `{ playlistUrl: <url> }`, queues the items and answers at once with
- *   `{ ok, status: "queued", total, queuedCount }`. The download itself runs
- *   afterwards, so the answer says nothing about whether a work is held.
+ * - `downloadPlaylist` with `{ dp1_call: <playlist> }` queues the items and
+ *   answers at once with `{ ok, status: "queued", total, queuedCount }`. The
+ *   download itself runs afterwards, so the answer says nothing about whether
+ *   a work is held.
  * - `getOfflineCacheStatus` with `{ sources: [...] }` answers one entry per
  *   item. An item is identified by its exact `source` string, never its DP-1
  *   `id`. `coverageComplete` and `bytes` are left out of an entry when they
@@ -25,18 +25,27 @@
  * reads, and a device that cannot be reached on the LAN is better reported
  * than polled through the relay. Both commands are controller tier on the
  * device, so a "Can display" grant is enough.
+ *
+ * The command exits 0 only for what it checked, so it takes only a playlist
+ * whose items it can name exactly: a local file with a `source` on every
+ * item and no dynamic query. The device also accepts `{ playlistUrl }` and
+ * resolves dynamic queries, but then the device decides which sources are
+ * queued (the hosted document can change between two fetches, and a dynamic
+ * query replaces `items`), and a status read by the CLI's own list of
+ * sources could report "held" for a playlist the device never queued that
+ * way. Do not add those inputs back without a way to read the queued sources
+ * from the device.
+ *
+ * Item sources can be signed URLs. Everything this module returns for the
+ * terminal (titles, reasons, errors) goes through redactUrls; the exact
+ * source is kept only for the request and for matching status entries.
  */
 
 import { fetchWithTimeout } from './http';
 import * as logger from '../logger';
 import { resolveConfiguredDevice } from './ff1-compatibility';
 import { publicControlCode } from './ff1-device';
-import {
-  type LoadedPlaylist,
-  PlaylistUrlLoadError,
-  isPlaylistSourceUrl,
-  loadPlaylistSource,
-} from './playlist-source';
+import { type LoadedPlaylist, isPlaylistSourceUrl, loadPlaylistSource } from './playlist-source';
 import type { FF1Device, FF1DeviceConfig } from '../types';
 import type { ControllerRecord, ControllerStoreOptions } from './control/controller-store';
 import { describeControlCode } from './control/control-errors';
@@ -68,8 +77,25 @@ const STATUS_SOURCES_PER_REQUEST = 1024;
  */
 const DEVICE_COMMAND_TIMEOUT_MS = 35_000;
 
+/**
+ * UNKNOWN_STATE is an item's state before any status read has answered.
+ * It is not `not_cached`: that would read as "the FF1 did not queue it".
+ */
+const UNKNOWN_STATE = 'unknown';
+
 /** PENDING_STATES are the item states that can still change on their own. */
-const PENDING_STATES = new Set(['queued', 'downloading']);
+const PENDING_STATES = new Set(['queued', 'downloading', UNKNOWN_STATE]);
+
+/**
+ * DATA_URI_METADATA_BYTES is how far past `data:` the device looks for the
+ * comma that ends the media type (maxDataURIMetadataBytes in ffos-user
+ * offlinecache/classify.go). A data: source with no comma there is malformed
+ * to the device and is never kept.
+ */
+const DATA_URI_METADATA_BYTES = 1024;
+
+/** MAX_LABEL_LENGTH bounds the label of an item that has no title. */
+const MAX_LABEL_LENGTH = 80;
 
 /** INLINE_STATE labels an item whose bytes are in the playlist body itself. */
 const INLINE_STATE = 'inline';
@@ -81,19 +107,21 @@ type FetchFunction = (input: string, init?: RequestInit) => Promise<Response>;
  * - `ready`: held in full; it displays with no network.
  * - `incomplete`: something is held, but not everything the work loads.
  * - `failed`: nothing usable is held, or the FF1 did not queue the item.
- * - `timed_out`: still queued or downloading when the wait ended.
+ * - `timed_out`: still queued or downloading, or never read, when the wait ended.
  */
 export type DownloadOutcome = 'ready' | 'incomplete' | 'failed' | 'timed_out';
 
 /** DownloadItemReport is one playlist item's final (or latest) state. */
 export interface DownloadItemReport {
+  /** Terminal-safe label: the item's title, or its redacted source. */
   title: string;
+  /** Exact source, for matching only. Never print it: it may carry credentials. */
   source: string;
   /** Device state, or `inline` for a `data:` item that needs no download. */
   state: string;
   bytes: number;
   coverageComplete: boolean;
-  /** Device free text for an incomplete capture; wording is not stable. */
+  /** Device free text for an incomplete capture, URLs redacted; wording is not stable. */
   reason?: string;
   outcome: DownloadOutcome;
 }
@@ -204,9 +232,41 @@ export async function downloadPlaylist(
     }
     return await runDownload(source, target, params, overrides);
   } catch (error) {
-    const refusal = error as Error & { details?: string };
-    return { success: false, waited: false, error: refusal.message, details: refusal.details };
+    const stopped = error as Error & { details?: string };
+    return {
+      success: false,
+      waited: false,
+      error: redactUrls(stopped.message),
+      details: stopped.details && redactUrls(stopped.details),
+    };
   }
+}
+
+/**
+ * redactUrls removes the userinfo, query and fragment of every URL in a
+ * string bound for the terminal. Item sources are often signed URLs, and the
+ * device quotes them in its `reason` and error texts, so a query string can
+ * be a credential. The path stays: it is what tells one work from another.
+ *
+ * @param {string} text - Text that may contain URLs
+ * @returns {string} The text with `?…` and `#…` in place of each query and fragment
+ * @example
+ * redactUrls('fetch_failed:https://u:p@cdn.example/x?token=abc'); // 'fetch_failed:https://cdn.example/x?…'
+ */
+export function redactUrls(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s"'<>]*)/gi, (_match, scheme: string, rest) => {
+    // Punctuation that ends the URL belongs to the sentence around it (the
+    // device joins reasons with "; "), so it is put back after the URL.
+    const [, url, trailing] = /^(.*?)([;:,.)\]]*)$/.exec(rest as string) as RegExpExecArray;
+    const [, authorityAndPath, query, fragment] = /^([^?#]*)(\?[^#]*)?(#.*)?$/.exec(
+      url
+    ) as RegExpExecArray;
+    const slash = authorityAndPath.indexOf('/');
+    const authority = slash === -1 ? authorityAndPath : authorityAndPath.slice(0, slash);
+    const path = slash === -1 ? '' : authorityAndPath.slice(slash);
+    const host = authority.slice(authority.lastIndexOf('@') + 1);
+    return `${scheme}${host}${path}${query ? '?…' : ''}${fragment ? '#…' : ''}${trailing}`;
+  });
 }
 
 /**
@@ -245,94 +305,193 @@ async function runDownload(
  * loadDownloadSource loads a `download` argument and returns the request to
  * send and the item sources to follow.
  *
- * A URL is fetched here as well as by the device: the device resolves
- * `playlistUrl` itself and answers only with counts, so reading the playlist
- * is the only way the CLI learns which sources to ask about. The same read
- * is what refuses a media file or web page before anything is sent.
+ * Only a playlist file whose every item names its source is accepted; the
+ * module comment says why a URL or a dynamic playlist is refused.
  *
  * The playlist's signature is not verified here. `display` gates on it
  * because it sends for display; this command only asks the device to fetch
  * what the playlist names, and the device resolves the playlist under its
  * own rules and answers `resolve_failed` when it will not.
  *
- * @param {string} source - Playlist file path or http(s) playlist URL
+ * @param {string} source - Playlist file path
  * @param {Function} [loadFn] - Playlist loader (tests)
  * @returns {Promise<DownloadSource>} Request and tracked items
- * @throws {Error} When the source is not a DP-1 playlist with item sources;
- *   `details` on the error carries the follow-up line
+ * @throws {Error} When the source is a URL, is not a DP-1 playlist, is
+ *   dynamic, or has an item without a usable source; `details` on the error
+ *   carries the follow-up line when there is one
  */
 export async function loadDownloadSource(
   source: string,
   loadFn: (source: string) => Promise<LoadedPlaylist> = loadPlaylistSource
 ): Promise<DownloadSource> {
   const trimmed = source.trim();
-  const isUrl = isPlaylistSourceUrl(trimmed);
-  let loaded: LoadedPlaylist;
-  try {
-    loaded = await loadFn(trimmed);
-  } catch (error) {
-    if (isUrl && (error as Partial<PlaylistUrlLoadError>)?.kind === 'json') {
-      throw notAPlaylist(trimmed, 'it answers with a web page or media file');
-    }
-    throw error;
-  }
-  const playlist = loaded.playlist as { dpVersion?: unknown; items?: unknown } | null;
-  if (typeof playlist?.dpVersion !== 'string' || !Array.isArray(playlist.items)) {
-    throw notAPlaylist(trimmed, 'it has no dpVersion or no items');
-  }
-  const tracked = trackItems(playlist.items);
-  if (tracked.length === 0) {
-    throw new Error(
-      `${trimmed} has no items with a source, so there is nothing to download. A playlist whose items the FF1 fills in itself cannot be followed from here.`
+  if (isPlaylistSourceUrl(trimmed)) {
+    throw refusal(
+      'download takes a playlist file, not a URL.',
+      'Save the playlist first: `ff-cli fetch <id-or-url> -o playlist.json` for one published to a feed, or save the JSON from any other address. Then run `ff-cli download playlist.json`.'
     );
   }
-  return {
-    request: isUrl ? { playlistUrl: trimmed } : { dp1_call: loaded.playlist },
-    tracked,
-  };
+  const loaded = await loadFn(trimmed);
+  const playlist = loaded.playlist as Record<string, unknown> | null;
+  if (typeof playlist?.dpVersion !== 'string' || !Array.isArray(playlist.items)) {
+    throw refusal(
+      `${trimmed} is not a DP-1 playlist (it has no dpVersion or no items).`,
+      'To keep a single work, put it in a playlist first (ff-cli find or ff-cli build).'
+    );
+  }
+  if (isDynamicPlaylist(playlist)) {
+    throw refusal(
+      `${trimmed} is a dynamic playlist: the FF1 fills in its items from a query, so this command cannot name them or check what is held.`,
+      'Download a playlist that lists its items.'
+    );
+  }
+  const items = playlist.items as unknown[];
+  if (items.length === 0) {
+    throw refusal(`${trimmed} has no items, so there is nothing to download.`);
+  }
+  refuseUnusableSources(trimmed, items);
+  return { request: { dp1_call: loaded.playlist }, tracked: trackItems(items) };
 }
 
 /**
- * notAPlaylist builds the refusal for a source that is not a DP-1 playlist.
+ * refusal builds an error that stops the run before anything is sent.
  *
- * @param source - What the caller passed
- * @param why - What was found instead
+ * @param message - What is wrong
+ * @param followUp - What to do instead
  * @returns The error, with the follow-up line on `details`
  */
-function notAPlaylist(source: string, why: string): Error {
-  const error = new Error(`${source} is not a DP-1 playlist (${why}).`) as Error & {
-    details?: string;
-  };
-  error.details =
-    'download takes a playlist file or a playlist URL. To keep a single work, put it in a playlist first (ff-cli find or ff-cli build). Nothing was sent to the device.';
+function refusal(message: string, followUp?: string): Error {
+  const error = new Error(message) as Error & { details?: string };
+  error.details = [followUp, 'Nothing was sent to the device.'].filter(Boolean).join(' ');
   return error;
+}
+
+/**
+ * isDynamicPlaylist reports whether the device would replace the playlist's
+ * items by resolving a query: DP-1 `dynamicQuery`, or the legacy
+ * `dynamicQueries` array the device still honors (ffos-user dp1/dp1.go,
+ * resolveDynamicPlaylist).
+ *
+ * @param playlist - Parsed playlist
+ * @returns True when the playlist carries either form
+ */
+function isDynamicPlaylist(playlist: Record<string, unknown>): boolean {
+  const legacy = playlist.dynamicQueries;
+  return (
+    (playlist.dynamicQuery !== undefined && playlist.dynamicQuery !== null) ||
+    (Array.isArray(legacy) && legacy.length > 0)
+  );
+}
+
+/**
+ * sourceOf returns an item's `source` when it is a non-empty string.
+ *
+ * @param item - One entry of `items`
+ * @returns The source, or undefined
+ */
+function sourceOf(item: unknown): string | undefined {
+  const source = (item as { source?: unknown } | null)?.source;
+  return typeof source === 'string' && source ? source : undefined;
+}
+
+/**
+ * itemLabel is the terminal-safe name of an item: its title, or its source
+ * with URLs redacted (see redactUrls) and cut to a line's length. A `data:`
+ * source is megabytes of payload, so it is named by its position instead.
+ *
+ * @param item - One entry of `items`
+ * @param index - Zero-based position in the playlist
+ * @returns The label
+ */
+function itemLabel(item: unknown, index: number): string {
+  const title = (item as { title?: unknown } | null)?.title;
+  if (typeof title === 'string' && title) {
+    return redactUrls(title);
+  }
+  const source = sourceOf(item);
+  if (!source || isDataUri(source)) {
+    return `item ${index + 1}`;
+  }
+  const label = redactUrls(source);
+  return label.length > MAX_LABEL_LENGTH ? `${label.slice(0, MAX_LABEL_LENGTH - 1)}…` : label;
+}
+
+/**
+ * isDataUri matches the device's rule for an inline item (isDataURI in
+ * ffos-user offlinecache/classify.go): the scheme compares case-insensitively.
+ *
+ * @param source - Item source
+ * @returns True for a `data:` source in any letter case
+ */
+function isDataUri(source: string): boolean {
+  return source.slice(0, 5).toLowerCase() === 'data:';
+}
+
+/**
+ * isMalformedDataUri reports a `data:` source the device cannot classify:
+ * no comma within DATA_URI_METADATA_BYTES after the scheme.
+ *
+ * @param source - A source for which isDataUri is true
+ * @returns True when the device would reject it
+ */
+function isMalformedDataUri(source: string): boolean {
+  return !source.slice(5, 5 + DATA_URI_METADATA_BYTES).includes(',');
+}
+
+/**
+ * refuseUnusableSources stops a playlist the device would not keep whole:
+ * an item with no `source` is skipped by the device, and a malformed `data:`
+ * source is neither downloaded nor inline. Either would leave the summary
+ * counting fewer items than the playlist has.
+ *
+ * @param file - Playlist path, for the message
+ * @param items - The playlist's `items`
+ * @throws {Error} Naming the items at fault
+ */
+function refuseUnusableSources(file: string, items: unknown[]): void {
+  const labels = (test: (source: string | undefined) => boolean) =>
+    items.flatMap((item, index) => (test(sourceOf(item)) ? [itemLabel(item, index)] : []));
+  const missing = labels((source) => !source);
+  if (missing.length > 0) {
+    throw refusal(
+      `${file} has ${missing.length} of ${items.length} items with no source: ${missing.join(', ')}.`,
+      'The FF1 would skip them, so the playlist would not be held whole.'
+    );
+  }
+  const malformed = labels((source) => isDataUri(source!) && isMalformedDataUri(source!));
+  if (malformed.length > 0) {
+    throw refusal(
+      `${file} has an inline (data:) source with no comma after its media type: ${malformed.join(', ')}.`,
+      'The FF1 cannot read it.'
+    );
+  }
 }
 
 /**
  * trackItems lists the distinct item sources of a playlist, in playlist order.
  *
  * Items that share a source share one cache entry on the device, so they are
- * one line here too, under the first item's title. An item without a source
- * is left out: the device skips it and has nothing to report for it.
+ * one line here too, under the first item's label. refuseUnusableSources has
+ * already run, so every item has a source.
  *
  * @param items - The playlist's `items`
  * @returns Tracked items
  */
 function trackItems(items: unknown[]): TrackedItem[] {
   const bySource = new Map<string, TrackedItem>();
-  for (const raw of items) {
-    const item = raw as { source?: unknown; title?: unknown } | null;
-    if (typeof item?.source !== 'string' || !item.source || bySource.has(item.source)) {
-      continue;
+  items.forEach((item, index) => {
+    const source = sourceOf(item)!;
+    if (bySource.has(source)) {
+      return;
     }
-    bySource.set(item.source, {
-      source: item.source,
-      title: typeof item.title === 'string' && item.title ? item.title : item.source,
+    bySource.set(source, {
+      source,
+      title: itemLabel(item, index),
       // The device never queues a data: item: its bytes are in the playlist
       // body it stores, so the item is already kept and status has no entry.
-      inline: item.source.startsWith('data:'),
+      inline: isDataUri(source),
     });
-  }
+  });
   return [...bySource.values()];
 }
 
@@ -378,12 +537,46 @@ function resolveTarget(
  * sendDeviceCommand sends one offline-cache command on the device's route and
  * returns the handler's answer body, or a failure with user-facing copy.
  *
+ * Failure texts are redacted here, the one place every device answer passes:
+ * the device quotes item sources in its messages (see redactUrls).
+ *
  * @param target - Resolved device
  * @param command - `downloadPlaylist` or `getOfflineCacheStatus`
  * @param request - The command's request object
+ * @param timeoutMs - Deadline of this one request
  * @returns The `ok: true` body, or a failure
  */
 async function sendDeviceCommand(
+  target: DeviceTarget,
+  command: string,
+  request: Record<string, unknown>,
+  timeoutMs: number = DEVICE_COMMAND_TIMEOUT_MS
+): Promise<DeviceAnswer> {
+  const bounded: DeviceTarget = {
+    ...target,
+    fetchFn: (input, init) =>
+      target.fetchFn(input, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
+  };
+  const answer = await sendOnRoute(bounded, command, request);
+  if (!('failure' in answer)) {
+    return answer;
+  }
+  const { error, details, retryable } = answer.failure;
+  return {
+    failure: { error: redactUrls(error), details: details && redactUrls(details), retryable },
+  };
+}
+
+/**
+ * sendOnRoute sends the command as a secure envelope when ff-cli holds a
+ * controller file for the device, and as a plaintext cast otherwise.
+ *
+ * @param target - Resolved device, its fetch already bounded
+ * @param command - Command name
+ * @param request - Request object
+ * @returns The `ok: true` body, or a failure
+ */
+async function sendOnRoute(
   target: DeviceTarget,
   command: string,
   request: Record<string, unknown>
@@ -406,8 +599,10 @@ async function sendDeviceCommand(
 }
 
 /**
- * sendSecurely sends the command as a secure envelope over the LAN, with the
- * transport's retry budget and no relayer fallback (see the module comment).
+ * sendSecurely sends the command as a secure envelope over the LAN, with no
+ * relayer fallback (see the module comment). Only `downloadPlaylist` uses the
+ * transport's retry budget: a status read is retried by the wait loop, which
+ * is what keeps the retries inside `--timeout`.
  *
  * A `command_failed` reply carries the handler's error body as JSON text in
  * `details`; when that body is an offline-cache answer it is handed back so
@@ -432,9 +627,9 @@ async function sendSecurely(
       cmd: command,
       req: request,
       relayerFallback: false,
-      retry: true,
+      retry: command === 'downloadPlaylist',
     },
-    target.secureDeps
+    { ...target.secureDeps, fetchFn: target.fetchFn as typeof fetch }
   );
   if (result.success) {
     return { body: result.response ?? {} };
@@ -605,6 +800,12 @@ function offlineErrorHeadline(code: string, label: string): string {
  * not end the wait: the download keeps running on the device, so the next
  * read is tried until the timeout. Any other failed read ends it.
  *
+ * `--timeout` is one deadline for the whole wait, requests included: it is
+ * handed to readStatus as `remainingMs`, which bounds every request and
+ * page by what is left. A read the deadline cut short is dropped whole, so
+ * the reports stay at the last complete read; a half-read playlist would
+ * show the unread items as not kept.
+ *
  * @param target - Resolved device
  * @param tracked - Items to follow
  * @param params - Timeout and progress callback
@@ -620,14 +821,18 @@ async function waitForItems(
   const clockMsFn = overrides.clockMsFn ?? Date.now;
   const sleepFn = overrides.sleepFn ?? defaultSleep;
   const timeoutMs = (params.timeoutSeconds ?? DEFAULT_DOWNLOAD_TIMEOUT_SECONDS) * 1000;
-  const startedAt = clockMsFn();
+  const deadlineMs = clockMsFn() + timeoutMs;
+  const remainingMs = () => deadlineMs - clockMsFn();
   const sources = tracked.filter((item) => !item.inline).map((item) => item.source);
   const announced = new Map<string, string>();
-  let reports = buildReports(tracked, new Map());
+  let reports = buildReports(tracked, new Map(), UNKNOWN_STATE);
   let lastFailure: DeviceFailure | undefined;
 
   for (;;) {
-    const status = await readStatus(target, sources);
+    const status = await readStatus(target, sources, remainingMs);
+    if ('timedOut' in status) {
+      return summarize(reports, true, lastFailure);
+    }
     if ('failure' in status) {
       if (!status.failure.retryable) {
         return { success: false, waited: true, ...status.failure, items: reports };
@@ -641,11 +846,11 @@ async function waitForItems(
         return summarize(reports, false);
       }
     }
-    const remainingMs = timeoutMs - (clockMsFn() - startedAt);
-    if (remainingMs <= 0) {
+    const leftMs = remainingMs();
+    if (leftMs <= 0) {
       return summarize(reports, true, lastFailure);
     }
-    await sleepFn(Math.min(POLL_INTERVAL_MS, remainingMs));
+    await sleepFn(Math.min(POLL_INTERVAL_MS, leftMs));
   }
 }
 
@@ -661,21 +866,38 @@ function defaultSleep(delayMs: number): Promise<void> {
  * The device caps a page at 1000 entries, below the 1024 sources one request
  * may name, so a full slice can itself need a second page (`nextCursor`).
  *
+ * No request starts once the deadline has passed, each request is bounded by
+ * the time left, and an answer that lands after the deadline is not used.
+ *
  * @param target - Resolved device
  * @param sources - Item sources to ask about
- * @returns Status by source, or the first failure
+ * @param remainingMs - Milliseconds left before the wait's deadline
+ * @returns Status by source, the first failure, or `timedOut`
  */
 async function readStatus(
   target: DeviceTarget,
-  sources: string[]
-): Promise<{ items: Map<string, StatusItem> } | { failure: DeviceFailure }> {
+  sources: string[],
+  remainingMs: () => number
+): Promise<{ items: Map<string, StatusItem> } | { failure: DeviceFailure } | { timedOut: true }> {
   const items = new Map<string, StatusItem>();
   for (let start = 0; start < sources.length; start += STATUS_SOURCES_PER_REQUEST) {
     const slice = sources.slice(start, start + STATUS_SOURCES_PER_REQUEST);
     let cursor: string | undefined;
     do {
       const request = cursor ? { sources: slice, cursor } : { sources: slice };
-      const answer = await sendDeviceCommand(target, 'getOfflineCacheStatus', request);
+      const leftMs = remainingMs();
+      if (leftMs <= 0) {
+        return { timedOut: true };
+      }
+      const answer = await sendDeviceCommand(
+        target,
+        'getOfflineCacheStatus',
+        request,
+        Math.min(DEVICE_COMMAND_TIMEOUT_MS, leftMs)
+      );
+      if (remainingMs() < 0) {
+        return { timedOut: true };
+      }
       if ('failure' in answer) {
         return answer;
       }
@@ -708,7 +930,7 @@ function collectStatusItems(entries: unknown, into: Map<string, StatusItem>): vo
       state: entry.state,
       bytes: numberField(entry.bytes) ?? 0,
       coverageComplete: entry.coverageComplete === true,
-      reason: typeof entry.reason === 'string' ? entry.reason : undefined,
+      reason: typeof entry.reason === 'string' ? redactUrls(entry.reason) : undefined,
     });
   }
 }
@@ -723,16 +945,18 @@ function collectStatusItems(entries: unknown, into: Map<string, StatusItem>): vo
  *
  * @param tracked - Items to report on, in playlist order
  * @param status - Latest status by source
+ * @param missingState - State of a source with no entry; `unknown` before the first read
  * @returns Reports in playlist order
  */
 function buildReports(
   tracked: TrackedItem[],
-  status: Map<string, StatusItem>
+  status: Map<string, StatusItem>,
+  missingState: string = 'not_cached'
 ): DownloadItemReport[] {
   return tracked.map((item) => {
     const seen: StatusItem = item.inline
       ? { state: INLINE_STATE, bytes: 0, coverageComplete: true }
-      : (status.get(item.source) ?? { state: 'not_cached', bytes: 0, coverageComplete: false });
+      : (status.get(item.source) ?? { state: missingState, bytes: 0, coverageComplete: false });
     return {
       title: item.title,
       source: item.source,

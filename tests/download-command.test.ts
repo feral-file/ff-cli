@@ -19,8 +19,8 @@ import {
   type DownloadDependencies,
   downloadPlaylist,
   loadDownloadSource,
+  redactUrls,
 } from '../src/utilities/offline-download';
-import { PlaylistUrlLoadError } from '../src/utilities/playlist-source';
 import type { FF1Device, Playlist } from '../src/types';
 import { FakeFF1, type Jwk } from './helpers/control-device';
 
@@ -94,7 +94,7 @@ function deps(
     loadPlaylistFn: async (source: string) => ({
       playlist,
       source,
-      sourceType: /^https?:/.test(source) ? ('url' as const) : ('file' as const),
+      sourceType: 'file' as const,
     }),
     clockMsFn: clock.clockMsFn,
     sleepFn: clock.sleepFn,
@@ -253,6 +253,59 @@ describe('download: file source', () => {
     );
   });
 
+  test('the timeout bounds the requests too, paging included', async () => {
+    const sources = Array.from({ length: 1030 }, (_, i) => `https://cdn.example/${i}.png`);
+    const ready = (list: string[]) => list.map((s) => item(s, 'ready', { coverageComplete: true }));
+    const clock = { now: 0 };
+    const casts: Cast[] = [];
+    // Each status request takes 30 s on the device's side; nothing sleeps.
+    const fetchFn = plaintextFetch((cast) => {
+      if (cast.command === 'downloadPlaylist') {
+        return QUEUED;
+      }
+      clock.now += 30_000;
+      const asked = cast.request.sources as string[];
+      return asked.length === 1024 && !cast.request.cursor
+        ? { ok: true, items: ready(asked.slice(0, 1000)), nextCursor: 'k1' }
+        : { ok: true, items: ready(asked.length === 1024 ? asked.slice(1000) : asked) };
+    }, casts);
+    const d = deps(() => QUEUED, playlistOf(...sources), {
+      fetchFn,
+      clockMsFn: () => clock.now,
+      sleepFn: async (ms) => {
+        clock.now += ms;
+      },
+    });
+    const result = await downloadPlaylist(
+      { source: 'playlist.json', wait: true, timeoutSeconds: 45 },
+      d
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.timedOut, true);
+    // The first page answers at 30 s, the second at 60 s, past the deadline:
+    // it is dropped and the third request is never sent.
+    assert.equal(casts.length, 3);
+    assert.ok(result.items?.every((i) => i.state === 'unknown' && i.outcome === 'timed_out'));
+    assert.match(result.error ?? '', /1030 timed out/);
+  });
+
+  test('a status request is given no more time than the wait has left', async () => {
+    const d = deps(
+      (cast) =>
+        cast.command === 'downloadPlaylist' ? QUEUED : { ok: true, items: [item(A, 'queued')] },
+      playlistOf(A)
+    );
+    const signals: Array<AbortSignal | null | undefined> = [];
+    const inner = d.fetchFn!;
+    d.fetchFn = async (input, init) => {
+      signals.push(init?.signal);
+      return inner(input, init);
+    };
+    await downloadPlaylist({ source: 'playlist.json', wait: true, timeoutSeconds: 3 }, d);
+    assert.ok(signals.length >= 3);
+    assert.ok(signals.every((signal) => signal instanceof AbortSignal));
+  });
+
   test('--no-wait reports the queued count and never polls', async () => {
     const d = deps(() => QUEUED, playlistOf(A, B));
     const result = await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
@@ -319,68 +372,138 @@ describe('download: file source', () => {
   });
 });
 
-describe('download: URL source', () => {
-  const URL_SOURCE = 'https://feed.example/api/v1/playlists/two-works';
+describe('download: what it takes', () => {
+  const load = (playlist: unknown) => async (source: string) => ({
+    playlist: playlist as Playlist,
+    source,
+    sourceType: 'file' as const,
+  });
 
-  test('sends playlistUrl and polls the sources of the playlist it fetched', async () => {
+  test('a URL is refused with the save-first step, before anything is sent', async () => {
+    const d = deps(() => QUEUED, playlistOf(A));
+    const result = await downloadPlaylist(
+      { source: 'https://feed.example/api/v1/playlists/two?key=SECRET', wait: true },
+      d
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'download takes a playlist file, not a URL.');
+    assert.match(result.details ?? '', /ff-cli fetch <id-or-url> -o playlist\.json/);
+    assert.match(result.details ?? '', /ff-cli download playlist\.json/);
+    assert.equal(JSON.stringify(result).includes('SECRET'), false);
+    assert.equal(d.casts.length, 0);
+  });
+
+  test('JSON that is not a DP-1 playlist is refused', async () => {
+    await assert.rejects(
+      loadDownloadSource('data.json', load({ hello: 'world' })),
+      /is not a DP-1 playlist/
+    );
+  });
+
+  test('a dynamic playlist is refused, in either form the FF1 resolves', async () => {
+    const base = playlistOf(A) as unknown as Record<string, unknown>;
+    for (const dynamic of [
+      { dynamicQuery: { endpoint: 'https://indexer.example' } },
+      { dynamicQueries: [{ endpoint: 'https://indexer.example' }] },
+    ]) {
+      await assert.rejects(
+        loadDownloadSource('dynamic.json', load({ ...base, ...dynamic })),
+        /is a dynamic playlist/
+      );
+    }
+    await loadDownloadSource('static.json', load({ ...base, dynamicQueries: [] }));
+  });
+
+  test('a playlist with no items is refused', async () => {
+    await assert.rejects(loadDownloadSource('empty.json', load(playlistOf())), /has no items/);
+  });
+
+  test('items with no source are refused by name, never dropped', async () => {
+    const d = deps(() => QUEUED, {
+      dpVersion: '1.1.0',
+      items: [{ title: 'A', source: A }, { title: 'B' }, { source: '' }],
+    } as unknown as Playlist);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+    assert.equal(result.success, false);
+    assert.equal(result.error, 'playlist.json has 2 of 3 items with no source: B, item 3.');
+    assert.equal(d.casts.length, 0);
+  });
+
+  test('inline sources follow the device rule: any letter case, comma required', async () => {
+    const d = deps(() => ({ ...QUEUED, queuedCount: 0 }), {
+      dpVersion: '1.1.0',
+      items: [{ title: 'Upper', source: 'DATA:text/plain,hi' }],
+    } as unknown as Playlist);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+    assert.equal(result.success, true, result.error);
+    assert.deepEqual(
+      result.items?.map((i) => [i.state, i.outcome]),
+      [['inline', 'ready']]
+    );
+    assert.equal(d.casts.length, 1);
+
+    await assert.rejects(
+      loadDownloadSource(
+        'bad.json',
+        load({
+          dpVersion: '1.1.0',
+          items: [{ source: A }, { source: `data:image/png;base64${'A'.repeat(2000)},x` }],
+        })
+      ),
+      /inline \(data:\) source with no comma after its media type: item 2\./
+    );
+  });
+});
+
+describe('download: nothing secret reaches the terminal', () => {
+  const SIGNED = 'https://user:pw@cdn.example/work/index.html?token=SECRET#frag';
+
+  test('redactUrls drops userinfo, query and fragment, and keeps the path', () => {
+    assert.equal(redactUrls(SIGNED), 'https://cdn.example/work/index.html?…#…');
+    assert.equal(
+      redactUrls('fetch_failed:https://cdn.example/x?token=SECRET; csp:ipfs://cid/a?k=SECRET'),
+      'fetch_failed:https://cdn.example/x?…; csp:ipfs://cid/a?…'
+    );
+    assert.equal(redactUrls('no address here'), 'no address here');
+  });
+
+  test('an untitled item, a device reason, and a device error are redacted; requests are exact', async () => {
+    const playlist = { dpVersion: '1.1.0', items: [{ source: SIGNED }] } as unknown as Playlist;
+    const seen: string[] = [];
     const d = deps(
       (cast) =>
         cast.command === 'downloadPlaylist'
           ? QUEUED
           : {
               ok: true,
-              items: [A, B].map((s) => item(s, 'ready', { bytes: 5, coverageComplete: true })),
+              items: [item(SIGNED, 'partial', { reason: `loading_failed(net::ERR):${SIGNED}` })],
             },
-      playlistOf(A, B)
+      playlist
     );
-    const result = await downloadPlaylist({ source: URL_SOURCE, wait: true }, d);
-    assert.equal(result.success, true, result.error);
-    assert.deepEqual(d.casts[0], {
-      command: 'downloadPlaylist',
-      request: { playlistUrl: URL_SOURCE },
-    });
-    assert.deepEqual(d.casts[1].request, { sources: [A, B] });
-  });
-
-  test('a media URL or web page is refused before anything is sent', async () => {
-    const d = deps(() => QUEUED, playlistOf(A), {
-      loadPlaylistFn: async () => {
-        throw new PlaylistUrlLoadError('Invalid JSON from playlist URL', {
-          kind: 'json',
-          body: '<html>',
-        });
-      },
-    });
     const result = await downloadPlaylist(
-      { source: 'https://example.com/video.mp4', wait: true },
+      { source: 'playlist.json', wait: true, onItemState: (i) => seen.push(formatItemLine(i)) },
       d
     );
     assert.equal(result.success, false);
-    assert.match(result.error ?? '', /is not a DP-1 playlist/);
-    assert.match(result.details ?? '', /playlist file or a playlist URL/);
-    assert.equal(d.casts.length, 0);
-  });
+    assert.deepEqual(d.casts[1].request, { sources: [SIGNED] });
+    assert.equal(result.items?.[0].title, 'https://cdn.example/work/index.html?…#…');
+    const printed = [
+      ...seen,
+      ...(result.items ?? []).map(formatItemLine),
+      result.error,
+      result.details,
+    ].join('\n');
+    assert.doesNotMatch(printed, /SECRET|user:pw/);
 
-  test('JSON that is not a DP-1 playlist is refused', async () => {
-    await assert.rejects(
-      loadDownloadSource('https://example.com/data.json', async (source) => ({
-        playlist: { hello: 'world' } as unknown as Playlist,
-        source,
-        sourceType: 'url',
-      })),
-      /is not a DP-1 playlist/
+    const refused = deps(
+      () => ({
+        ok: false,
+        error: { code: 'resolve_failed', message: `fetch ${SIGNED}: 403`, retryable: true },
+      }),
+      playlist
     );
-  });
-
-  test('a playlist with no item sources is refused', async () => {
-    await assert.rejects(
-      loadDownloadSource('empty.json', async (source) => ({
-        playlist: playlistOf(),
-        source,
-        sourceType: 'file',
-      })),
-      /no items with a source/
-    );
+    const failure = await downloadPlaylist({ source: 'playlist.json', wait: true }, refused);
+    assert.equal(failure.details, 'fetch https://cdn.example/work/index.html?…#…: 403');
   });
 });
 

@@ -94,22 +94,25 @@ function printFailure(result: DownloadResult): void {
  * The exit code is the contract for scripts and agents: 0 only when every
  * item is held with complete coverage (or, with `--no-wait`, when the FF1
  * queued the playlist), 1 for anything else, including a timeout.
+ *
+ * It takes a playlist file only; offline-download.ts says why a URL or a
+ * dynamic playlist is refused.
  */
 export const downloadCommand = new Command('download')
   .description('Keep a playlist on an FF1 device so it displays with no network')
-  .argument('<source>', 'Playlist file or playlist URL')
+  .argument('<file>', 'Playlist file')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
   .option('--no-wait', 'Queue the download and exit without waiting for the items')
   .option(
     '--timeout <seconds>',
     `Seconds to wait for every item (default ${DEFAULT_DOWNLOAD_TIMEOUT_SECONDS})`
   )
-  .action(async (source: string, options: { device?: string; wait: boolean; timeout?: string }) => {
+  .action(async (file: string, options: { device?: string; wait: boolean; timeout?: string }) => {
     try {
       const timeoutSeconds = parseTimeoutSeconds(options.timeout);
       console.log(chalk.blue('\nDownload to FF1\n'));
       const result = await downloadPlaylist({
-        source,
+        source: file,
         deviceName: options.device,
         wait: options.wait,
         timeoutSeconds,
