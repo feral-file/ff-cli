@@ -127,6 +127,11 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Marketplace links (Art Blocks, OpenSea, objkt, Feral File, …) that declare no playlist are sent to `find`, which resolves the artwork. `--web` displays the page itself instead
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
   - When a structurally valid loaded playlist is unsigned (including `signatures: []`) and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. Local file commands are labeled separately for POSIX shells and PowerShell so apostrophes and shell metacharacters stay literal. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
+- `download <source>` – Keep a playlist on an FF1 device so it displays with no network (the Feral File app calls this Download; the device stores the works in its offline cache). `<source>` is a playlist file or a playlist URL; a media URL or web page is refused
+  - By default it waits until every item is held, printing one line per item (title, state, bytes, and whether coverage is complete), then a summary
+  - Exits 0 only when every item is `ready` with complete coverage. Exits 1 when any item failed, is held incompletely, was not queued by the device, or was still downloading at the timeout; the message counts each. With `--no-wait` it prints the queued count and exits 0 once the device has queued the playlist
+  - Options: `-d, --device <name>`, `--no-wait` (queue and exit), `--timeout <seconds>` (default 180)
+  - Runs over the local network only. With secure control a controller ("Can display") grant is enough. A device with offline display turned off answers that it cannot keep works
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
   - OpenSea forms: `/assets/ethereum/{contract}/{tokenId}`, `/item/ethereum/{contract}/{tokenId}`, and `/collection/{slug}` (Ethereum collections; the slug is resolved from the public collection page, no API key needed)
@@ -297,6 +302,28 @@ npm run dev -- display --web "https://feralfile.com/"
 # Skip signature verification only if you must send a non-conformant payload (not recommended)
 npm run dev -- display playlist.json --skip-verify
 ```
+
+### Keep a playlist for display with no network
+
+```bash
+# Display a playlist, then keep it on the device and wait until every item is held
+ff-cli display playlist.json -d "Living Room Display"
+ff-cli download playlist.json -d "Living Room Display"
+
+# A hosted playlist URL works the same way
+ff-cli download "https://cdn.example.com/playlist.json"
+
+# Queue the download and return at once
+ff-cli download playlist.json --no-wait
+
+# Allow a large playlist ten minutes
+ff-cli download playlist.json --timeout 600
+```
+
+`download` exits 0 only when every item is held with complete coverage, so a
+script can trust it before the network goes away. An item reported as
+`coverage incomplete` is held in part: some of what the work loads could not
+be captured, and it may not display correctly with no network.
 
 ### Owner remote maintenance
 
