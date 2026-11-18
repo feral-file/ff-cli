@@ -938,7 +938,8 @@ function collectStatusItems(entries: unknown, into: Map<string, StatusItem>): vo
       continue;
     }
     into.set(entry.source, {
-      state: entry.state,
+      // A state is a bare word; anything else is not printed.
+      state: /^[a-z_]+$/.test(entry.state) ? entry.state : 'unknown',
       bytes: numberField(entry.bytes) ?? 0,
       coverageComplete: entry.coverageComplete === true,
       reason: typeof entry.reason === 'string' ? redactReason(entry.reason) : undefined,
