@@ -500,20 +500,45 @@ function refuseUnusableSources(file: string, items: unknown[]): void {
  * and no `tokenId`. The same provenance with a `tokenId` names one edition
  * and is downloaded like any other item.
  *
+ * The device's JSON decoder matches member names in any letter case and
+ * lets a later duplicate win, so `SeriesId` is a series id there and a
+ * second, empty `tokenid` clears the first. Every spelling is read here, and
+ * the item counts as a whole series unless every `tokenId` spelling present
+ * is a non-empty string.
+ *
  * @param item - One entry of `items`
  * @returns True for a whole-series item
  */
 function isWholeSeriesItem(item: unknown): boolean {
-  const provenance = (item as { provenance?: { type?: unknown; contract?: unknown } } | null)
-    ?.provenance;
-  if (provenance?.type !== 'seriesRegistry') {
+  const provenances = membersNamed(item, 'provenance');
+  if (!provenances.some((p) => membersNamed(p, 'type').includes('seriesRegistry'))) {
     return false;
   }
-  const contract = provenance.contract as { seriesId?: unknown; tokenId?: unknown } | null;
-  if (!contract || contract.seriesId === undefined || contract.seriesId === null) {
+  const contracts = provenances.flatMap((p) => membersNamed(p, 'contract'));
+  const seriesIds = contracts.flatMap((c) => membersNamed(c, 'seriesId'));
+  if (!seriesIds.some((id) => id !== null && id !== undefined)) {
     return false;
   }
-  return !(typeof contract.tokenId === 'string' && contract.tokenId !== '');
+  const tokenIds = contracts.flatMap((c) => membersNamed(c, 'tokenId'));
+  return tokenIds.length === 0 || tokenIds.some((id) => typeof id !== 'string' || id === '');
+}
+
+/**
+ * membersNamed returns the values of every member of an object whose name
+ * matches in any letter case.
+ *
+ * @param value - Any parsed JSON value
+ * @param name - Member name
+ * @returns The matching values; empty when `value` is not an object
+ */
+function membersNamed(value: unknown, name: string): unknown[] {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return [];
+  }
+  const wanted = name.toLowerCase();
+  return Object.entries(value).flatMap(([key, member]) =>
+    key.toLowerCase() === wanted ? [member] : []
+  );
 }
 
 /**

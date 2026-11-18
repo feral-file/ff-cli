@@ -472,6 +472,36 @@ describe('download: what it takes', () => {
     assert.equal(d.casts.length, 0);
   });
 
+  test('a series item spelled the way the device still reads it is refused too', async () => {
+    // The device matches member names in any letter case, and a later
+    // duplicate wins, so both of these are whole series there.
+    const d = deps(() => QUEUED, {
+      dpVersion: '1.1.0',
+      items: [
+        {
+          title: 'Capitals',
+          source: A,
+          Provenance: { Type: 'seriesRegistry', Contract: { SeriesId: 12 } },
+        },
+        {
+          title: 'Cleared',
+          source: B,
+          provenance: {
+            type: 'seriesRegistry',
+            contract: { seriesId: 12, tokenId: '12000007', tokenid: '' },
+          },
+        },
+      ],
+    } as unknown as Playlist);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+    assert.equal(result.success, false);
+    assert.equal(
+      result.error,
+      'playlist.json has 2 of 2 items that name a whole series: Capitals, Cleared.'
+    );
+    assert.equal(d.casts.length, 0);
+  });
+
   test('a series edition named by tokenId is downloaded like any other item', async () => {
     const d = deps(() => QUEUED, {
       dpVersion: '1.1.0',
