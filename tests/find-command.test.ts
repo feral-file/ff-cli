@@ -800,7 +800,33 @@ describe('find command — links only the service can read', () => {
     ]);
   });
 
-  test('a page that comes down to one token builds that token through /work', async () => {
+  test('a collection holding one token builds that token alone, never its parent series', async () => {
+    const link = `https://objkt.com/collections/${VALID_TEZOS_CONTRACT}`;
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ work: { chain: 'other', contract: '', tokenId: '', series: '' } });
+      }
+      return {
+        body: {
+          title: 'One-Token Collection',
+          items: [
+            {
+              provenance: {
+                contract: { chain: 'tezos', address: VALID_TEZOS_CONTRACT, tokenId: '1' },
+              },
+            },
+          ],
+        },
+      };
+    };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /One-Token Collection/);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
+  test("a project page builds its representative token's series through /work", async () => {
     const link = 'https://www.fxhash.xyz/generative/mock-project';
     handler = (call) => {
       if (call.path === '/tokens') {

@@ -39,6 +39,14 @@ export const DEFAULT_SOURCE_RESOLVER_URL =
 const LOOKUP_TIMEOUT_MS = 35_000;
 
 /**
+ * TOKENS_TIMEOUT_MS bounds `GET /tokens`, which is not a lookup route: it
+ * resolves the page and then polls the indexer for unseen tokens (a 45 s
+ * budget of its own), so a cold collection legitimately takes longer than
+ * any lookup.
+ */
+export const TOKENS_TIMEOUT_MS = 90_000;
+
+/**
  * UNAUTHORIZED_MESSAGE is how the service refuses a missing or wrong key:
  * 400 INVALID_INPUT with this message, not a 401. It is matched exactly so a
  * real input error is never mistaken for a refusal.
@@ -125,6 +133,8 @@ export interface ServiceRequest {
   path: string;
   query?: Record<string, string | number | undefined>;
   body?: unknown;
+  /** Deadline for this call; LOOKUP_TIMEOUT_MS when omitted. */
+  timeoutMs?: number;
 }
 
 /**
@@ -246,7 +256,7 @@ export async function serviceRequest<T>(
         headers: requestHeaders(hasBody),
         body: hasBody ? JSON.stringify(request.body) : undefined,
       },
-      LOOKUP_TIMEOUT_MS
+      request.timeoutMs ?? LOOKUP_TIMEOUT_MS
     );
   } catch (error) {
     throw new SourceResolverUnavailableError(

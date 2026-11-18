@@ -126,8 +126,25 @@ export async function resolveFindTarget(
     }
     return degradeOrFail(error as Error, local);
   }
-  return targetFromWork(work) ?? (local ? single(local, work.diag) : resolvePageTokens(input));
+  return (
+    targetFromWork(work) ??
+    (local ? single(local, work.diag) : resolvePageTokens(input, parsed.kind))
+  );
 }
+
+/**
+ * REPRESENTATIVE_TOKEN_PAGES are the page kinds that name a work through one
+ * representative token: a project page by its slug resolves to its first
+ * output, and `find` builds that token's series as it does for a pasted
+ * token. Every other page (a collection, a Feral File show) means its exact
+ * list, even when that list holds a single token.
+ */
+const REPRESENTATIVE_TOKEN_PAGES: ReadonlySet<ParsedFindInput['kind']> = new Set([
+  'fxhash-iteration',
+  'fxhash-project',
+  'os-collection',
+  'ab-collection',
+]);
 
 /**
  * lookupWorkOrDegrade asks `/work` about coordinates the caller already
@@ -221,15 +238,19 @@ function single(coords: TokenCoords, notes: string[]): DirectTarget {
 /**
  * resolvePageTokens asks `/tokens` which tokens a page shows.
  *
- * A page that comes down to one token (a fxhash or OpenSea project page names
- * its first output) goes back through `/work` as a coordinate, so it builds
- * that token's series the way a pasted token does. Several tokens are the
- * page's own list (a collection, a show) and build as they are.
+ * On a page that names a work through a representative token
+ * (REPRESENTATIVE_TOKEN_PAGES), the first token goes back through `/work` as
+ * a coordinate, so it builds that token's series the way a pasted token
+ * does. Any other page builds exactly the tokens it lists.
  *
  * @param input - The page URL
+ * @param kind - parseFindInput's kind for the page
  * @returns The target, or null when the page holds no buildable token
  */
-async function resolvePageTokens(input: string): Promise<ResolvedTarget | null> {
+async function resolvePageTokens(
+  input: string,
+  kind: ParsedFindInput['kind']
+): Promise<ResolvedTarget | null> {
   let page: Awaited<ReturnType<typeof lookupPageTokens>>;
   try {
     page = await lookupPageTokens(input);
@@ -242,7 +263,7 @@ async function resolvePageTokens(input: string): Promise<ResolvedTarget | null> 
   if (page.coords.length === 0) {
     return null;
   }
-  if (page.coords.length === 1) {
+  if (REPRESENTATIVE_TOKEN_PAGES.has(kind)) {
     return lookupWorkOrDegrade(page.coords[0]);
   }
   return { kind: 'token-list', title: page.title || 'Resolved source', coords: page.coords };

@@ -20,6 +20,7 @@
  */
 
 import { getAddress } from 'viem';
+import { normalizeTokenCoords } from '@feralfile/source-resolver';
 import * as logger from '../logger';
 import {
   RASTER_REFS_PER_REQUEST,
@@ -331,12 +332,6 @@ function reportProgress(opts: ResolveOptions, done: number, total: number): void
 /** DECIMAL_TOKEN_ID is the only token id shape Raster's BigInt scalar accepts. */
 const DECIMAL_TOKEN_ID = /^\d+$/;
 
-/** CONTRACT_SHAPES are the contract address forms the service accepts, per chain. */
-const CONTRACT_SHAPES: Record<IndexerChain, RegExp> = {
-  ethereum: /^0x[0-9a-fA-F]{40}$/,
-  tezos: /^KT1[1-9A-HJ-NP-Za-km-z]{33}$/,
-};
-
 /**
  * rejectionFor explains why a coordinate cannot be sent to Raster, or ''.
  *
@@ -353,8 +348,16 @@ function rejectionFor(coord: TokenCoordinate): string {
   if (!DECIMAL_TOKEN_ID.test(String(coord.tokenId ?? '').trim())) {
     return `Invalid token id "${coord.tokenId}" (expected a decimal integer)`;
   }
-  if (!CONTRACT_SHAPES[chain].test(coord.contractAddress.trim())) {
-    return `Invalid ${chain} contract address "${coord.contractAddress}"`;
+  // The service validates each ref with this same shared-library check
+  // (checksums, uint256 bounds, KT1 form); running it here first is what
+  // keeps one bad ref from failing its 39 neighbours.
+  const tuple = {
+    chain,
+    contract: coord.contractAddress.trim(),
+    tokenId: String(coord.tokenId).trim(),
+  };
+  if (normalizeTokenCoords(tuple) === null) {
+    return `Invalid ${chain} contract address or token id (${coord.contractAddress}:${coord.tokenId})`;
   }
   return '';
 }

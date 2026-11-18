@@ -8,7 +8,7 @@
  * Raster's own field names, into items (token-source-raster.ts).
  */
 
-import { serviceRequest } from './source-resolver-client';
+import { TOKENS_TIMEOUT_MS, serviceRequest } from './source-resolver-client';
 import type { RasterToken } from './token-source-raster';
 
 /** The chains a service record can name. Only the first two are buildable. */
@@ -214,10 +214,15 @@ interface PlaylistItemProvenance {
  * for the pages `/work` cannot express as one work or one series: a
  * collection, a Feral File show, a fxhash or OpenSea project by its slug.
  *
- * `/tokens` answers with a signed DP-1 playlist the service built. Only each
- * item's `provenance.contract` is read: ff-cli builds its own items through
+ * `/tokens` answers with a signed DP-1 playlist the service built, and the
+ * service leaves out a token it could not build an item for, so membership
+ * read here can be short of the page's. That is a known gap: the service has
+ * no route that lists a page's coordinates losslessly, and adding one there
+ * is the fix, not reconstructing membership here. Only each item's
+ * `provenance.contract` is read: ff-cli builds its own items through
  * its configured token source (one vendor per run), so the service's items
- * are not reused. DP-1 names Ethereum `evm`; it is mapped back here.
+ * are not reused. DP-1 names Ethereum `evm`; the service builds Ethereum and Tezos only, so
+ * `evm` is mapped back to Ethereum here.
  *
  * @param input - The page URL
  * @returns The playlist title and the coordinates on Ethereum and Tezos
@@ -227,6 +232,7 @@ export async function lookupPageTokens(input: string): Promise<PageTokens> {
   const playlist = await serviceRequest<{ title?: string; items?: PlaylistItemProvenance[] }>({
     path: '/tokens',
     query: { url: input },
+    timeoutMs: TOKENS_TIMEOUT_MS,
   });
   const coords: TokenRef[] = [];
   for (const item of playlist?.items ?? []) {

@@ -309,6 +309,12 @@ describe('createRasterTokenSource', () => {
         { chain: 'ethereum', contractAddress: '0xshort', tokenId: '1' },
         {
           chain: 'ethereum',
+          contractAddress: '0x0000000000000000000000000000000000000001',
+          // One past uint256: the service would reject the whole batch for it.
+          tokenId: (2n ** 256n).toString(),
+        },
+        {
+          chain: 'ethereum',
           contractAddress: '0xa7d8d9ef8D8Ce8992Df33D8b8CF4Aebabd5bD270',
           tokenId: '78000629',
         },
@@ -319,8 +325,9 @@ describe('createRasterTokenSource', () => {
     assert.ok(isFailed(results[0]));
     assert.match(results[0].error, /Invalid token id "0x1f"/);
     assert.ok(isFailed(results[1]));
-    assert.match(results[1].error, /Invalid ethereum contract address "0xshort"/);
-    assert.ok(isResolved(results[2]));
+    assert.match(results[1].error, /Invalid ethereum contract address or token id \(0xshort:1\)/);
+    assert.ok(isFailed(results[2]));
+    assert.ok(isResolved(results[3]));
   });
 
   test('a failed request fails every coordinate in its batch with the reason', async () => {
