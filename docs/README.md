@@ -128,10 +128,10 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - Options: `-d, --device <name>`, `--web` (display the URL as a web page, skipping the marketplace redirect), `--skip-verify` (skip signature verification; not recommended)
   - When a structurally valid loaded playlist is unsigned (including `signatures: []`) and a signing key is configured, the verification failure points to `ff-cli sign` before the bypass option. Local file commands are labeled separately for POSIX shells and PowerShell so apostrophes and shell metacharacters stay literal. `sign` reads local files: save a hosted playlist locally, sign it, then upload the signed file to the same URL or display the signed local file.
 - `download <file>` – Keep a playlist on an FF1 device so it displays with no network (the Feral File app calls this Download; the device stores the works in its offline cache). `<file>` is a playlist file that lists its items
-  - A URL is refused: save the playlist first (`ff-cli fetch <id-or-url> -o playlist.json` for one published to a feed) and download the file, so the command checks exactly the items the device was given. A dynamic playlist, an item with no `source`, and an inline `data:` source with no comma are refused too, before anything is sent
+  - A URL is refused: save the playlist first (`ff-cli fetch <id-or-url> -o playlist.json` for one published to a feed) and download the file, so the command checks exactly the items the device was given. A dynamic playlist, an item with no `source`, and an item with an inline `data:` source are refused too, before anything is sent: the device does not download an inline source, so nothing says whether what it loads is held
   - `--timeout` bounds the whole wait, status requests included. Addresses are printed without their query string, since a source can be a signed URL
   - By default it waits until every item is held, printing one line per item (title, state, bytes, and whether coverage is complete), then a summary
-  - Exits 0 only when every item is `ready` with complete coverage. Exits 1 when any item failed, is held incompletely, was not queued by the device, or was still downloading at the timeout; the message counts each. With `--no-wait` it prints the queued count and exits 0 once the device has queued the playlist
+  - When it waits (the default), it exits 0 only when every item is `ready` with complete coverage, and 1 when any item failed, is held incompletely, was not queued by the device, or was still downloading at the timeout; the message counts each. With `--no-wait` it prints the queued count and exits 0 once the device has queued the playlist: that exit 0 says nothing about what is held
   - Options: `-d, --device <name>`, `--no-wait` (queue and exit), `--timeout <seconds>` (default 180)
   - Runs over the local network only. With secure control a controller ("Can display") grant is enough. A device with offline display turned off answers that it cannot keep works
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
@@ -316,15 +316,18 @@ ff-cli download playlist.json -d "Living Room Display"
 ff-cli fetch <id-or-url> -o playlist.json
 ff-cli download playlist.json
 
-# Queue the download and return at once
+# Queue the download and return at once (exit 0 means queued, not held)
 ff-cli download playlist.json --no-wait
 
 # Allow a large playlist ten minutes
 ff-cli download playlist.json --timeout 600
 ```
 
-`download` exits 0 only when every item is held with complete coverage, so a
-script can trust it before the network goes away. An item reported as
+Without `--no-wait`, `download` exits 0 only when every item is held with
+complete coverage, so a script can trust it before the network goes away.
+With `--no-wait` it exits 0 as soon as the device has queued the playlist,
+before anything is known to be held; run it again without `--no-wait` to
+check. An item reported as
 `coverage incomplete` is held in part: some of what the work loads could not
 be captured, and it may not display correctly with no network.
 
