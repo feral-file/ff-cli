@@ -472,34 +472,64 @@ describe('download: what it takes', () => {
     assert.equal(d.casts.length, 0);
   });
 
-  test('a series item spelled the way the device still reads it is refused too', async () => {
-    // The device matches member names in any letter case, and a later
-    // duplicate wins, so both of these are whole series there.
+  // The device's decoder matches member names in any letter case and lets the
+  // later of two matches win, so each of these means something else there.
+  const misspelled: Array<[string, string, string]> = [
+    [
+      'a second provenance in other letter case',
+      '{"dpVersion":"1.1.0","items":[{"source":"https://cdn.example/a.html","PROVENANCE":{"type":"seriesRegistry","contract":{"seriesId":12,"tokenId":"7"}},"Provenance":null,"provenance":{"type":"seriesRegistry","contract":{"seriesId":12}}}]}',
+      'playlist.json has a member "PROVENANCE" in items[0]: the FF1 reads it as "provenance", and this command does not.',
+    ],
+    [
+      'a dynamic query in other letter case',
+      '{"dpVersion":"1.1.0","DynamicQuery":{"endpoint":"https://feed.example/q"},"items":[{"source":"https://cdn.example/a.html"}]}',
+      'playlist.json has a member "DynamicQuery" at the top level: the FF1 reads it as "dynamicQuery", and this command does not.',
+    ],
+    [
+      'legacy dynamic queries in other letter case',
+      '{"dpVersion":"1.1.0","DYNAMICQUERIES":[{"endpoint":"https://feed.example/q"}],"items":[{"source":"https://cdn.example/a.html"}]}',
+      'playlist.json has a member "DYNAMICQUERIES" at the top level: the FF1 reads it as "dynamicQueries", and this command does not.',
+    ],
+    [
+      'a later tokenid after an empty tokenId',
+      '{"dpVersion":"1.1.0","items":[{"source":"https://cdn.example/a.html","provenance":{"type":"seriesRegistry","contract":{"seriesId":12,"tokenId":"","tokenid":"12000007"}}}]}',
+      'playlist.json has a member "tokenid" in items[0].provenance.contract: the FF1 reads it as "tokenId", and this command does not.',
+    ],
+    [
+      'a later contract that clears the token id',
+      '{"dpVersion":"1.1.0","items":[{"source":"https://cdn.example/a.html","provenance":{"type":"seriesRegistry","contract":{"seriesId":12,"tokenId":"12000007"},"Contract":null,"CONTRACT":{"seriesId":12}}}]}',
+      'playlist.json has a member "Contract" in items[0].provenance: the FF1 reads it as "contract", and this command does not.',
+    ],
+    [
+      'a series id written with a long s',
+      '{"dpVersion":"1.1.0","items":[{"source":"https://cdn.example/a.html","provenance":{"type":"seriesRegistry","contract":{"\\u017feriesId":12}}}]}',
+      'playlist.json has a member "\u017feriesId" in items[0].provenance.contract: the FF1 reads it as "seriesId", and this command does not.',
+    ],
+    [
+      'a token id written with a Kelvin sign',
+      '{"dpVersion":"1.1.0","items":[{"source":"https://cdn.example/a.html","provenance":{"type":"seriesRegistry","contract":{"seriesId":12,"to\\u212aenId":"7"}}}]}',
+      'playlist.json has a member "to\u212aenId" in items[0].provenance.contract: the FF1 reads it as "tokenId", and this command does not.',
+    ],
+  ];
+  for (const [name, json, message] of misspelled) {
+    test(`${name} is refused: the device would read it and this command would not`, async () => {
+      const d = deps(() => QUEUED, JSON.parse(json) as Playlist);
+      const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+      assert.equal(result.success, false);
+      assert.equal(result.error, message);
+      assert.match(result.details ?? '', /^Spell it "\w+", or take it out\. Nothing was sent/);
+      assert.equal(d.casts.length, 0);
+    });
+  }
+
+  test('a member with an unrelated name in any letter case is not refused', async () => {
     const d = deps(() => QUEUED, {
       dpVersion: '1.1.0',
-      items: [
-        {
-          title: 'Capitals',
-          source: A,
-          Provenance: { Type: 'seriesRegistry', Contract: { SeriesId: 12 } },
-        },
-        {
-          title: 'Cleared',
-          source: B,
-          provenance: {
-            type: 'seriesRegistry',
-            contract: { seriesId: 12, tokenId: '12000007', tokenid: '' },
-          },
-        },
-      ],
+      Note: 'x',
+      items: [{ title: 'A', source: A, Artist: 'someone', display: { Scaling: 'fit' } }],
     } as unknown as Playlist);
-    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
-    assert.equal(result.success, false);
-    assert.equal(
-      result.error,
-      'playlist.json has 2 of 2 items that name a whole series: Capitals, Cleared.'
-    );
-    assert.equal(d.casts.length, 0);
+    await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
+    assert.equal(d.casts.length, 1);
   });
 
   test('a series edition named by tokenId is downloaded like any other item', async () => {

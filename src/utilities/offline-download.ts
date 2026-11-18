@@ -341,7 +341,8 @@ async function runDownload(
  * @param {Function} [loadFn] - Playlist loader (tests)
  * @returns {Promise<DownloadSource>} Request and tracked items
  * @throws {Error} When the source is a URL, is not a DP-1 playlist, is
- *   dynamic, or has an item with no source, an inline one or a whole series;
+ *   dynamic, has an item with no source, an inline one or a whole series, or
+ *   has a member name the device would read differently from this command;
  *   `details` on the error
  *   carries the follow-up line when there is one
  */
@@ -358,6 +359,7 @@ export async function loadDownloadSource(
   }
   const loaded = await loadFn(trimmed);
   const playlist = loaded.playlist as Record<string, unknown> | null;
+  refuseMisspelledMembers(trimmed, playlist);
   if (typeof playlist?.dpVersion !== 'string' || !Array.isArray(playlist.items)) {
     throw refusal(
       `${trimmed} is not a DP-1 playlist (it has no dpVersion or no items).`,
@@ -498,47 +500,104 @@ function refuseUnusableSources(file: string, items: unknown[]): void {
  * editions of a series. It is the device's own test (ffos-user dp1/series.go,
  * isSeriesItem): `seriesRegistry` provenance whose contract has a `seriesId`
  * and no `tokenId`. The same provenance with a `tokenId` names one edition
- * and is downloaded like any other item.
- *
- * The device's JSON decoder matches member names in any letter case and
- * lets a later duplicate win, so `SeriesId` is a series id there and a
- * second, empty `tokenid` clears the first. Every spelling is read here, and
- * the item counts as a whole series unless every `tokenId` spelling present
- * is a non-empty string.
+ * and is downloaded like any other item. Exact member names are enough here
+ * because refuseMisspelledMembers has already run.
  *
  * @param item - One entry of `items`
  * @returns True for a whole-series item
  */
 function isWholeSeriesItem(item: unknown): boolean {
-  const provenances = membersNamed(item, 'provenance');
-  if (!provenances.some((p) => membersNamed(p, 'type').includes('seriesRegistry'))) {
+  const provenance = (item as { provenance?: { type?: unknown; contract?: unknown } } | null)
+    ?.provenance;
+  if (provenance?.type !== 'seriesRegistry') {
     return false;
   }
-  const contracts = provenances.flatMap((p) => membersNamed(p, 'contract'));
-  const seriesIds = contracts.flatMap((c) => membersNamed(c, 'seriesId'));
-  if (!seriesIds.some((id) => id !== null && id !== undefined)) {
+  const contract = provenance.contract as { seriesId?: unknown; tokenId?: unknown } | null;
+  if (!contract || contract.seriesId === undefined || contract.seriesId === null) {
     return false;
   }
-  const tokenIds = contracts.flatMap((c) => membersNamed(c, 'tokenId'));
-  return tokenIds.length === 0 || tokenIds.some((id) => typeof id !== 'string' || id === '');
+  return !(typeof contract.tokenId === 'string' && contract.tokenId !== '');
 }
 
 /**
- * membersNamed returns the values of every member of an object whose name
- * matches in any letter case.
- *
- * @param value - Any parsed JSON value
- * @param name - Member name
- * @returns The matching values; empty when `value` is not an object
+ * The member names the checks in this file read, and the ones the device
+ * reads to decide what to queue (ffos-user dp1/dp1.go and dp1/series.go,
+ * dp1-go playlist/playlist.go): the playlist and item identity a series is
+ * resolved by, the dynamic query in both forms, and an item's source and
+ * provenance.
  */
-function membersNamed(value: unknown, name: string): unknown[] {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    return [];
-  }
-  const wanted = name.toLowerCase();
-  return Object.entries(value).flatMap(([key, member]) =>
-    key.toLowerCase() === wanted ? [member] : []
-  );
+const CHECKED_MEMBERS = [
+  'dpVersion',
+  'id',
+  'items',
+  'dynamicQuery',
+  'dynamicQueries',
+  'source',
+  'provenance',
+  'type',
+  'contract',
+  'chain',
+  'address',
+  'seriesId',
+  'tokenId',
+];
+
+const CHECKED_BY_FOLD = new Map(CHECKED_MEMBERS.map((name) => [foldMemberName(name), name]));
+
+/**
+ * foldMemberName folds a member name the way Go's encoding/json matches one
+ * to a struct field: letter case is ignored, and for the ASCII names above
+ * the only other characters that match are the long s (U+017F) for `s` and
+ * the Kelvin sign (U+212A) for `k`.
+ *
+ * @param name - Member name as written
+ * @returns The folded name
+ */
+function foldMemberName(name: string): string {
+  return name
+    .replace(/\u017f/g, 's')
+    .replace(/\u212a/g, 'k')
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+/**
+ * refuseMisspelledMembers stops a playlist in which any object has a member
+ * the device would read as one of CHECKED_MEMBERS though it is not spelled
+ * that way (`SeriesId`, `DynamicQuery`, a second `tokenid`). The device's
+ * decoder matches names in any letter case and lets the later of two matches
+ * win, so such a document means one thing to the checks here and another to
+ * the device. Refusing it lets every other check read exact names.
+ *
+ * @param file - Playlist path, for the message
+ * @param playlist - Parsed playlist
+ * The name itself is safe to print: it folds to one of ours, so it is ASCII
+ * letters and at most those two characters.
+ *
+ * @throws {Error} Naming the first such member and where it is
+ */
+function refuseMisspelledMembers(file: string, playlist: unknown): void {
+  const walk = (value: unknown, where: string): void => {
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => walk(entry, `${where}[${index}]`));
+      return;
+    }
+    if (value === null || typeof value !== 'object') {
+      return;
+    }
+    for (const [name, member] of Object.entries(value)) {
+      const exact = CHECKED_BY_FOLD.get(foldMemberName(name));
+      if (exact !== undefined && exact !== name) {
+        throw refusal(
+          `${file} has a member "${name}" ${where ? `in ${where}` : 'at the top level'}: the FF1 reads it as "${exact}", and this command does not.`,
+          `Spell it "${exact}", or take it out.`
+        );
+      }
+      // A name that is not one of ours is file text: keep it printable and short.
+      const step = name.replace(/[^\x21-\x7e]/g, '?').slice(0, 40);
+      walk(member, where ? `${where}.${step}` : step);
+    }
+  };
+  walk(playlist, '');
 }
 
 /**
