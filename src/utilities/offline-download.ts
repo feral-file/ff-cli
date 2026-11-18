@@ -269,23 +269,26 @@ export function redactUrls(text: string): string {
 }
 
 /**
- * redactReason is redactUrls for an item's `reason`, which also names the
- * resources a work loads by the reference the work used (a glTF texture as
- * `texture.png?token=…`). Those have no scheme, and nothing marks where one
- * ends (a query may hold a quote or a space), so the reason is cut at the
- * first `?` or `#` that redactUrls did not already redact: a later reason is
- * lost rather than a parameter shown. Titles do not get this: "Work #1" is
- * not a fragment.
+ * redactReason cuts an item's `reason` at its first `?` or `#`. A reason
+ * names URLs and the references a work loads (a glTF texture as
+ * `texture.png?token=…`), and nothing marks where a query or fragment ends
+ * (it may hold a quote or a space), so everything after the first one goes:
+ * a later reason is lost rather than a parameter shown. Titles do not get
+ * this: "Work #1" is not a fragment.
  *
  * @param {string} reason - Device reason text
- * @returns {string} The reason with no query string or fragment left in it
+ * @returns {string} The reason up to its first `?` or `#`, with `…` after it
  * @example
  * redactReason("gltf_external_dependency:texture.png?name=artist's&token=abc"); // 'gltf_external_dependency:texture.png?…'
  */
 export function redactReason(reason: string): string {
-  // The lookahead passes over only the `?…` and `#…` redactUrls wrote, which
-  // end a word; a "?" that ends a sentence has nothing after it to remove.
-  return redactUrls(reason).replace(/([?#])(?!…(?:#…)?[;:,.)\]]*(?:\s|$))\S[\s\S]*$/, '$1…');
+  // redactUrls still runs on what is kept, for a URL's userinfo.
+  const cut = reason.search(/[?#]/);
+  // A "?" that ends the reason has nothing after it to remove.
+  if (cut === -1 || cut === reason.length - 1) {
+    return redactUrls(reason);
+  }
+  return `${redactUrls(reason.slice(0, cut))}${reason[cut]}…`;
 }
 
 /**

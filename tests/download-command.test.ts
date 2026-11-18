@@ -489,11 +489,24 @@ describe('download: nothing secret reaches the terminal', () => {
     );
     assert.equal(
       redactReason('fetch_failed:https://cdn.example/x?token=SECRET; csp:c.png?k=SECRET'),
-      'fetch_failed:https://cdn.example/x?…; csp:c.png?…'
+      'fetch_failed:https://cdn.example/x?…'
     );
     assert.equal(
       redactReason(`loading_failed:${SIGNED}`),
-      'loading_failed:https://cdn.example/work/index.html?…#…'
+      'loading_failed:https://cdn.example/work/index.html?…'
+    );
+    // A space inside or right after the mark does not end the cut.
+    assert.equal(
+      redactReason('fetch_failed:https://cdn.example/x?name=a b&token=SECRET'),
+      'fetch_failed:https://cdn.example/x?…'
+    );
+    assert.equal(
+      redactReason('gltf_external_dependency:texture.png? token=SECRET'),
+      'gltf_external_dependency:texture.png?…'
+    );
+    assert.equal(
+      redactReason('fetch_failed:https://u:p@cdn.example/x# SECRET'),
+      'fetch_failed:https://cdn.example/x#…'
     );
     assert.equal(redactReason('is it held?'), 'is it held?');
 
