@@ -63,7 +63,10 @@ before(async () => {
         variables: Record<string, unknown>;
       };
       res.setHeader('Content-Type', 'application/json');
-      if (rasterRefusalStatus !== null) {
+      if (
+        rasterRefusalStatus !== null &&
+        (rasterRefuseOnly === null || rasterRefuseOnly.test(query))
+      ) {
         // Raster refusing a keyless client, as api.raster.art has since about
         // 2026-11-13 (feral-file#3612).
         res.statusCode = rasterRefusalStatus;
@@ -174,12 +177,15 @@ after(() => {
 
 let destroyResponseBody = false;
 let rasterRefusalStatus: number | null = null;
+/** When set, only Raster operations whose query matches are refused. */
+let rasterRefuseOnly: RegExp | null = null;
 let indexerOwnerHandler: GraphQLHandler | undefined;
 
 beforeEach(() => {
   handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
   destroyResponseBody = false;
   rasterRefusalStatus = null;
+  rasterRefuseOnly = null;
   indexerOps = [];
   indexerOwnerHandler = undefined;
   jobIds.clear();
@@ -417,6 +423,20 @@ test('Raster refusing an address lookup → lists the wallet through the indexer
   assert.equal(indexerOps[0].op, 'tokens');
 });
 
+test('Raster refusing the artist catalog after naming the artist → lists the wallet', async () => {
+  handler = () => ({
+    data: { address: { artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }] } },
+  });
+  rasterRefusalStatus = 429;
+  rasterRefuseOnly = /ArtistArtworks/;
+  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
+  assert.match(result.stdout, /Raster API 429/);
+  assert.match(result.stdout, /Continuing without Raster — listing the wallet's holdings/);
+  assert.match(result.stderr, /No playable tokens found in wallet/);
+  assert.equal(indexerOps.length, 1);
+  assert.equal(indexerOps[0].op, 'tokens');
+});
+
 test('Raster refusing a raster.art link says only Raster can resolve it', async () => {
   rasterRefusalStatus = 401;
   const result = await runFind(['https://raster.art/artwork/some-slug']);
@@ -560,6 +580,19 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
       assert.match(result.stdout, /Cancelled\./);
     });
   }
+
+  test('Raster refusing the series listing after naming the series → one-item playlist', async () => {
+    handler = () => SERIES_HIT;
+    rasterRefusalStatus = 429;
+    rasterRefuseOnly = /ArtworkTokens/;
+    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Raster API 429/);
+    assert.match(result.stdout, /Continuing without Raster — building from the input alone/);
+    assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
+    assert.doesNotMatch(result.stdout, /Raster doesn't index this series/);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+  });
 
   test('Raster body terminating mid-stream → warns and degrades to one-item playlist (#98 review)', async () => {
     // fetch() succeeds (headers arrive), the body read rejects. The typed

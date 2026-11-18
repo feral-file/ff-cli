@@ -81,7 +81,17 @@ type PostBuildAction = 'play' | 'publish' | 'skip';
  *   list its holdings.
  */
 type ResolvedTarget =
-  | { kind: 'series'; summary: RasterArtworkSummary }
+  | {
+      kind: 'series';
+      summary: RasterArtworkSummary;
+      /**
+       * fallback is what the input itself can still build when Raster turns
+       * unavailable after naming the series (a later page refused, say): the
+       * pasted token, or the wallet behind an artist's address. A raster.art
+       * link has none, since only Raster knows its slug.
+       */
+      fallback?: Exclude<ResolvedTarget, { kind: 'series' }>;
+    }
   | { kind: 'single'; coords: TokenCoords; rasterUnavailable: boolean }
   | { kind: 'wallet'; address: string }
   | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
@@ -251,7 +261,11 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   let tokens: BuildToken[];
   let seriesHasMore = false;
   if (target.kind === 'series') {
-    const fetched = await fetchTokens(target.summary, limit);
+    const fetched = await fetchSeriesTokens(target, limit);
+    if (fetched === null) {
+      await runResolvedTarget(target.fallback!, options);
+      return;
+    }
     tokens = fetched.tokens;
     seriesHasMore = fetched.hasMore;
   } else if (target.kind === 'token-list') {
@@ -497,7 +511,17 @@ async function resolveAddress(address: string, skipPrompt: boolean): Promise<Res
   if (artist === null) {
     return { kind: 'wallet', address };
   }
-  const catalog = await listArtistArtworks(artist.id);
+  let catalog: Awaited<ReturnType<typeof listArtistArtworks>>;
+  try {
+    catalog = await listArtistArtworks(artist.id);
+  } catch (error) {
+    if (!isRasterUnavailable(error)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
+    console.log(chalk.dim("  Continuing without Raster — listing the wallet's holdings."));
+    return { kind: 'wallet', address };
+  }
   if (catalog.length === 0) {
     throw new Error('Artist has no artworks indexed on Raster.');
   }
@@ -511,6 +535,7 @@ async function resolveAddress(address: string, skipPrompt: boolean): Promise<Res
   return {
     kind: 'series',
     summary: { artworkId: picked.artworkId, title: picked.title, artists: [artist] },
+    fallback: { kind: 'wallet', address },
   };
 }
 
@@ -594,7 +619,7 @@ async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
   if (summary === null) {
     return { kind: 'single', coords, rasterUnavailable: false };
   }
-  return { kind: 'series', summary };
+  return { kind: 'series', summary, fallback: { kind: 'single', coords, rasterUnavailable: true } };
 }
 
 /**
@@ -675,6 +700,33 @@ export function parseLimitOption(limitStr: string | undefined): number {
  * whether the series continues past what was collected — the API exposes
  * no total counts, so this is all the size information the flow gets.
  */
+/**
+ * fetchSeriesTokens enumerates a series, or returns null when Raster turned
+ * unavailable mid-enumeration and the target carries a fallback to build
+ * instead. Raster can answer the first lookup and refuse a later page (429 in
+ * particular), and that must degrade the same way a refused first lookup does
+ * (feral-file#3612). Without a fallback the error stands.
+ *
+ * @param target - The series target, with its optional fallback
+ * @param limit - Effective token cap for the playlist
+ * @returns The enumerated tokens, or null to build the fallback
+ */
+async function fetchSeriesTokens(
+  target: Extract<ResolvedTarget, { kind: 'series' }>,
+  limit: number
+): Promise<{ tokens: BuildToken[]; hasMore: boolean } | null> {
+  try {
+    return await fetchTokens(target.summary, limit);
+  } catch (error) {
+    if (!isRasterUnavailable(error) || !target.fallback) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
+    console.log(chalk.dim('  Continuing without Raster — building from the input alone.'));
+    return null;
+  }
+}
+
 async function fetchTokens(
   summary: RasterArtworkSummary,
   limit: number
