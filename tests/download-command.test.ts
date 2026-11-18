@@ -464,7 +464,28 @@ describe('download: nothing secret reaches the terminal', () => {
       redactReason(
         'gltf_external_dependency:a/b.bin?sig=SECRET.x#SECRET; fetch_failed:c.png#SECRET.'
       ),
-      'gltf_external_dependency:a/b.bin?…#…; fetch_failed:c.png#….'
+      'gltf_external_dependency:a/b.bin?…'
+    );
+    // An apostrophe or a space is valid inside a reference, so neither ends it.
+    assert.equal(
+      redactReason("gltf_external_dependency:texture.png?name=artist's&token=SECRET"),
+      'gltf_external_dependency:texture.png?…'
+    );
+    assert.equal(
+      redactReason("gltf_external_dependency:model.bin#artist's&token=SECRET; csp:x"),
+      'gltf_external_dependency:model.bin#…'
+    );
+    assert.equal(
+      redactReason('gltf_external_dependency:my texture.png?name=a b&token=SECRET'),
+      'gltf_external_dependency:my texture.png?…'
+    );
+    assert.equal(
+      redactReason("fetch_failed:https://cdn.example/x?name=artist's&token=SECRET"),
+      'fetch_failed:https://cdn.example/x?…'
+    );
+    assert.equal(
+      redactReason('fetch_failed:https://cdn.example/x?token=SECRET; csp:c.png?k=SECRET'),
+      'fetch_failed:https://cdn.example/x?…; csp:c.png?…'
     );
     assert.equal(
       redactReason(`loading_failed:${SIGNED}`),
@@ -729,7 +750,17 @@ describe('download: secure control', () => {
       { publicCode: 'busy', status: 503 },
       { ok: false, code: 'rate_limited' },
       { ok: false, code: 'internal_error' },
-      { ok: false, code: 'command_failed', res: { error: 'rate_limited' } },
+      {
+        // The router's storm limit, in the shape the device sends it.
+        ok: false,
+        code: 'command_failed',
+        res: {
+          ok: false,
+          error: 'rate_limited',
+          command: 'getOfflineCacheStatus',
+          message: 'Too many commands; try again shortly.',
+        },
+      },
     ];
     let reads = 0;
     const retried = secureDeps((claims) => {

@@ -271,18 +271,21 @@ export function redactUrls(text: string): string {
 /**
  * redactReason is redactUrls for an item's `reason`, which also names the
  * resources a work loads by the reference the work used (a glTF texture as
- * `texture.png?token=…`). Those have no scheme, so the query and fragment of
- * every remaining word are removed too. Titles do not get this: "Work #1" is
+ * `texture.png?token=…`). Those have no scheme, and nothing marks where one
+ * ends (a query may hold a quote or a space), so the reason is cut at the
+ * first `?` or `#` that redactUrls did not already redact: a later reason is
+ * lost rather than a parameter shown. Titles do not get this: "Work #1" is
  * not a fragment.
  *
  * @param {string} reason - Device reason text
  * @returns {string} The reason with no query string or fragment left in it
  * @example
- * redactReason('gltf_external_dependency:texture.png?token=abc'); // 'gltf_external_dependency:texture.png?…'
+ * redactReason("gltf_external_dependency:texture.png?name=artist's&token=abc"); // 'gltf_external_dependency:texture.png?…'
  */
 export function redactReason(reason: string): string {
-  // The lookahead leaves sentence punctuation ("; " between reasons) in place.
-  return redactUrls(reason).replace(/([?#])[^\s"'<>#]+?(?=[;:,.)\]]*(?:[\s"'<>#]|$))/g, '$1…');
+  // The lookahead passes over only the `?…` and `#…` redactUrls wrote, which
+  // end a word; a "?" that ends a sentence has nothing after it to remove.
+  return redactUrls(reason).replace(/([?#])(?!…(?:#…)?[;:,.)\]]*(?:\s|$))\S[\s\S]*$/, '$1…');
 }
 
 /**
@@ -607,9 +610,10 @@ async function sendOnRoute(
  * is what keeps the retries inside `--timeout`. So a transient answer to a
  * status read (TRANSIENT_SECURE_CODES) comes back retryable.
  *
- * A `command_failed` reply carries the handler's error body as JSON text in
- * `details`; when that body is an offline-cache answer it is handed back so
- * its code gets the same copy as on the plaintext route.
+ * A `command_failed` reply carries the handler's error body in `handlerBody`.
+ * The router's storm limit (`error: "rate_limited"`) is transient like the
+ * protocol code of that name; any other offline-cache answer is handed back
+ * so its code gets the same copy as on the plaintext route.
  *
  * @param target - Resolved device
  * @param record - Enrolled controller record
@@ -637,8 +641,9 @@ async function sendSecurely(
   if (result.success) {
     return { body: result.response ?? {} };
   }
-  const handlerBody = result.code === 'command_failed' ? parseObject(result.details) : null;
-  if (handlerBody && handlerBody.ok === false) {
+  const handlerBody = result.code === 'command_failed' ? result.handlerBody : undefined;
+  const rateLimited = handlerBody?.error === 'rate_limited';
+  if (handlerBody?.ok === false && !rateLimited) {
     return { body: handlerBody };
   }
   return {
@@ -646,10 +651,7 @@ async function sendSecurely(
       error: result.error ?? `${target.label} refused the request`,
       details: result.details,
       // No protocol code means the device was not reached at all.
-      retryable:
-        !result.code ||
-        TRANSIENT_SECURE_CODES.has(result.code) ||
-        handlerBody?.error === 'rate_limited',
+      retryable: !result.code || TRANSIENT_SECURE_CODES.has(result.code) || rateLimited,
     },
   };
 }

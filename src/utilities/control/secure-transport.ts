@@ -946,6 +946,11 @@ export interface SecureCommandResult {
    * only the FF1 sends sealed (internal_error) must require this.
    */
   verified?: boolean;
+  /**
+   * The handler's error body behind a `command_failed` reply, whole. `details`
+   * keeps only its `message` when it has one, which drops the `error` code.
+   */
+  handlerBody?: Record<string, unknown>;
 }
 
 /**
@@ -985,6 +990,9 @@ export function outcomeToResult(outcome: SecureOutcome, device: FF1Device): Secu
       details: typeof res?.message === 'string' ? res.message : JSON.stringify(res ?? {}),
       transport: outcome.transport,
       code,
+      ...(res && typeof res === 'object' && !Array.isArray(res)
+        ? { handlerBody: res as Record<string, unknown> }
+        : {}),
     };
   }
   const failure =
