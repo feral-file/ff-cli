@@ -28,7 +28,10 @@
  *
  * The command exits 0 only for what it checked, so it takes only a playlist
  * whose items it can name exactly: a local file with a `source` on every
- * item and no dynamic query. The device also accepts `{ playlistUrl }` and
+ * item, no inline (`data:`) source and no dynamic query. The device stores an
+ * inline item with the playlist and never captures it, so it has no status
+ * entry and nothing says whether what the item loads is held; such a playlist
+ * is refused rather than reported as held. The device also accepts `{ playlistUrl }` and
  * resolves dynamic queries, but then the device decides which sources are
  * queued (the hosted document can change between two fetches, and a dynamic
  * query replaces `items`), and a status read by the CLI's own list of
@@ -87,18 +90,15 @@ const UNKNOWN_STATE = 'unknown';
 const PENDING_STATES = new Set(['queued', 'downloading', UNKNOWN_STATE]);
 
 /**
- * DATA_URI_METADATA_BYTES is how far past `data:` the device looks for the
- * comma that ends the media type (maxDataURIMetadataBytes in ffos-user
- * offlinecache/classify.go). A data: source with no comma there is malformed
- * to the device and is never kept.
+ * TRANSIENT_SECURE_CODES are the control-protocol answers that say the
+ * command was not run and may be sent again (retryableReply in
+ * control/secure-transport.ts). The router's storm protection is the fourth:
+ * a `command_failed` whose handler body is `{ error: "rate_limited" }`.
  */
-const DATA_URI_METADATA_BYTES = 1024;
+const TRANSIENT_SECURE_CODES = new Set(['busy', 'rate_limited', 'internal_error']);
 
 /** MAX_LABEL_LENGTH bounds the label of an item that has no title. */
 const MAX_LABEL_LENGTH = 80;
-
-/** INLINE_STATE labels an item whose bytes are in the playlist body itself. */
-const INLINE_STATE = 'inline';
 
 type FetchFunction = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -117,7 +117,7 @@ export interface DownloadItemReport {
   title: string;
   /** Exact source, for matching only. Never print it: it may carry credentials. */
   source: string;
-  /** Device state, or `inline` for a `data:` item that needs no download. */
+  /** Device state, or `unknown` before the first status read. */
   state: string;
   bytes: number;
   coverageComplete: boolean;
@@ -171,7 +171,6 @@ export interface DownloadDependencies {
 interface TrackedItem {
   title: string;
   source: string;
-  inline: boolean;
 }
 
 /** DownloadSource is a loaded source: what to send and what to follow. */
@@ -270,6 +269,23 @@ export function redactUrls(text: string): string {
 }
 
 /**
+ * redactReason is redactUrls for an item's `reason`, which also names the
+ * resources a work loads by the reference the work used (a glTF texture as
+ * `texture.png?token=…`). Those have no scheme, so the query and fragment of
+ * every remaining word are removed too. Titles do not get this: "Work #1" is
+ * not a fragment.
+ *
+ * @param {string} reason - Device reason text
+ * @returns {string} The reason with no query string or fragment left in it
+ * @example
+ * redactReason('gltf_external_dependency:texture.png?token=abc'); // 'gltf_external_dependency:texture.png?…'
+ */
+export function redactReason(reason: string): string {
+  // The lookahead leaves sentence punctuation ("; " between reasons) in place.
+  return redactUrls(reason).replace(/([?#])[^\s"'<>#]+?(?=[;:,.)\]]*(?:[\s"'<>#]|$))/g, '$1…');
+}
+
+/**
  * runDownload queues the playlist on the device and then waits for it.
  *
  * @param source - Loaded source
@@ -317,7 +333,7 @@ async function runDownload(
  * @param {Function} [loadFn] - Playlist loader (tests)
  * @returns {Promise<DownloadSource>} Request and tracked items
  * @throws {Error} When the source is a URL, is not a DP-1 playlist, is
- *   dynamic, or has an item without a usable source; `details` on the error
+ *   dynamic, or has an item with no source or an inline one; `details` on the error
  *   carries the follow-up line when there is one
  */
 export async function loadDownloadSource(
@@ -428,21 +444,11 @@ function isDataUri(source: string): boolean {
 }
 
 /**
- * isMalformedDataUri reports a `data:` source the device cannot classify:
- * no comma within DATA_URI_METADATA_BYTES after the scheme.
- *
- * @param source - A source for which isDataUri is true
- * @returns True when the device would reject it
- */
-function isMalformedDataUri(source: string): boolean {
-  return !source.slice(5, 5 + DATA_URI_METADATA_BYTES).includes(',');
-}
-
-/**
- * refuseUnusableSources stops a playlist the device would not keep whole:
- * an item with no `source` is skipped by the device, and a malformed `data:`
- * source is neither downloaded nor inline. Either would leave the summary
- * counting fewer items than the playlist has.
+ * refuseUnusableSources stops a playlist this command could not vouch for:
+ * an item with no `source` is skipped by the device, and an inline `data:`
+ * item is stored with the playlist but never captured, so the device has no
+ * status for it and an inline page that loads something from the network
+ * would be reported as held when it is not.
  *
  * @param file - Playlist path, for the message
  * @param items - The playlist's `items`
@@ -458,11 +464,11 @@ function refuseUnusableSources(file: string, items: unknown[]): void {
       'The FF1 would skip them, so the playlist would not be held whole.'
     );
   }
-  const malformed = labels((source) => isDataUri(source!) && isMalformedDataUri(source!));
-  if (malformed.length > 0) {
+  const inline = labels((source) => isDataUri(source!));
+  if (inline.length > 0) {
     throw refusal(
-      `${file} has an inline (data:) source with no comma after its media type: ${malformed.join(', ')}.`,
-      'The FF1 cannot read it.'
+      `${file} has ${inline.length} of ${items.length} items with an inline (data:) source: ${inline.join(', ')}.`,
+      'The FF1 does not download an inline source, so this command cannot check that what it loads is held. Host the work at an address, or take the item out.'
     );
   }
 }
@@ -484,13 +490,7 @@ function trackItems(items: unknown[]): TrackedItem[] {
     if (bySource.has(source)) {
       return;
     }
-    bySource.set(source, {
-      source,
-      title: itemLabel(item, index),
-      // The device never queues a data: item: its bytes are in the playlist
-      // body it stores, so the item is already kept and status has no entry.
-      inline: isDataUri(source),
-    });
+    bySource.set(source, { source, title: itemLabel(item, index) });
   });
   return [...bySource.values()];
 }
@@ -543,7 +543,9 @@ function resolveTarget(
  * @param target - Resolved device
  * @param command - `downloadPlaylist` or `getOfflineCacheStatus`
  * @param request - The command's request object
- * @param timeoutMs - Deadline of this one request
+ * @param timeoutMs - Deadline of the whole command: one signal is shared by
+ *   every request it takes, so the secure transport's second request after a
+ *   `replay` answer gets what is left of the time, not the full time again
  * @returns The `ok: true` body, or a failure
  */
 async function sendDeviceCommand(
@@ -552,10 +554,10 @@ async function sendDeviceCommand(
   request: Record<string, unknown>,
   timeoutMs: number = DEVICE_COMMAND_TIMEOUT_MS
 ): Promise<DeviceAnswer> {
+  const signal = AbortSignal.timeout(timeoutMs);
   const bounded: DeviceTarget = {
     ...target,
-    fetchFn: (input, init) =>
-      target.fetchFn(input, { ...init, signal: AbortSignal.timeout(timeoutMs) }),
+    fetchFn: (input, init) => target.fetchFn(input, { ...init, signal }),
   };
   const answer = await sendOnRoute(bounded, command, request);
   if (!('failure' in answer)) {
@@ -602,7 +604,8 @@ async function sendOnRoute(
  * sendSecurely sends the command as a secure envelope over the LAN, with no
  * relayer fallback (see the module comment). Only `downloadPlaylist` uses the
  * transport's retry budget: a status read is retried by the wait loop, which
- * is what keeps the retries inside `--timeout`.
+ * is what keeps the retries inside `--timeout`. So a transient answer to a
+ * status read (TRANSIENT_SECURE_CODES) comes back retryable.
  *
  * A `command_failed` reply carries the handler's error body as JSON text in
  * `details`; when that body is an offline-cache answer it is handed back so
@@ -643,7 +646,10 @@ async function sendSecurely(
       error: result.error ?? `${target.label} refused the request`,
       details: result.details,
       // No protocol code means the device was not reached at all.
-      retryable: !result.code,
+      retryable:
+        !result.code ||
+        TRANSIENT_SECURE_CODES.has(result.code) ||
+        handlerBody?.error === 'rate_limited',
     },
   };
 }
@@ -823,7 +829,7 @@ async function waitForItems(
   const timeoutMs = (params.timeoutSeconds ?? DEFAULT_DOWNLOAD_TIMEOUT_SECONDS) * 1000;
   const deadlineMs = clockMsFn() + timeoutMs;
   const remainingMs = () => deadlineMs - clockMsFn();
-  const sources = tracked.filter((item) => !item.inline).map((item) => item.source);
+  const sources = tracked.map((item) => item.source);
   const announced = new Map<string, string>();
   let reports = buildReports(tracked, new Map(), UNKNOWN_STATE);
   let lastFailure: DeviceFailure | undefined;
@@ -930,7 +936,7 @@ function collectStatusItems(entries: unknown, into: Map<string, StatusItem>): vo
       state: entry.state,
       bytes: numberField(entry.bytes) ?? 0,
       coverageComplete: entry.coverageComplete === true,
-      reason: typeof entry.reason === 'string' ? redactUrls(entry.reason) : undefined,
+      reason: typeof entry.reason === 'string' ? redactReason(entry.reason) : undefined,
     });
   }
 }
@@ -954,15 +960,12 @@ function buildReports(
   missingState: string = 'not_cached'
 ): DownloadItemReport[] {
   return tracked.map((item) => {
-    const seen: StatusItem = item.inline
-      ? { state: INLINE_STATE, bytes: 0, coverageComplete: true }
-      : (status.get(item.source) ?? { state: missingState, bytes: 0, coverageComplete: false });
-    return {
-      title: item.title,
-      source: item.source,
-      ...seen,
-      outcome: outcomeOf(seen),
+    const seen: StatusItem = status.get(item.source) ?? {
+      state: missingState,
+      bytes: 0,
+      coverageComplete: false,
     };
+    return { ...item, ...seen, outcome: outcomeOf(seen) };
   });
 }
 
@@ -981,7 +984,7 @@ function outcomeOf(item: StatusItem): DownloadOutcome {
   if (PENDING_STATES.has(item.state)) {
     return 'timed_out';
   }
-  if (item.state === INLINE_STATE || (item.state === 'ready' && item.coverageComplete)) {
+  if (item.state === 'ready' && item.coverageComplete) {
     return 'ready';
   }
   return item.state === 'failed' || item.state === 'not_cached' ? 'failed' : 'incomplete';

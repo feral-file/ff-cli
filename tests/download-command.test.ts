@@ -19,10 +19,11 @@ import {
   type DownloadDependencies,
   downloadPlaylist,
   loadDownloadSource,
+  redactReason,
   redactUrls,
 } from '../src/utilities/offline-download';
 import type { FF1Device, Playlist } from '../src/types';
-import { FakeFF1, type Jwk } from './helpers/control-device';
+import { type FakeAnswer, FakeFF1, type Jwk } from './helpers/control-device';
 
 const HOST = 'http://10.0.0.2:1111';
 const kitchen: FF1Device = { name: 'Kitchen', host: HOST };
@@ -77,6 +78,17 @@ function fakeClock() {
       now += ms;
     },
   };
+}
+
+/** delay resolves after `ms`, or rejects as fetch does when `signal` aborts first. */
+function delay(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer);
+      reject(signal.reason instanceof Error ? signal.reason : new Error('aborted'));
+    });
+  });
 }
 
 function deps(
@@ -289,21 +301,23 @@ describe('download: file source', () => {
     assert.match(result.error ?? '', /1030 timed out/);
   });
 
-  test('a status request is given no more time than the wait has left', async () => {
-    const d = deps(
-      (cast) =>
-        cast.command === 'downloadPlaylist' ? QUEUED : { ok: true, items: [item(A, 'queued')] },
-      playlistOf(A)
-    );
-    const signals: Array<AbortSignal | null | undefined> = [];
+  test('a status request that never answers is cut off at the timeout', async () => {
+    const d = deps(() => QUEUED, playlistOf(A), { clockMsFn: undefined, sleepFn: undefined });
     const inner = d.fetchFn!;
     d.fetchFn = async (input, init) => {
-      signals.push(init?.signal);
+      if (d.casts.length > 0) {
+        await delay(60_000, init?.signal);
+      }
       return inner(input, init);
     };
-    await downloadPlaylist({ source: 'playlist.json', wait: true, timeoutSeconds: 3 }, d);
-    assert.ok(signals.length >= 3);
-    assert.ok(signals.every((signal) => signal instanceof AbortSignal));
+    const started = Date.now();
+    const result = await downloadPlaylist(
+      { source: 'playlist.json', wait: true, timeoutSeconds: 1 },
+      d
+    );
+    const elapsed = Date.now() - started;
+    assert.equal(result.timedOut, true);
+    assert.ok(elapsed >= 900 && elapsed < 1400, `took ${elapsed} ms`);
   });
 
   test('--no-wait reports the queued count and never polls', async () => {
@@ -314,27 +328,6 @@ describe('download: file source', () => {
     assert.equal(result.queuedCount, 2);
     assert.equal(result.total, 2);
     assert.equal(d.casts.length, 1);
-  });
-
-  test('inline data: items are already in the playlist and are not polled', async () => {
-    const inline = 'data:text/html,<p>hi</p>';
-    const d = deps(
-      (cast) =>
-        cast.command === 'downloadPlaylist'
-          ? { ...QUEUED, queuedCount: 1 }
-          : { ok: true, items: [item(A, 'ready', { coverageComplete: true })] },
-      playlistOf(A, inline)
-    );
-    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
-    assert.equal(result.success, true, result.error);
-    assert.deepEqual(d.casts[1].request, { sources: [A] });
-    assert.deepEqual(
-      result.items?.map((i) => [i.state, i.outcome]),
-      [
-        ['ready', 'ready'],
-        ['inline', 'ready'],
-      ]
-    );
   });
 
   test('asks for status in pages of 1024 sources and follows nextCursor', async () => {
@@ -429,29 +422,24 @@ describe('download: what it takes', () => {
     assert.equal(d.casts.length, 0);
   });
 
-  test('inline sources follow the device rule: any letter case, comma required', async () => {
-    const d = deps(() => ({ ...QUEUED, queuedCount: 0 }), {
+  test('an inline data: source is refused by name: nothing says what it loads is held', async () => {
+    const d = deps(() => QUEUED, {
       dpVersion: '1.1.0',
-      items: [{ title: 'Upper', source: 'DATA:text/plain,hi' }],
+      items: [
+        { title: 'Hosted', source: A },
+        { title: 'Page', source: 'data:text/html,<img src="https://cdn.example/never.png">' },
+        { source: 'DATA:text/plain,hi' },
+      ],
     } as unknown as Playlist);
     const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
-    assert.equal(result.success, true, result.error);
-    assert.deepEqual(
-      result.items?.map((i) => [i.state, i.outcome]),
-      [['inline', 'ready']]
+    assert.equal(result.success, false);
+    assert.equal(
+      result.error,
+      'playlist.json has 2 of 3 items with an inline (data:) source: Page, item 3.'
     );
-    assert.equal(d.casts.length, 1);
-
-    await assert.rejects(
-      loadDownloadSource(
-        'bad.json',
-        load({
-          dpVersion: '1.1.0',
-          items: [{ source: A }, { source: `data:image/png;base64${'A'.repeat(2000)},x` }],
-        })
-      ),
-      /inline \(data:\) source with no comma after its media type: item 2\./
-    );
+    assert.match(result.details ?? '', /cannot check that what it loads is held/);
+    assert.match(result.details ?? '', /Nothing was sent to the device\./);
+    assert.equal(d.casts.length, 0);
   });
 });
 
@@ -465,6 +453,42 @@ describe('download: nothing secret reaches the terminal', () => {
       'fetch_failed:https://cdn.example/x?…; csp:ipfs://cid/a?…'
     );
     assert.equal(redactUrls('no address here'), 'no address here');
+  });
+
+  test('a reason loses the query and fragment of a relative reference too', async () => {
+    assert.equal(
+      redactReason('gltf_external_dependency:texture.png?token=SECRET'),
+      'gltf_external_dependency:texture.png?…'
+    );
+    assert.equal(
+      redactReason(
+        'gltf_external_dependency:a/b.bin?sig=SECRET.x#SECRET; fetch_failed:c.png#SECRET.'
+      ),
+      'gltf_external_dependency:a/b.bin?…#…; fetch_failed:c.png#….'
+    );
+    assert.equal(
+      redactReason(`loading_failed:${SIGNED}`),
+      'loading_failed:https://cdn.example/work/index.html?…#…'
+    );
+    assert.equal(redactReason('is it held?'), 'is it held?');
+
+    const d = deps(
+      (cast) =>
+        cast.command === 'downloadPlaylist'
+          ? QUEUED
+          : {
+              ok: true,
+              items: [
+                item(A, 'partial', { reason: 'gltf_external_dependency:texture.png?token=SECRET' }),
+              ],
+            },
+      playlistOf(A)
+    );
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+    assert.equal(
+      formatItemLine(result.items![0]),
+      '  ✗ Work 1: partial, 0 bytes, coverage incomplete (gltf_external_dependency:texture.png?…)'
+    );
   });
 
   test('an untitled item, a device reason, and a device error are redacted; requests are exact', async () => {
@@ -639,35 +663,53 @@ function controllerStore(options: { enrolled: boolean }) {
   };
 }
 
+/**
+ * secureDeps pairs a FakeFF1 that answers from `decide` with the deps that
+ * reach it. `beforeReply` runs after the device has opened a request and
+ * before its answer is returned (a slow device).
+ */
+function secureDeps(
+  decide: (claims: Record<string, unknown>) => FakeAnswer,
+  playlist: Playlist,
+  beforeReply: (
+    claims: Record<string, unknown>,
+    signal?: AbortSignal | null
+  ) => Promise<void> = async () => {}
+) {
+  const { storeDir, deviceId, cleanup } = controllerStore({ enrolled: true });
+  const c = keys.controllers.controller;
+  const device = new FakeFF1(
+    { dev: deviceId, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
+    { [c.ctl]: { kty: 'EC', crv: 'P-256', x: c.sig.x, y: c.sig.y } as Jwk },
+    decide
+  );
+  const d = deps(() => QUEUED, playlist, {
+    fetchFn: async (_input, init) => {
+      const answer = device.handle(JSON.parse(String(init?.body)));
+      await beforeReply(device.seen[device.seen.length - 1], init?.signal);
+      return new Response(JSON.stringify(answer.json), { status: answer.status });
+    },
+    getFF1DeviceConfigFn: () => ({ devices: [{ ...kitchen, id: deviceId }] }),
+    controllerStore: { dir: storeDir },
+    nowFn: () => keys.now,
+  });
+  return { d, device, cleanup };
+}
+
+const QUEUED_ONE = { ok: true as const, res: { ...QUEUED, total: 1, queuedCount: 1 } };
+const READY_A = {
+  ok: true as const,
+  res: { ok: true, items: [item(A, 'ready', { bytes: 7, coverageComplete: true })] },
+};
+
 describe('download: secure control', () => {
   test('a controller grant downloads and polls through secure envelopes', async () => {
-    const { storeDir, deviceId, cleanup } = controllerStore({ enrolled: true });
-    const c = keys.controllers.controller;
-    const grants: Record<string, Jwk> = {
-      [c.ctl]: { kty: 'EC', crv: 'P-256', x: c.sig.x, y: c.sig.y },
-    };
-    const device = new FakeFF1(
-      { dev: deviceId, gen: keys.device.gen, sig: keys.device.sig, enc: keys.device.enc },
-      grants,
-      (claims) =>
-        claims.cmd === 'downloadPlaylist'
-          ? { ok: true, res: { ...QUEUED, total: 1, queuedCount: 1 } }
-          : {
-              ok: true,
-              res: { ok: true, items: [item(A, 'ready', { bytes: 7, coverageComplete: true })] },
-            }
-    );
     const playlist = playlistOf(A);
+    const { d, device, cleanup } = secureDeps(
+      (claims) => (claims.cmd === 'downloadPlaylist' ? QUEUED_ONE : READY_A),
+      playlist
+    );
     try {
-      const d = deps(() => QUEUED, playlist, {
-        fetchFn: async (_input, init) => {
-          const answer = device.handle(JSON.parse(String(init?.body)));
-          return new Response(JSON.stringify(answer.json), { status: answer.status });
-        },
-        getFF1DeviceConfigFn: () => ({ devices: [{ ...kitchen, id: deviceId }] }),
-        controllerStore: { dir: storeDir },
-        nowFn: () => keys.now,
-      });
       const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
       assert.equal(result.success, true, result.error);
       assert.deepEqual(
@@ -677,6 +719,99 @@ describe('download: secure control', () => {
           ['getOfflineCacheStatus', { sources: [A] }],
         ]
       );
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('a transient answer to a status read is retried by the wait; a final one stops it', async () => {
+    const transient: FakeAnswer[] = [
+      { publicCode: 'busy', status: 503 },
+      { ok: false, code: 'rate_limited' },
+      { ok: false, code: 'internal_error' },
+      { ok: false, code: 'command_failed', res: { error: 'rate_limited' } },
+    ];
+    let reads = 0;
+    const retried = secureDeps((claims) => {
+      if (claims.cmd === 'downloadPlaylist') {
+        return QUEUED_ONE;
+      }
+      reads += 1;
+      return transient[reads - 1] ?? READY_A;
+    }, playlistOf(A));
+    try {
+      const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, retried.d);
+      assert.equal(result.success, true, result.error);
+      assert.equal(reads, 5);
+      assert.deepEqual(retried.d.sleeps, [2000, 2000, 2000, 2000]);
+    } finally {
+      retried.cleanup();
+    }
+
+    const stopped = secureDeps(
+      (claims) =>
+        claims.cmd === 'downloadPlaylist' ? QUEUED_ONE : { ok: false, code: 'forbidden' },
+      playlistOf(A)
+    );
+    try {
+      const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, stopped.d);
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, undefined);
+      assert.equal(stopped.device.seen.length, 2);
+    } finally {
+      stopped.cleanup();
+    }
+  });
+
+  test('a transient answer that never clears ends at the timeout, naming it', async () => {
+    const { d, cleanup } = secureDeps(
+      (claims) =>
+        claims.cmd === 'downloadPlaylist' ? QUEUED_ONE : { publicCode: 'busy', status: 503 },
+      playlistOf(A)
+    );
+    try {
+      const result = await downloadPlaylist(
+        { source: 'playlist.json', wait: true, timeoutSeconds: 5 },
+        d
+      );
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.match(result.details ?? '', /The last status read failed: .*busy/);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test('the request sent again after a `replay` answer gets only the time that is left', async () => {
+    let reads = 0;
+    // The wait runs on the real clock: every status answer takes 750 ms, the
+    // first is `replay`, and the second request must be cut off at 1 s, not
+    // given another full second.
+    const { d, device, cleanup } = secureDeps(
+      (claims) => {
+        if (claims.cmd === 'downloadPlaylist') {
+          return QUEUED_ONE;
+        }
+        reads += 1;
+        return reads === 1 ? { ok: false, code: 'replay' } : READY_A;
+      },
+      playlistOf(A),
+      (claims, signal) =>
+        claims.cmd === 'getOfflineCacheStatus' ? delay(750, signal) : Promise.resolve()
+    );
+    d.clockMsFn = undefined;
+    d.sleepFn = undefined;
+    try {
+      const started = Date.now();
+      const result = await downloadPlaylist(
+        { source: 'playlist.json', wait: true, timeoutSeconds: 1 },
+        d
+      );
+      const elapsed = Date.now() - started;
+      assert.equal(device.seen.length, 3);
+      assert.equal(result.success, false);
+      assert.equal(result.timedOut, true);
+      assert.ok(elapsed >= 900 && elapsed < 1400, `took ${elapsed} ms`);
     } finally {
       cleanup();
     }
