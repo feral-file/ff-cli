@@ -453,6 +453,10 @@ describe('download: nothing secret reaches the terminal', () => {
       'fetch_failed:https://cdn.example/x?…; csp:ipfs://cid/a?…'
     );
     assert.equal(redactUrls('no address here'), 'no address here');
+    assert.equal(
+      redactUrls("fetch_failed:https://cdn.example/x?name=artist's&token=SECRET"),
+      'fetch_failed:https://cdn.example/x?…'
+    );
   });
 
   test('a reason loses the query and fragment of a relative reference too', async () => {

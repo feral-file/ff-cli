@@ -253,7 +253,7 @@ export async function downloadPlaylist(
  * redactUrls('fetch_failed:https://u:p@cdn.example/x?token=abc'); // 'fetch_failed:https://cdn.example/x?…'
  */
 export function redactUrls(text: string): string {
-  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s"'<>]*)/gi, (_match, scheme: string, rest) => {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)([^\s"<>]*)/gi, (_match, scheme: string, rest) => {
     // Punctuation that ends the URL belongs to the sentence around it (the
     // device joins reasons with "; "), so it is put back after the URL.
     const [, url, trailing] = /^(.*?)([;:,.)\]]*)$/.exec(rest as string) as RegExpExecArray;
