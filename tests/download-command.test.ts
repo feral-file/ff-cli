@@ -441,6 +441,59 @@ describe('download: what it takes', () => {
     assert.match(result.details ?? '', /Nothing was sent to the device\./);
     assert.equal(d.casts.length, 0);
   });
+
+  test('a whole-series item is refused by name: the device would expand it into editions nobody checks', async () => {
+    const d = deps(() => QUEUED, {
+      dpVersion: '1.1.0',
+      items: [
+        { title: 'Hosted', source: A },
+        {
+          title: 'Series',
+          source: B,
+          provenance: { type: 'seriesRegistry', contract: { chain: 'evm', seriesId: 12 } },
+        },
+        {
+          source: B,
+          provenance: {
+            type: 'seriesRegistry',
+            contract: { chain: 'evm', seriesId: 0, tokenId: '' },
+          },
+        },
+      ],
+    } as unknown as Playlist);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: true }, d);
+    assert.equal(result.success, false);
+    assert.equal(
+      result.error,
+      `playlist.json has 2 of 3 items that name a whole series: Series, ${B}.`
+    );
+    assert.match(result.details ?? '', /each with its `tokenId`/);
+    assert.match(result.details ?? '', /Nothing was sent to the device\./);
+    assert.equal(d.casts.length, 0);
+  });
+
+  test('a series edition named by tokenId is downloaded like any other item', async () => {
+    const d = deps(() => QUEUED, {
+      dpVersion: '1.1.0',
+      items: [
+        {
+          title: 'Edition',
+          source: A,
+          provenance: {
+            type: 'seriesRegistry',
+            contract: { chain: 'evm', seriesId: 12, tokenId: '12000007' },
+          },
+        },
+        {
+          title: 'Token',
+          source: B,
+          provenance: { type: 'onChain', contract: { chain: 'evm', tokenId: '5' } },
+        },
+      ],
+    } as unknown as Playlist);
+    await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
+    assert.equal(d.casts.length, 1);
+  });
 });
 
 describe('download: nothing secret reaches the terminal', () => {

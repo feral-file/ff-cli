@@ -31,7 +31,9 @@
  * item, no inline (`data:`) source and no dynamic query. The device stores an
  * inline item with the playlist and never captures it, so it has no status
  * entry and nothing says whether what the item loads is held; such a playlist
- * is refused rather than reported as held. The device also accepts `{ playlistUrl }` and
+ * is refused rather than reported as held. So is an item that names a whole
+ * series: the device expands it into editions whose sources it does not
+ * report back. The device also accepts `{ playlistUrl }` and
  * resolves dynamic queries, but then the device decides which sources are
  * queued (the hosted document can change between two fetches, and a dynamic
  * query replaces `items`), and a status read by the CLI's own list of
@@ -339,7 +341,8 @@ async function runDownload(
  * @param {Function} [loadFn] - Playlist loader (tests)
  * @returns {Promise<DownloadSource>} Request and tracked items
  * @throws {Error} When the source is a URL, is not a DP-1 playlist, is
- *   dynamic, or has an item with no source or an inline one; `details` on the error
+ *   dynamic, or has an item with no source, an inline one or a whole series;
+ *   `details` on the error
  *   carries the follow-up line when there is one
  */
 export async function loadDownloadSource(
@@ -454,7 +457,9 @@ function isDataUri(source: string): boolean {
  * an item with no `source` is skipped by the device, and an inline `data:`
  * item is stored with the playlist but never captured, so the device has no
  * status for it and an inline page that loads something from the network
- * would be reported as held when it is not.
+ * would be reported as held when it is not. A whole-series item is expanded
+ * by the device into editions this command never hears the sources of, so
+ * it would report the series held on the strength of one of them.
  *
  * @param file - Playlist path, for the message
  * @param items - The playlist's `items`
@@ -477,6 +482,38 @@ function refuseUnusableSources(file: string, items: unknown[]): void {
       'The FF1 does not download an inline source, so this command cannot check that what it loads is held. Host the work at an address, or take the item out.'
     );
   }
+  const series = items.flatMap((item, index) =>
+    isWholeSeriesItem(item) ? [itemLabel(item, index)] : []
+  );
+  if (series.length > 0) {
+    throw refusal(
+      `${file} has ${series.length} of ${items.length} items that name a whole series: ${series.join(', ')}.`,
+      'The FF1 expands a series into its editions, and this command cannot name them or check that each is held. List the editions as items of their own, each with its `tokenId`.'
+    );
+  }
+}
+
+/**
+ * isWholeSeriesItem reports whether the device would expand an item into the
+ * editions of a series. It is the device's own test (ffos-user dp1/series.go,
+ * isSeriesItem): `seriesRegistry` provenance whose contract has a `seriesId`
+ * and no `tokenId`. The same provenance with a `tokenId` names one edition
+ * and is downloaded like any other item.
+ *
+ * @param item - One entry of `items`
+ * @returns True for a whole-series item
+ */
+function isWholeSeriesItem(item: unknown): boolean {
+  const provenance = (item as { provenance?: { type?: unknown; contract?: unknown } } | null)
+    ?.provenance;
+  if (provenance?.type !== 'seriesRegistry') {
+    return false;
+  }
+  const contract = provenance.contract as { seriesId?: unknown; tokenId?: unknown } | null;
+  if (!contract || contract.seriesId === undefined || contract.seriesId === null) {
+    return false;
+  }
+  return !(typeof contract.tokenId === 'string' && contract.tokenId !== '');
 }
 
 /**
