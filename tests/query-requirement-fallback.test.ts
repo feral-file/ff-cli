@@ -222,23 +222,27 @@ describe('queryRequirement build_playlist', () => {
 });
 
 describe('queryRequirement Feral File artwork', () => {
-  test('resolves artwork identity and fetches the returned token id', async () => {
+  test('resolves artwork identity through the source resolver and fetches the returned token id', async () => {
     const calls: string[] = [];
     globalThis.fetch = async (input: RequestInfo | URL): Promise<Response> => {
       calls.push(String(input));
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          result: {
-            id: 'public-artwork-id',
+      // The service reads Feral File's own record, which carries swapped ids:
+      // the token id differs from the public artwork id.
+      return new Response(
+        JSON.stringify({
+          found: true,
+          work: {
+            title: 'Artwork',
+            artist: 'Artist',
             chain: 'ethereum',
-            contractAddress: '0xDB5f1aDCFFA1869B9711cBFBe3Bf46cc5d5319E5',
-            tokenID:
+            contract: '0xDB5f1aDCFFA1869B9711cBFBe3Bf46cc5d5319E5',
+            tokenId:
               '92419109143972345096969611651362597777388673613154609693448331487805624917924',
           },
+          diag: [],
         }),
-      } as Response;
+        { status: 200, headers: { 'Content-Type': 'application/json' } }
+      );
     };
     const { source } = fakeSource('raster', { canListContracts: false });
 
@@ -248,7 +252,10 @@ describe('queryRequirement Feral File artwork', () => {
       source
     );
 
-    assert.deepEqual(calls, ['https://feralfile.com/api/artworks/public-artwork-id']);
+    assert.equal(calls.length, 1);
+    const asked = new URL(calls[0]);
+    assert.equal(asked.pathname, '/work');
+    assert.equal(asked.searchParams.get('url'), 'https://feralfile.com/artworks/public-artwork-id');
     assert.equal(items.length, 1);
     assert.equal(
       items[0].id,

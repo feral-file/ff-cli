@@ -226,7 +226,7 @@ FEED_BASE_URLS=https://feed.feralfile.com/api/v1,https://feed.example.com/api/v1
 Token data for `find`, `build`, and `enrich` (title, artist, description, the source to display, on-chain provenance, and a still image where the service supplies one) comes from one service per run:
 
 - `indexer` (default): the Feral File indexer (ff-indexer-v2). A token it has not seen yet triggers an indexing job, so a first build of unseen tokens can take minutes.
-- `raster` (opt-in, under evaluation): Raster's public GraphQL API. Tokens are looked up 40 per request, so a build does not wait for indexing jobs. Raster's data still has known bugs, tracked on [feral-file#3546](https://github.com/feral-file/feral-file/issues/3546): some Feral File works point at a retired image host and display black, and evolving works display an older snapshot. No still image is supplied: Raster's preview renditions refuse non-browser clients, so items and `enrich` get no thumbnail from Raster.
+- `raster` (opt-in, under evaluation): Raster's token records, read through Feral File's [source resolver](#source-resolver). Tokens are looked up 40 per request, so a build does not wait for indexing jobs. Raster's data still has known bugs, tracked on [feral-file#3546](https://github.com/feral-file/feral-file/issues/3546): some Feral File works point at a retired image host and display black, and evolving works display an older snapshot. No still image is supplied: Raster's preview renditions refuse non-browser clients, so items and `enrich` get no thumbnail from Raster.
 
 ```json
 { "tokenSource": "raster" }
@@ -289,18 +289,19 @@ Environment variable alternative:
 FF_SUPPORT_LOGS_URL=https://support-logs.feralfile.com
 ```
 
-## Raster API
+## Source resolver
 
-`find` asks Raster's GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)) which series a token belongs to, which tokens are in it, and whether an address belongs to an artist. With `tokenSource: "raster"`, `build` and `enrich` read tokens from it too.
+`find` asks Feral File's source resolver (ff-source-resolver-service) which work a link or coordinate names, which tokens a series or collection page holds, and whether an address belongs to an artist. It is the only thing ff-cli talks to for Raster and the marketplaces, and it holds Raster's API key. With `tokenSource: "raster"`, `build` and `enrich` read Raster's token records through it too. A `feral_file_artwork` requirement in `build` is resolved by it as well. Neort links are the one exception: Neort is off-chain and the service does not cover it, so `find` reads Neort's API directly.
 
-Raster's API answers only requests that carry a key. Without one, or whenever Raster refuses (401, 403, 429) or cannot be reached, `find` says so and continues without it: a token link or coordinate builds a one-item playlist, and a wallet address lists the wallet's holdings through the indexer. A `raster.art/artwork/…` link needs Raster and fails with a message saying so.
+Published releases carry ff-cli's own client key for the service; no configuration is needed. When the service refuses, fails, or cannot be reached, `find` says so and continues without it: a token link or coordinate builds a one-item playlist, and a wallet address lists the wallet's holdings through the indexer. A link only the service can read (a series page, a collection, a `raster.art/artwork/…` link) fails with a message saying so.
 
 ```env
-# API key sent as the x-api-key header. Raster issues keys on request.
-RASTER_API_KEY=rk_your_key_here
+# Client key sent as the API-KEY header. Overrides the key a release carries;
+# local builds from source carry none.
+FF_SOURCE_RESOLVER_API_KEY=your-client-key
 
-# Override the GraphQL endpoint (default: https://api.raster.art/graphql).
-RASTER_API_URL=https://api.raster.art/graphql
+# Point at another deployment (default: https://ff-source-resolver-service.feral-file.workers.dev).
+SOURCE_RESOLVER_URL=https://ff-source-resolver-service.feral-file.workers.dev
 ```
 
 ## ff1Devices

@@ -1,8 +1,10 @@
 /**
  * Raster token source: the opt-in provider under evaluation (feral-file#3576).
  *
- * Reads token rows from Raster's public GraphQL API and maps each one to the
- * vendor-neutral StandardToken, which token-item.ts turns into a DP-1 item
+ * Reads Raster's token records through ff-source-resolver-service, which
+ * holds Raster's API key and is the only thing that talks to Raster
+ * (`POST /raster/tokens`, `GET /raster/tokens-owned`; Raster's own field
+ * names). Each record is mapped to the vendor-neutral StandardToken, which token-item.ts turns into a DP-1 item
  * with the same code the indexer path uses. Item ids, provenance, inline
  * manifests and timing therefore come out identical in shape to the indexer's.
  *
@@ -20,13 +22,10 @@
 import { getAddress } from 'viem';
 import * as logger from '../logger';
 import {
-  RASTER_TOKEN_BATCH_SIZE,
-  fetchTokensByRef,
-  fetchTokensOwned,
-  type IndexerChain,
-  type RasterMedia,
-  type RasterToken,
-} from './raster-client';
+  RASTER_REFS_PER_REQUEST,
+  lookupRasterTokens,
+  lookupRasterTokensOwned,
+} from './source-resolver-lookups';
 import { fixUpMediaUrl, type IpfsGateways } from './media-url';
 import { convertToDP1Item, resolveTokenStandard, type TokenData } from './token-item';
 import {
@@ -39,6 +38,56 @@ import {
   type TokenListing,
   type TokenSource,
 } from './token-source-contract';
+
+/** IndexerChain is a chain ff-cli builds items for, in the client vocabulary. */
+export type IndexerChain = 'ethereum' | 'tezos';
+
+/** RasterArtist is an artist as embedded on a Raster token or artwork. */
+export interface RasterArtist {
+  id: string;
+  name: string | null;
+  slug: string | null;
+}
+
+/** RasterMedia is Raster's media block. `contentType` and `previewType` are not MIME types. */
+export interface RasterMedia {
+  previewHash: string | null;
+  previewType: string | null;
+  contentUrl: string | null;
+  normalizedContentUrl: string | null;
+  contentType: string | null;
+}
+
+/** RasterArtworkRef is the artwork (series) a token belongs to, as embedded on a token. */
+export interface RasterArtworkRef {
+  id: string;
+  slug: string | null;
+  title: string;
+  description: string | null;
+  platform: { id: string; name: string } | null;
+  artists: RasterArtist[];
+}
+
+/**
+ * RasterToken is one Raster token record, as the service passes it through.
+ * Only the fields this mapper reads are typed; the service sends more.
+ *
+ * Raster lowercases EVM contract addresses and keeps Tezos addresses as
+ * written (verified 2026-10-21). `name` is empty for Art Blocks tokens, a
+ * known Raster bug the token source works around. A token on the tokens-owned
+ * walk carries no `description`.
+ */
+export interface RasterToken {
+  chainId: string;
+  contractAddress: string | null;
+  tokenId: string;
+  tokenStandard: string | null;
+  name: string | null;
+  description?: string | null;
+  media: RasterMedia | null;
+  artworks: RasterArtworkRef[];
+  artists: RasterArtist[];
+}
 
 /** CAIP-2 chains ff-cli builds items for. Others are skipped and counted. */
 const CAIP_TO_CHAIN: Record<string, IndexerChain> = {
@@ -53,7 +102,7 @@ const RASTER_STANDARDS: Record<string, string> = {
   FA2: 'fa2',
 };
 
-/** Page size for the wallet walk. 100 matches listArtistArtworks; 200 was probed fine. */
+/** Page size for the wallet walk. The service allows up to 250; 100 keeps each answer quick. */
 const OWNED_PAGE_SIZE = 100;
 
 /** NOT_ON_RASTER explains a null `tokenByRef` in the user's terms. */
@@ -159,7 +208,7 @@ function canonicalContract(chain: IndexerChain, address: string): string {
 /**
  * rasterTokenToStandardToken maps one Raster row to the vendor-neutral token.
  *
- * @param token - Raster row selected through TOKEN_FIELDS
+ * @param token - Raster record from the service
  * @param gateways - IPFS gateways for bare ipfs:// sources
  * @param requested - The coordinate asked for, when there was one
  * @returns TokenData ready for convertToDP1Item
@@ -221,9 +270,8 @@ export interface RasterTokenEntry {
 /**
  * itemsFromRasterTokens builds results from rows already in hand.
  *
- * Used by the series path of `find`, whose `artwork.tokens` page already
- * carries every field, and by the wallet walk, so neither pays a second
- * round trip.
+ * Used by the wallet walk, whose pages already carry every field, so it pays
+ * no second round trip, and by resolveOne for each looked-up record.
  */
 export function itemsFromRasterTokens(
   entries: RasterTokenEntry[],
@@ -283,19 +331,30 @@ function reportProgress(opts: ResolveOptions, done: number, total: number): void
 /** DECIMAL_TOKEN_ID is the only token id shape Raster's BigInt scalar accepts. */
 const DECIMAL_TOKEN_ID = /^\d+$/;
 
+/** CONTRACT_SHAPES are the contract address forms the service accepts, per chain. */
+const CONTRACT_SHAPES: Record<IndexerChain, RegExp> = {
+  ethereum: /^0x[0-9a-fA-F]{40}$/,
+  tezos: /^KT1[1-9A-HJ-NP-Za-km-z]{33}$/,
+};
+
 /**
  * rejectionFor explains why a coordinate cannot be sent to Raster, or ''.
  *
- * Checked before batching because Raster validates every variable of a query
- * together: one non-decimal token id (`0x1f`, `#12`, a typo) rejects the whole
+ * Checked before batching because the service validates every ref of a
+ * request together (and Raster every variable of a query): one non-decimal
+ * token id (`0x1f`, `#12`, a typo) or malformed contract rejects the whole
  * request, which would fail up to 39 valid neighbours with an unrelated error.
  */
 function rejectionFor(coord: TokenCoordinate): string {
-  if (normalizeChain(coord) === null) {
+  const chain = normalizeChain(coord);
+  if (chain === null) {
     return `Unsupported chain "${coord.chain}" (Ethereum and Tezos mainnet only)`;
   }
   if (!DECIMAL_TOKEN_ID.test(String(coord.tokenId ?? '').trim())) {
     return `Invalid token id "${coord.tokenId}" (expected a decimal integer)`;
+  }
+  if (!CONTRACT_SHAPES[chain].test(coord.contractAddress.trim())) {
+    return `Invalid ${chain} contract address "${coord.contractAddress}"`;
   }
   return '';
 }
@@ -313,10 +372,10 @@ async function resolveBatch(
   const lookups = batch.filter((coord) => rejectionFor(coord) === '');
   let rows: (RasterToken | null)[];
   try {
-    rows = await fetchTokensByRef(
+    rows = await lookupRasterTokens(
       lookups.map((coord) => ({
         chain: normalizeChain(coord) as IndexerChain,
-        contractAddress: coord.contractAddress,
+        contract: coord.contractAddress.trim(),
         tokenId: String(coord.tokenId).trim(),
       }))
     );
@@ -362,15 +421,15 @@ async function walkOwnedTokens(
   let skippedUnsupported = 0;
   let after: string | undefined;
   do {
-    const page = await fetchTokensOwned(address, { first: OWNED_PAGE_SIZE, after });
-    for (const token of page.tokens) {
+    const page = await lookupRasterTokensOwned(address, { first: OWNED_PAGE_SIZE, after });
+    for (const { token } of page.tokens) {
       if (!CAIP_TO_CHAIN[token.chainId] || !token.contractAddress) {
         skippedUnsupported += 1;
       } else if (limit === 'all' || tokens.length < limit) {
         tokens.push(token);
       }
     }
-    after = page.nextCursor ?? undefined;
+    after = page.next || undefined;
   } while (after && (limit === 'all' || tokens.length < limit));
   return { tokens, skippedUnsupported };
 }
@@ -380,7 +439,7 @@ async function walkOwnedTokens(
  *
  * Batches run one after another: 40 tokens per request already turns the
  * ff-cli#132 case (43 tokens, ~10 minutes on the indexer) into two requests,
- * and sequential batches keep load on an unmetered beta API predictable.
+ * and sequential batches keep load on the service and on Raster predictable.
  *
  * @param gateways - Resolved IPFS gateways from config
  */
@@ -389,8 +448,8 @@ export function createRasterTokenSource(gateways: IpfsGateways): TokenSource {
     name: 'raster',
     async resolveTokens(coords, opts: ResolveOptions = {}) {
       const results: ResolvedToken[] = [];
-      for (let i = 0; i < coords.length; i += RASTER_TOKEN_BATCH_SIZE) {
-        const batch = coords.slice(i, i + RASTER_TOKEN_BATCH_SIZE);
+      for (let i = 0; i < coords.length; i += RASTER_REFS_PER_REQUEST) {
+        const batch = coords.slice(i, i + RASTER_REFS_PER_REQUEST);
         results.push(...(await resolveBatch(batch, gateways, opts.duration)));
         reportProgress(opts, results.length, coords.length);
       }

@@ -81,7 +81,9 @@ The current code and internal context imply these practical goals:
 
 ### Current behavior
 
-Token data for `find`, `build`, and `enrich` comes from the Feral File indexer (ff-indexer-v2) by default. Raster's public GraphQL API is selectable with `tokenSource: "raster"` and is under evaluation as the replacement (feral-file#3576); it stays opt-in until the data bugs reported on feral-file#3546 are fixed. One token source answers a whole run; there is no fallback between them.
+Token data for `find`, `build`, and `enrich` comes from the Feral File indexer (ff-indexer-v2) by default. Raster, read through Feral File's source resolver (ff-source-resolver-service), is selectable with `tokenSource: "raster"` and is under evaluation as the replacement (feral-file#3576); it stays opt-in until the data bugs reported on feral-file#3546 are fixed. One token source answers a whole run; there is no fallback between them.
+
+Which work, series, or tokens an input names is asked of the source resolver, the one service that talks to Raster and the marketplaces for Feral File's clients; `find` keeps no marketplace lookup code of its own except for Neort, which the service does not cover. When the service is unavailable, a token or coordinate still builds a one-item playlist and a wallet address lists its holdings through the token source.
 
 ### Design direction
 

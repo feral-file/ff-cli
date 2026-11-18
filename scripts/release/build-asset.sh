@@ -46,6 +46,9 @@ trap cleanup EXIT
 echo "Building ff-cli bundle..."
 cd "$ROOT_DIR"
 npm ci
+# Bakes FF_SOURCE_RESOLVER_API_KEY into the bundle when it is set (an empty
+# key otherwise); see scripts/write-source-resolver-key.js.
+node scripts/write-source-resolver-key.js
 npm run bundle
 
 PACKAGE_DIR="$WORKDIR/$ASSET_NAME"

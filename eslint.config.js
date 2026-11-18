@@ -13,6 +13,7 @@ module.exports = [
       'package-lock.json',
       'dist/**',
       '.tmp/**',
+      'src/generated/**',
     ],
   },
   // JavaScript files
