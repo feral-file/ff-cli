@@ -291,11 +291,12 @@ FF_SUPPORT_LOGS_URL=https://support-logs.feralfile.com
 
 ## Raster API
 
-`find` resolves tokens, series, and artist addresses through Raster's public GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)), and with the default `tokenSource` so do `build` and `enrich`. No configuration is required; two environment variables adjust the integration:
+`find` asks Raster's GraphQL API ([docs.api.raster.art](https://docs.api.raster.art/)) which series a token belongs to, which tokens are in it, and whether an address belongs to an artist. With `tokenSource: "raster"`, `build` and `enrich` read tokens from it too.
+
+Raster's API answers only requests that carry a key. Without one, or whenever Raster refuses (401, 403, 429) or cannot be reached, `find` says so and continues without it: a token link or coordinate builds a one-item playlist, and a wallet address lists the wallet's holdings through the indexer. A `raster.art/artwork/…` link needs Raster and fails with a message saying so.
 
 ```env
-# API key sent as the x-api-key header. The API currently answers without
-# one, but Raster's docs declare a key required — set this once enforced.
+# API key sent as the x-api-key header. Raster issues keys on request.
 RASTER_API_KEY=rk_your_key_here
 
 # Override the GraphQL endpoint (default: https://api.raster.art/graphql).

@@ -787,6 +787,36 @@ describe('rasterQuery body-read failures (#98 review)', () => {
   });
 });
 
+describe('rasterQuery refusals (feral-file#3612)', () => {
+  for (const status of [401, 403, 429]) {
+    test(`${status} → RasterRefusedError carrying the status and body`, async () => {
+      const mock = (async () =>
+        new Response('{"detail": "Invalid or missing API key"}', { status })) as FetchFn;
+      await assert.rejects(
+        () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+        (error: Error) => {
+          assert.equal(error.name, 'RasterRefusedError');
+          assert.match(error.message, new RegExp(`Raster API ${status}`));
+          assert.match(error.message, /Invalid or missing API key/);
+          return true;
+        }
+      );
+    });
+  }
+
+  test('400 stays a plain API error: a malformed query must not be papered over', async () => {
+    const mock = (async () => new Response('bad query', { status: 400 })) as FetchFn;
+    await assert.rejects(
+      () => withMockedFetch(mock, () => resolveTokenToArtwork('ethereum', '0xabc', '1')),
+      (error: Error) => {
+        assert.equal(error.name, 'Error');
+        assert.match(error.message, /Raster API 400/);
+        return true;
+      }
+    );
+  });
+});
+
 describe('fetchWithTimeout (shared HTTP deadline)', () => {
   test('every resolver-facing fetch carries a deadline signal', async () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports

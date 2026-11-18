@@ -21,7 +21,7 @@ import {
   listArtistArtworks,
   resolveAddressToArtist,
   formatSummaryLine,
-  RasterUnreachableError,
+  isRasterUnavailable,
 } from '../utilities/raster-client';
 import type {
   RasterArtworkSummary,
@@ -71,16 +71,28 @@ type PostBuildAction = 'play' | 'publish' | 'skip';
  * What resolves out of a `find` input.
  *
  * `series` — Raster knows the artwork; we'll enumerate every token in it.
- * `single` — Raster doesn't index this token's series (returns 404); fall
- *   back to a one-item playlist for the pasted token.
+ * `single` — Raster doesn't index this token's series (returns 404), or Raster
+ *   is unavailable (`rasterUnavailable`); fall back to a one-item playlist for
+ *   the pasted token.
  * `token-list` — the source-resolver library returned concrete token
  *   coordinates for a collection-like page, so no Raster series lookup is
  *   needed before handing tokens to the token source.
- * `wallet` — no Raster artist claims the address; list its holdings.
+ * `wallet` — no Raster artist claims the address, or Raster is unavailable;
+ *   list its holdings.
  */
 type ResolvedTarget =
-  | { kind: 'series'; summary: RasterArtworkSummary }
-  | { kind: 'single'; coords: TokenCoords }
+  | {
+      kind: 'series';
+      summary: RasterArtworkSummary;
+      /**
+       * fallback is what the input itself can still build when Raster turns
+       * unavailable after naming the series (a later page refused, say): the
+       * pasted token, or the wallet behind an artist's address. A raster.art
+       * link has none, since only Raster knows its slug.
+       */
+      fallback?: Exclude<ResolvedTarget, { kind: 'series' }>;
+    }
+  | { kind: 'single'; coords: TokenCoords; rasterUnavailable: boolean }
   | { kind: 'wallet'; address: string }
   | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
 
@@ -226,7 +238,13 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   } else {
     const { chain, contract, tokenId } = target.coords;
     console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
-    console.log(chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)"));
+    // Only claim Raster lacks the series when Raster said so; when it was
+    // unavailable, resolveCoords has already explained the one-item fallback.
+    if (!target.rasterUnavailable) {
+      console.log(
+        chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)")
+      );
+    }
   }
   console.log();
 
@@ -243,7 +261,11 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   let tokens: BuildToken[];
   let seriesHasMore = false;
   if (target.kind === 'series') {
-    const fetched = await fetchTokens(target.summary, limit);
+    const fetched = await fetchSeriesTokens(target, limit);
+    if (fetched === null) {
+      await runResolvedTarget(target.fallback!, options);
+      return;
+    }
     tokens = fetched.tokens;
     seriesHasMore = fetched.hasMore;
   } else if (target.kind === 'token-list') {
@@ -444,7 +466,7 @@ async function resolveTarget(
     return resolveCoords(coords);
   }
   if (parsed.kind === 'raster-artwork') {
-    const summary = await resolveSlugToArtwork(parsed.slug);
+    const summary = await resolveRasterSlug(parsed.slug);
     if (summary === null) {
       throw new Error(
         `No artwork found on Raster for slug "${parsed.slug}". ` +
@@ -454,31 +476,88 @@ async function resolveTarget(
     return { kind: 'series', summary };
   }
   if (parsed.kind === 'address') {
-    const artist = await resolveAddressToArtist(parsed.address);
-    if (artist === null) {
-      return { kind: 'wallet', address: parsed.address };
-    }
-    const catalog = await listArtistArtworks(artist.id);
-    if (catalog.length === 0) {
-      throw new Error('Artist has no artworks indexed on Raster.');
-    }
-    // A wallet address reads naturally as "what this wallet owns", and this
-    // path builds something else: one work by the artist at the address. Say
-    // so every time, so neither a person nor an agent mistakes the result.
-    console.log(
-      chalk.dim(
-        'find on an address displays one work by the artist at that address. ' +
-          'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
-      )
-    );
-    const picked = await pickFromCatalog(catalog, skipPrompt);
-    return {
-      kind: 'series',
-      summary: { artworkId: picked.artworkId, title: picked.title, artists: [artist] },
-    };
+    return resolveAddress(parsed.address, skipPrompt);
   }
-  // `unsupported` is handled upstream; this branch keeps the type narrowing honest.
   throw new Error(`Unsupported parse result: ${parsed.kind}`);
+}
+
+/**
+ * resolveAddress turns a wallet address into a target: one work by the artist
+ * Raster says owns the address, or the wallet's holdings when no artist claims
+ * it.
+ *
+ * Raster being unavailable (unreachable, or refusing us as it has since its
+ * API began requiring a key, feral-file#3612) falls back to the holdings
+ * listing, which the token source answers without Raster by default. An
+ * artist's address then yields what the wallet holds rather than the artist's
+ * works: a narrower answer, but a playlist to display instead of an exit 1.
+ *
+ * @param address - Ethereum or Tezos address from the input
+ * @param skipPrompt - true when --yes picks the first artwork unprompted
+ * @returns The artist's chosen series, or the wallet target
+ */
+async function resolveAddress(address: string, skipPrompt: boolean): Promise<ResolvedTarget> {
+  let artist: Awaited<ReturnType<typeof resolveAddressToArtist>>;
+  try {
+    artist = await resolveAddressToArtist(address);
+  } catch (error) {
+    if (!isRasterUnavailable(error)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
+    console.log(chalk.dim("  Continuing without Raster — listing the wallet's holdings."));
+    return { kind: 'wallet', address };
+  }
+  if (artist === null) {
+    return { kind: 'wallet', address };
+  }
+  let catalog: Awaited<ReturnType<typeof listArtistArtworks>>;
+  try {
+    catalog = await listArtistArtworks(artist.id);
+  } catch (error) {
+    if (!isRasterUnavailable(error)) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
+    console.log(chalk.dim("  Continuing without Raster — listing the wallet's holdings."));
+    return { kind: 'wallet', address };
+  }
+  if (catalog.length === 0) {
+    throw new Error('Artist has no artworks indexed on Raster.');
+  }
+  console.log(
+    chalk.dim(
+      'find on an address displays one work by the artist at that address. ' +
+        'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
+    )
+  );
+  const picked = await pickFromCatalog(catalog, skipPrompt);
+  return {
+    kind: 'series',
+    summary: { artworkId: picked.artworkId, title: picked.title, artists: [artist] },
+    fallback: { kind: 'wallet', address },
+  };
+}
+
+/**
+ * resolveRasterSlug looks up a raster.art artwork URL's slug. Only Raster
+ * knows its own slugs, so there is no fallback; an unavailable Raster gets a
+ * message that says so instead of a bare HTTP status.
+ *
+ * @param slug - The {slug} of raster.art/artwork/{slug}
+ * @returns The artwork summary, or null when Raster has no such slug
+ */
+async function resolveRasterSlug(slug: string): Promise<RasterArtworkSummary | null> {
+  try {
+    return await resolveSlugToArtwork(slug);
+  } catch (error) {
+    if (isRasterUnavailable(error)) {
+      throw new Error(
+        `raster.art links can only be resolved by Raster, which is not answering: ${(error as Error).message}`
+      );
+    }
+    throw error;
+  }
 }
 
 /**
@@ -519,27 +598,28 @@ async function resolveTokenListInput(
  * Resolve on-chain coords to a target. If Raster doesn't index this token,
  * fall back to single-token mode so we still build something to display.
  *
- * Raster being unreachable gets the same fallback: it only enriches the find
- * (series enumeration, artist labels) — the coords in hand are enough to
- * build a single-token playlist to display, and a network blip on one optional
- * dependency must not kill the whole command (#97).
+ * Raster being unavailable gets the same fallback, whether unreachable (#97)
+ * or refusing us (its API began requiring a key, feral-file#3612): it only
+ * enriches the find (series enumeration, artist labels) — the coords in hand
+ * are enough to build a single-token playlist to display, and one optional
+ * dependency must not kill the whole command.
  */
 async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
   let summary: RasterArtworkSummary | null;
   try {
     summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
   } catch (error) {
-    if (!(error instanceof RasterUnreachableError)) {
+    if (!isRasterUnavailable(error)) {
       throw error;
     }
-    console.log(chalk.yellow(`  ${error.message}`));
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
     console.log(chalk.dim('  Continuing without Raster — building a one-item playlist.'));
-    return { kind: 'single', coords };
+    return { kind: 'single', coords, rasterUnavailable: true };
   }
   if (summary === null) {
-    return { kind: 'single', coords };
+    return { kind: 'single', coords, rasterUnavailable: false };
   }
-  return { kind: 'series', summary };
+  return { kind: 'series', summary, fallback: { kind: 'single', coords, rasterUnavailable: true } };
 }
 
 /**
@@ -620,6 +700,33 @@ export function parseLimitOption(limitStr: string | undefined): number {
  * whether the series continues past what was collected — the API exposes
  * no total counts, so this is all the size information the flow gets.
  */
+/**
+ * fetchSeriesTokens enumerates a series, or returns null when Raster turned
+ * unavailable mid-enumeration and the target carries a fallback to build
+ * instead. Raster can answer the first lookup and refuse a later page (429 in
+ * particular), and that must degrade the same way a refused first lookup does
+ * (feral-file#3612). Without a fallback the error stands.
+ *
+ * @param target - The series target, with its optional fallback
+ * @param limit - Effective token cap for the playlist
+ * @returns The enumerated tokens, or null to build the fallback
+ */
+async function fetchSeriesTokens(
+  target: Extract<ResolvedTarget, { kind: 'series' }>,
+  limit: number
+): Promise<{ tokens: BuildToken[]; hasMore: boolean } | null> {
+  try {
+    return await fetchTokens(target.summary, limit);
+  } catch (error) {
+    if (!isRasterUnavailable(error) || !target.fallback) {
+      throw error;
+    }
+    console.log(chalk.yellow(`  ${(error as Error).message}`));
+    console.log(chalk.dim('  Continuing without Raster — building from the input alone.'));
+    return null;
+  }
+}
+
 async function fetchTokens(
   summary: RasterArtworkSummary,
   limit: number
