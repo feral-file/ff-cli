@@ -1,30 +1,29 @@
 /**
- * Command-level tests for the `ff-cli find` series flow against a mock
- * Raster GraphQL server (wired in via the RASTER_API_URL override).
+ * Command-level tests for `ff-cli find` against a mock
+ * ff-source-resolver-service (wired in via the SOURCE_RESOLVER_URL override).
  *
- * The Raster client unit tests (find-resolvers.test.ts) lock in response
- * parsing; these cover the user-visible behavior of the command itself:
- * the confirm prompt text for complete vs capped series, the --output
- * prompt bypass, the single-token fallback messaging, and the
- * zero-supported-tokens failure exit.
+ * The transport's error split is unit-tested in
+ * source-resolver-client.test.ts; these cover the user-visible behavior of
+ * the command itself: the confirm prompt text for complete vs capped series,
+ * the --output prompt bypass, the single-token fallback messaging, the
+ * degrade when the service is unavailable, collection pages read through
+ * `/tokens`, and the zero-supported-tokens failure exit.
  *
- * All prompts are answered "n", or bypassed with --output. Both the Raster
- * client and the FF indexer client are pointed at the mock server
- * (RASTER_API_URL, INDEXER_API_URL), so the suite is hermetic: no test
- * reaches a network service, and none depends on how fast one answers.
+ * All prompts are answered "n", or bypassed with --output. Both the service
+ * and the FF indexer client are pointed at local mocks (SOURCE_RESOLVER_URL,
+ * INDEXER_API_URL), so the suite is hermetic: no test reaches a network
+ * service, and none depends on how fast one answers.
  */
 
 import assert from 'node:assert/strict';
 import { after, before, beforeEach, describe, test } from 'node:test';
 import { spawn } from 'node:child_process';
 import { createServer, Server } from 'node:http';
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs';
-import { createRequire } from 'node:module';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const projectRoot = resolve(__dirname, '..');
-const testRequire = createRequire(__filename);
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim
 // limitations in spawn (Node refuses to execute .bat/.cmd without shell).
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
@@ -32,13 +31,28 @@ const cliEntry = resolve(projectRoot, 'index.ts');
 
 type GraphQLHandler = (query: string, variables: Record<string, unknown>) => unknown;
 
+/** ServiceCall is one request the mock source resolver received. */
+interface ServiceCall {
+  path: string;
+  query: URLSearchParams;
+  body: Record<string, unknown> | null;
+  apiKey: string;
+}
+
+/** ServiceAnswer is what a handler returns: a JSON body and an optional status. */
+interface ServiceAnswer {
+  status?: number;
+  body: unknown;
+}
+
+type ServiceHandler = (call: ServiceCall) => ServiceAnswer;
+
 let server: Server;
 let serverUrl: string;
-let handler: GraphQLHandler;
+let handler: ServiceHandler;
+let serviceCalls: ServiceCall[] = [];
 
-// The FF indexer client gets its own server: sharing one with Raster would
-// force the handler to tell the two GraphQL vocabularies apart by substring,
-// and both speak of "tokens".
+// The FF indexer client gets its own server, speaking the indexer's GraphQL.
 let indexerServer: Server;
 let indexerUrl: string;
 /**
@@ -54,33 +68,38 @@ const jobIds = new Map<number, string>();
 const VALID_ETH_CONTRACT = '0xababababab20053426ad1c782de9ea8444358070';
 
 before(async () => {
+  // Speaks ff-source-resolver-service's lookup routes. Each request is
+  // recorded (path, query, body, API-KEY) and answered by the test's handler;
+  // the toggles below model the service being unavailable in each of the
+  // ways find must degrade on.
   server = createServer((req, res) => {
-    let body = '';
-    req.on('data', (chunk) => (body += chunk));
+    let raw = '';
+    req.on('data', (chunk) => (raw += chunk));
     req.on('end', () => {
-      const { query, variables } = JSON.parse(body) as {
-        query: string;
-        variables: Record<string, unknown>;
+      const url = new URL(req.url ?? '/', 'http://mock');
+      const call: ServiceCall = {
+        path: url.pathname,
+        query: url.searchParams,
+        body: raw ? JSON.parse(raw) : null,
+        apiKey: String(req.headers['api-key'] ?? ''),
       };
+      serviceCalls.push(call);
       res.setHeader('Content-Type', 'application/json');
-      if (
-        rasterRefusalStatus !== null &&
-        (rasterRefuseOnly === null || rasterRefuseOnly.test(query))
-      ) {
-        // Raster refusing a keyless client, as api.raster.art has since about
-        // 2026-11-13 (feral-file#3612).
-        res.statusCode = rasterRefusalStatus;
-        res.end('{"detail": "Invalid or missing API key"}');
+      if (refusal !== null && (refuseOnly === null || refuseOnly.test(call.path))) {
+        res.statusCode = refusal.status;
+        res.end(JSON.stringify(refusal.body));
         return;
       }
       if (destroyResponseBody) {
         // Headers out, body terminated mid-stream: fetch() resolves, the
         // body read rejects — the #98-review failure mode.
-        res.write('{"data": {');
+        res.write('{"found": ');
         res.destroy();
         return;
       }
-      res.end(JSON.stringify(handler(query, variables ?? {})));
+      const answer = handler(call);
+      res.statusCode = answer.status ?? 200;
+      res.end(JSON.stringify(answer.body));
     });
   });
   await new Promise<void>((resolveListen) => {
@@ -88,9 +107,9 @@ before(async () => {
   });
   const address = server.address();
   if (address === null || typeof address === 'string') {
-    throw new Error('mock Raster server did not bind to a port');
+    throw new Error('mock source resolver did not bind to a port');
   }
-  serverUrl = `http://127.0.0.1:${address.port}/graphql`;
+  serverUrl = `http://127.0.0.1:${address.port}`;
 
   // Speaks the indexer's actual GraphQL contract, per operation, and REJECTS
   // anything else. A permissive fallback is what let the previous version pass
@@ -176,16 +195,27 @@ after(() => {
 });
 
 let destroyResponseBody = false;
-let rasterRefusalStatus: number | null = null;
-/** When set, only Raster operations whose query matches are refused. */
-let rasterRefuseOnly: RegExp | null = null;
+/** When set, the service answers this instead of calling the handler. */
+let refusal: (ServiceAnswer & { status: number }) | null = null;
+/** When set, only routes whose path matches are refused. */
+let refuseOnly: RegExp | null = null;
 let indexerOwnerHandler: GraphQLHandler | undefined;
 
+/** UNAUTHORIZED is how the service refuses a missing or wrong client key. */
+const UNAUTHORIZED = {
+  status: 400,
+  body: { kind: 'error', code: 'INVALID_INPUT', message: 'Unauthorized.' },
+};
+
 beforeEach(() => {
-  handler = () => ({ errors: [{ message: 'no handler installed for this test' }] });
+  handler = (call) => ({
+    status: 400,
+    body: { kind: 'error', code: 'INVALID_INPUT', message: `no handler for ${call.path}` },
+  });
+  serviceCalls = [];
   destroyResponseBody = false;
-  rasterRefusalStatus = null;
-  rasterRefuseOnly = null;
+  refusal = null;
+  refuseOnly = null;
   indexerOps = [];
   indexerOwnerHandler = undefined;
   jobIds.clear();
@@ -199,7 +229,7 @@ interface RunResult {
 }
 
 /**
- * Run `ff-cli find <args>` against the mock Raster server.
+ * Run `ff-cli find <args>` against the mock source resolver.
  *
  * `stdin` is written to the child's stdin and closed (prompt answers).
  *
@@ -218,7 +248,8 @@ function runFind(
       cwd: dir,
       env: {
         ...process.env,
-        RASTER_API_URL: serverUrl,
+        SOURCE_RESOLVER_URL: serverUrl,
+        FF_SOURCE_RESOLVER_API_KEY: 'test-client-key',
         // Without these the run reaches the real indexer once it passes the
         // prompt, and polls it for POLLING_TIMEOUT_MS (60s). The override is
         // gated on NODE_ENV so it cannot become ambient configuration.
@@ -282,45 +313,57 @@ function runFind(
   });
 }
 
-/** tokenByRef response: token belongs to a Raster-indexed series. */
-const SERIES_HIT = {
-  data: {
-    tokenByRef: {
-      artworks: [
-        {
-          id: '42',
-          title: 'Test Series',
-          artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }],
-        },
-      ],
-    },
-  },
-};
+const VALID_TEZOS_CONTRACT = 'KT1RJ6PbjHpwc3M5rw5s2Nbmefwbuwbdxton';
+const TOKEN_INPUT = `ethereum:${VALID_ETH_CONTRACT}:1`;
 
-function tokensPage(nodes: Array<Record<string, unknown>>, hasNextPage: boolean): unknown {
+/**
+ * workCard builds a `/work` answer for the test token. `series` adds the
+ * fields the service sets only for a series of distinct outputs.
+ */
+function workCard(
+  options: { series?: boolean; diag?: string[]; work?: Record<string, unknown> } = {}
+): ServiceAnswer {
   return {
-    data: {
-      artwork: {
-        tokens: {
-          nodes,
-          pageInfo: { hasNextPage, endCursor: hasNextPage ? 'next-cursor' : null },
-        },
+    body: {
+      found: true,
+      work: {
+        title: 'Test Series #1',
+        artist: 'Test Artist',
+        chain: 'ethereum',
+        contract: VALID_ETH_CONTRACT,
+        tokenId: '1',
+        series: 'Test Series',
+        ...(options.series ? { seriesSlug: 'test-series', seriesSize: 3 } : {}),
+        ...options.work,
       },
+      diag: options.diag ?? [],
     },
   };
 }
 
-const ETH_TOKEN = (
-  tokenId: string
-): { chainId: string; contractAddress: string; tokenId: string } => ({
-  chainId: 'eip155:1',
-  contractAddress: VALID_ETH_CONTRACT,
-  tokenId,
-});
+/** seriesPage builds a `/series` page of Ethereum outputs. */
+function seriesPage(tokenIds: string[], next = '', skipped = 0): ServiceAnswer {
+  return {
+    body: {
+      title: 'Test Series',
+      total: tokenIds.length,
+      outputs: tokenIds.map((tokenId) => ({
+        tokenId,
+        title: `Test Series #${tokenId}`,
+        chain: 'ethereum',
+        contract: VALID_ETH_CONTRACT,
+      })),
+      next,
+      skipped,
+    },
+  };
+}
 
-/** A series token row carrying the media a Raster-sourced item needs. */
-const PLAYABLE_ETH_TOKEN = (tokenId: string): Record<string, unknown> => ({
-  ...ETH_TOKEN(tokenId),
+/** A Raster token record carrying the media a Raster-sourced item needs. */
+const PLAYABLE_ETH_TOKEN = (tokenId: string, contract = VALID_ETH_CONTRACT) => ({
+  chainId: 'eip155:1',
+  contractAddress: contract,
+  tokenId,
   tokenStandard: 'ERC721',
   name: `Test Series #${tokenId}`,
   description: 'A test work.',
@@ -344,154 +387,219 @@ const PLAYABLE_ETH_TOKEN = (tokenId: string): Record<string, unknown> => ({
   artists: [],
 });
 
-test('an unclaimed address falls back to an owner lookup', async () => {
-  handler = () => ({ data: { address: null } });
-  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /No playable tokens found in wallet/);
-  assert.equal(indexerOps.length, 1);
-  assert.equal(indexerOps[0].op, 'tokens');
-});
+/** rasterTokensFor answers `/raster/tokens` with a playable record per ref. */
+function rasterTokensFor(call: ServiceCall): ServiceAnswer {
+  const refs = (call.body?.refs ?? []) as Array<{ contract: string; tokenId: string }>;
+  return { body: { tokens: refs.map((ref) => PLAYABLE_ETH_TOKEN(ref.tokenId, ref.contract)) } };
+}
 
-test('a failed second wallet page aborts the playlist', async () => {
-  handler = () => ({ data: { address: null } });
-  const offsets: number[] = [];
-  indexerOwnerHandler = (query) => {
-    const offset = Number(/offset:\s*(\d+)/.exec(query)?.[1]);
-    offsets.push(offset);
-    if (offset === 50) {
-      return { errors: [{ message: 'second page unavailable' }] };
-    }
-    return {
-      data: {
-        tokens: {
-          items: Array.from({ length: 50 }, (_, i) => ({
-            contract_address: VALID_ETH_CONTRACT,
-            token_number: String(i),
-            chain: 'eip155:1',
-            standard: 'erc721',
-            display: { name: `Token ${i}`, image_url: 'https://example.com/token.png' },
-          })),
-          total: 51,
-        },
-      },
-    };
-  };
-  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '51', '--output', 'wallet.json']);
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /second page unavailable/);
-  assert.doesNotMatch(result.stdout, /Playlist saved/);
-  assert.deepEqual(offsets, [0, 50]);
-});
+/** paths lists the routes the service was asked, in order. */
+function paths(): string[] {
+  return serviceCalls.map((call) => call.path);
+}
 
-test('owner lookup saves a playlist from the configured Raster source', async () => {
-  handler = (query) => {
-    if (query.includes('ResolveAddress')) {
-      return { data: { address: { artists: [] } } };
-    }
-    assert.match(query, /TokensOwned/);
-    return {
-      data: {
-        address: {
-          tokensOwned: {
-            totalCount: 2,
-            nodes: ['1', '2'].map((id) => ({ token: PLAYABLE_ETH_TOKEN(id) })),
-            pageInfo: { hasNextPage: false, endCursor: null },
+/**
+ * withoutNodeDeprecations drops the deprecation warnings Node itself prints
+ * (Node 26 flags tsx's `module.register()` as DEP0205), so a test can still
+ * catch a deprecation ff-cli prints. Node writes the warning as
+ * `(node:PID) [DEP0205] DeprecationWarning: <text>` plus a
+ * `--trace-deprecation` hint, and the loader repeats `DeprecationWarning:
+ * <text>`; only lines carrying a Node DEP code, that hint, or that exact
+ * repeated text are removed.
+ *
+ * @param stderr - The child's stderr
+ * @returns stderr without Node's own deprecation lines
+ */
+function withoutNodeDeprecations(stderr: string): string {
+  const lines = stderr.split('\n');
+  const repeated = new Set(
+    lines
+      .map((line) => /\[DEP\d{4}\] (DeprecationWarning: .*)$/.exec(line)?.[1])
+      .filter((text): text is string => !!text)
+  );
+  return lines
+    .filter(
+      (line) =>
+        !/\[DEP\d{4}\] DeprecationWarning:/.test(line) &&
+        !/^\(Use `node --trace-deprecation/.test(line) &&
+        !repeated.has(line.trim())
+    )
+    .join('\n');
+}
+
+describe('find command — wallet addresses', () => {
+  test('an unclaimed address falls back to an owner lookup', async () => {
+    handler = () => ({ body: { artists: [] } });
+    const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /No playable tokens found in wallet/);
+    assert.deepEqual(paths(), ['/raster/artists']);
+    assert.equal(serviceCalls[0].query.get('address'), VALID_ETH_CONTRACT);
+    assert.equal(indexerOps.length, 1);
+    assert.equal(indexerOps[0].op, 'tokens');
+  });
+
+  test('a failed second wallet page aborts the playlist', async () => {
+    handler = () => ({ body: { artists: [] } });
+    const offsets: number[] = [];
+    indexerOwnerHandler = (query) => {
+      const offset = Number(/offset:\s*(\d+)/.exec(query)?.[1]);
+      offsets.push(offset);
+      if (offset === 50) {
+        return { errors: [{ message: 'second page unavailable' }] };
+      }
+      return {
+        data: {
+          tokens: {
+            items: Array.from({ length: 50 }, (_, i) => ({
+              contract_address: VALID_ETH_CONTRACT,
+              token_number: String(i),
+              chain: 'eip155:1',
+              standard: 'erc721',
+              display: { name: `Token ${i}`, image_url: 'https://example.com/token.png' },
+            })),
+            total: 51,
           },
         },
-      },
+      };
     };
-  };
-  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json'], {
-    env: { FF_TOKEN_SOURCE: 'raster' },
+    const result = await runFind([VALID_ETH_CONTRACT, '--limit', '51', '--output', 'wallet.json']);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /second page unavailable/);
+    assert.doesNotMatch(result.stdout, /Playlist saved/);
+    assert.deepEqual(offsets, [0, 50]);
   });
-  assert.equal(result.code, 0, result.stderr);
-  assert.match(result.stdout, /Playlist saved to wallet\.json/);
-  assert.match(result.stdout, /1 item\b/);
-  assert.deepEqual(indexerOps, []);
-});
 
-test('Raster refusing an address lookup → lists the wallet through the indexer (feral-file#3612)', async () => {
-  rasterRefusalStatus = 401;
-  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
-  // The empty indexer listing ends the run; what matters is that the run got
-  // there instead of dying on Raster's 401.
-  assert.match(result.stdout, /Raster API 401/);
-  assert.match(result.stdout, /Continuing without Raster — listing the wallet's holdings/);
-  assert.match(result.stderr, /No playable tokens found in wallet/);
-  assert.equal(indexerOps.length, 1);
-  assert.equal(indexerOps[0].op, 'tokens');
-});
-
-test('Raster refusing the artist catalog after naming the artist → lists the wallet', async () => {
-  handler = () => ({
-    data: { address: { artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }] } },
-  });
-  rasterRefusalStatus = 429;
-  rasterRefuseOnly = /ArtistArtworks/;
-  const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
-  assert.match(result.stdout, /Raster API 429/);
-  assert.match(result.stdout, /Continuing without Raster — listing the wallet's holdings/);
-  assert.match(result.stderr, /No playable tokens found in wallet/);
-  assert.equal(indexerOps.length, 1);
-  assert.equal(indexerOps[0].op, 'tokens');
-});
-
-test('Raster refusing a raster.art link says only Raster can resolve it', async () => {
-  rasterRefusalStatus = 401;
-  const result = await runFind(['https://raster.art/artwork/some-slug']);
-  assert.equal(result.code, 1);
-  assert.match(
-    result.stderr,
-    /raster\.art links can only be resolved by Raster, which is not answering/
-  );
-  assert.match(result.stderr, /Raster API 401/);
-});
-
-describe('find command — Raster series flow (mock GraphQL server)', () => {
-  test('complete series → "Build playlist with N tokens?" prompt; "n" cancels before resolving', async () => {
-    handler = (query) => {
-      if (query.includes('ResolveToken(')) {
-        return SERIES_HIT;
+  test('owner lookup saves a playlist from the configured Raster source', async () => {
+    handler = (call) => {
+      if (call.path === '/raster/artists') {
+        return { body: { artists: [] } };
       }
-      return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
+      assert.equal(call.path, '/raster/tokens-owned');
+      return {
+        body: {
+          tokens: ['1', '2'].map((id) => ({
+            quantity: 1,
+            lastAcquiredAt: null,
+            token: PLAYABLE_ETH_TOKEN(id),
+          })),
+          next: '',
+        },
+      };
     };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
-    assert.equal(result.code, 0);
+    const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json'], {
+      env: { FF_TOKEN_SOURCE: 'raster' },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Playlist saved to wallet\.json/);
+    assert.match(result.stdout, /1 item\b/);
+    assert.deepEqual(indexerOps, []);
+  });
+
+  test("an artist's address builds the picked work's series", async () => {
+    handler = (call) => {
+      if (call.path === '/raster/artists') {
+        return { body: { artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }] } };
+      }
+      if (call.path === '/raster/artist-works') {
+        return {
+          body: { works: [{ id: '42', slug: 'test-series', title: 'Test Series' }], next: '' },
+        };
+      }
+      return seriesPage(['1', '2']);
+    };
+    const result = await runFind([VALID_ETH_CONTRACT], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Test Artist — Test Series/);
+    assert.match(result.stdout, /Build playlist with 2 tokens\?/);
+    assert.deepEqual(paths(), ['/raster/artists', '/raster/artist-works', '/series']);
+    assert.equal(serviceCalls[1].query.get('id'), '7');
+    assert.equal(serviceCalls[2].query.get('slug'), 'test-series');
+  });
+
+  test('the service refusing an address lookup lists the wallet through the indexer (feral-file#3612)', async () => {
+    refusal = UNAUTHORIZED;
+    const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
+    // The empty indexer listing ends the run; what matters is that the run got
+    // there instead of dying on the refusal.
+    assert.match(result.stdout, /Feral File source resolver 400 INVALID_INPUT: Unauthorized\./);
+    assert.match(
+      result.stdout,
+      /Continuing without the source resolver — listing the wallet's holdings/
+    );
+    assert.match(result.stderr, /No playable tokens found in wallet/);
+    assert.equal(indexerOps.length, 1);
+    assert.equal(indexerOps[0].op, 'tokens');
+  });
+
+  test('the service failing the artist catalog after naming the artist lists the wallet', async () => {
+    handler = () => ({
+      body: { artists: [{ id: '7', name: 'Test Artist', slug: 'test-artist' }] },
+    });
+    refusal = {
+      status: 502,
+      body: { kind: 'error', code: 'UPSTREAM_UNAVAILABLE', message: 'api.raster.art 429' },
+    };
+    refuseOnly = /artist-works/;
+    const result = await runFind([VALID_ETH_CONTRACT, '--limit', '1', '--output', 'wallet.json']);
+    assert.match(result.stdout, /502 UPSTREAM_UNAVAILABLE: api\.raster\.art 429/);
+    assert.match(
+      result.stdout,
+      /Continuing without the source resolver — listing the wallet's holdings/
+    );
+    assert.match(result.stderr, /No playable tokens found in wallet/);
+    assert.equal(indexerOps.length, 1);
+  });
+});
+
+describe('find command — series flow', () => {
+  test('complete series → "Build playlist with N tokens?" prompt; "n" cancels before resolving', async () => {
+    handler = (call) =>
+      call.path === '/work' ? workCard({ series: true }) : seriesPage(['1', '2']);
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
     assert.match(result.stdout, /Test Artist — Test Series/);
     assert.match(result.stdout, /Build playlist with 2 tokens\?/);
     assert.doesNotMatch(result.stdout, /the first/);
     assert.match(result.stdout, /Cancelled\./);
     assert.doesNotMatch(result.stdout, /Resolving/);
+    // The input goes to /work as typed, then the series by its slug, with the client key.
+    assert.deepEqual(paths(), ['/work', '/series']);
+    assert.equal(serviceCalls[0].query.get('url'), TOKEN_INPUT);
+    assert.equal(serviceCalls[1].query.get('slug'), 'test-series');
+    assert.ok(serviceCalls.every((call) => call.apiKey === 'test-client-key'));
   });
 
   test('--limit below series size → "the first N tokens" prompt wording', async () => {
-    handler = (query) => {
-      if (query.includes('ResolveToken(')) {
-        return SERIES_HIT;
-      }
-      // One page holding more tokens than the limit: the truncation is
-      // detected from leftover rows, with more pages still advertised.
-      return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2'), ETH_TOKEN('3')], true);
-    };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--limit', '2'], {
-      stdin: 'n\n',
-    });
+    handler = (call) =>
+      call.path === '/work' ? workCard({ series: true }) : seriesPage(['1', '2', '3'], 'c2');
+    const result = await runFind([TOKEN_INPUT, '--limit', '2'], { stdin: 'n\n' });
     assert.equal(result.code, 0);
     assert.match(result.stdout, /Build playlist with the first 2 tokens\?/);
     assert.match(result.stdout, /Cancelled\./);
+    assert.deepEqual(paths(), ['/work', '/series']);
+  });
+
+  test('a series walks every page until the end', async () => {
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ series: true });
+      }
+      return call.query.get('after') === 'c2' ? seriesPage(['3']) : seriesPage(['1', '2'], 'c2');
+    };
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
+    assert.match(result.stdout, /Build playlist with 3 tokens\?/);
+    assert.deepEqual(paths(), ['/work', '/series', '/series']);
   });
 
   test('--output bypasses the prompt and builds from Raster with no indexer call', async () => {
-    const queries: string[] = [];
-    handler = (query) => {
-      queries.push(query);
-      if (query.includes('ResolveToken(')) {
-        return SERIES_HIT;
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ series: true });
       }
-      return tokensPage([PLAYABLE_ETH_TOKEN('1'), PLAYABLE_ETH_TOKEN('2')], false);
+      return call.path === '/series' ? seriesPage(['1', '2']) : rasterTokensFor(call);
     };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json'], {
+    const result = await runFind([TOKEN_INPUT, '--output', 'out.json'], {
       env: { FF_TOKEN_SOURCE: 'raster' },
     });
     assert.doesNotMatch(result.stdout, /Build playlist with/);
@@ -501,19 +609,15 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     // The feral-file#3576 done check: building yields items and the request
     // trace shows no indexer call at all.
     assert.deepEqual(indexerOps, []);
-    // The series page already carried every field, so no tokenByRef batch.
-    assert.ok(!queries.some((query) => query.includes('TokensByRef')));
+    // Raster's records come through the service in one batch.
+    assert.deepEqual(paths(), ['/work', '/series', '/raster/tokens']);
   });
 
   test('the default token source is the indexer, with no deprecation warning', async () => {
-    handler = (query) => {
-      if (query.includes('ResolveToken(')) {
-        return SERIES_HIT;
-      }
-      return tokensPage([ETH_TOKEN('1'), ETH_TOKEN('2')], false);
-    };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`, '--output', 'out.json']);
-    assert.doesNotMatch(result.stderr, /deprecated/);
+    handler = (call) =>
+      call.path === '/work' ? workCard({ series: true }) : seriesPage(['1', '2']);
+    const result = await runFind([TOKEN_INPUT, '--output', 'out.json']);
+    assert.doesNotMatch(withoutNodeDeprecations(result.stderr), /deprecated/i);
     assert.match(result.stdout, /Resolving 2 tokens via FF indexer/);
     assert.match(result.stdout, /2\/2 tokens resolved/);
     assert.match(result.stderr, /No tokens could be resolved via FF indexer/);
@@ -534,442 +638,273 @@ describe('find command — Raster series flow (mock GraphQL server)', () => {
     }
   });
 
-  test('series with only unsupported-chain tokens → clear error, exit 1', async () => {
-    handler = (query) => {
-      if (query.includes('ResolveToken(')) {
-        return SERIES_HIT;
+  test('series with only unsupported-chain outputs → clear error, exit 1', async () => {
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ series: true });
       }
-      return tokensPage(
-        [
-          { chainId: 'eip155:137', contractAddress: '0xmatic', tokenId: '1' },
-          { chainId: 'eip155:8453', contractAddress: '0xbase', tokenId: '2' },
-        ],
-        false
-      );
+      return {
+        body: {
+          title: 'Test Series',
+          total: 2,
+          outputs: [{ tokenId: '', title: 'Off chain', chain: 'other', contract: '' }],
+          next: '',
+          skipped: 1,
+        },
+      };
     };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
     assert.equal(result.code, 1);
     assert.match(result.stdout, /Skipped 2 tokens on unsupported chains/);
     assert.match(result.stderr, /Series has no tokens on supported chains/);
   });
 
-  test('unindexed token → single-token fallback messaging and 1-token prompt', async () => {
-    handler = (query) => {
-      if (query.includes('ResolveToken(')) {
-        return { data: { tokenByRef: null } };
-      }
-      return { errors: [{ message: 'unexpected query for single-token path' }] };
-    };
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+  test('a token outside any series → single-token messaging and 1-token prompt', async () => {
+    handler = () => workCard();
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
     assert.equal(result.code, 0);
     assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
-    assert.match(result.stdout, /Raster doesn't index this series/);
+    assert.match(result.stdout, /No series of distinct works holds this token/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
     assert.match(result.stdout, /Cancelled\./);
+    assert.deepEqual(paths(), ['/work']);
   });
 
-  for (const status of [401, 403, 429]) {
-    test(`Raster refusing with ${status} → warns and degrades to one-item playlist (feral-file#3612)`, async () => {
-      rasterRefusalStatus = status;
-      const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+  test("a source the service could not read is shown, not taken as proof there's no series", async () => {
+    handler = () => workCard({ diag: ['api.raster.art 401'] });
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
+    assert.equal(result.code, 0);
+    assert.match(result.stdout, /Source resolver note: api\.raster\.art 401/);
+    assert.doesNotMatch(result.stdout, /No series of distinct works/);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+  });
+
+  const unavailable: Array<[string, ServiceAnswer & { status: number }]> = [
+    ['refusing the key', UNAUTHORIZED],
+    ['answering 401', { status: 401, body: {} }],
+    ['answering 403', { status: 403, body: {} }],
+    ['answering 429', { status: 429, body: {} }],
+    [
+      'failing upstream (502)',
+      { status: 502, body: { kind: 'error', code: 'UPSTREAM_UNAVAILABLE', message: 'x' } },
+    ],
+  ];
+  for (const [label, answer] of unavailable) {
+    test(`the service ${label} → warns and degrades to a one-item playlist (feral-file#3612)`, async () => {
+      refusal = answer;
+      const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
       assert.equal(result.code, 0, result.stderr);
-      assert.match(result.stdout, new RegExp(`Raster API ${status}`));
-      assert.match(result.stdout, /Continuing without Raster — building a one-item playlist/);
-      assert.doesNotMatch(result.stdout, /Raster doesn't index this series/);
+      assert.match(result.stdout, new RegExp(`Feral File source resolver ${answer.status}`));
+      assert.match(
+        result.stdout,
+        /Continuing without the source resolver — building a one-item playlist/
+      );
+      assert.doesNotMatch(result.stdout, /No series of distinct works/);
       assert.match(result.stdout, /Build playlist with 1 token\?/);
       assert.match(result.stdout, /Cancelled\./);
     });
   }
 
-  test('Raster refusing the series listing after naming the series → one-item playlist', async () => {
-    handler = () => SERIES_HIT;
-    rasterRefusalStatus = 429;
-    rasterRefuseOnly = /ArtworkTokens/;
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+  test('the series listing failing after the series was named → one-item playlist', async () => {
+    handler = () => workCard({ series: true });
+    refusal = {
+      status: 502,
+      body: { kind: 'error', code: 'UPSTREAM_UNAVAILABLE', message: 'api.raster.art 429' },
+    };
+    refuseOnly = /^\/series$/;
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
     assert.equal(result.code, 0, result.stderr);
-    assert.match(result.stdout, /Raster API 429/);
-    assert.match(result.stdout, /Continuing without Raster — building from the input alone/);
+    assert.match(result.stdout, /api\.raster\.art 429/);
+    assert.match(
+      result.stdout,
+      /Continuing without the source resolver — building from the input alone/
+    );
     assert.match(result.stdout, new RegExp(`Single token — ethereum ${VALID_ETH_CONTRACT}:1`));
-    assert.doesNotMatch(result.stdout, /Raster doesn't index this series/);
+    assert.doesNotMatch(result.stdout, /No series of distinct works/);
     assert.match(result.stdout, /Build playlist with 1 token\?/);
   });
 
-  test('Raster body terminating mid-stream → warns and degrades to one-item playlist (#98 review)', async () => {
+  test('a body terminating mid-stream → warns and degrades to a one-item playlist (#98 review)', async () => {
     // fetch() succeeds (headers arrive), the body read rejects. The typed
-    // RasterUnreachableError must survive to resolveCoords so the find flow
-    // degrades instead of dying — the whole point of the boundary fix.
+    // unavailability must survive to the target resolution so the find flow
+    // degrades instead of dying.
     destroyResponseBody = true;
-    const result = await runFind([`ethereum:${VALID_ETH_CONTRACT}:1`], { stdin: 'n\n' });
+    const result = await runFind([TOKEN_INPUT], { stdin: 'n\n' });
     assert.equal(result.code, 0);
-    assert.match(result.stdout, /Raster API unreachable/);
-    assert.match(result.stdout, /Continuing without Raster — building a one-item playlist/);
+    assert.match(result.stdout, /Feral File source resolver unreachable/);
+    assert.match(
+      result.stdout,
+      /Continuing without the source resolver — building a one-item playlist/
+    );
     assert.match(result.stdout, /Build playlist with 1 token\?/);
-    assert.match(result.stdout, /Cancelled\./);
   });
 });
 
-describe('find command — resolver-backed token-list flow', () => {
-  test('passes --limit through parsed and unsupported resolver-backed token-list paths', async () => {
-    const objktCollectionUrl = 'https://objkt.com/collections/KT1TokenListContract';
-    const superRareCollectionUrl =
-      'https://superrare.com/collection/0x1234567890123456789012345678901234567890';
-    const feralFileShowUrl = 'https://feralfile.com/exhibitions/shows/mock-show';
-    const feralFileSeriesUrl = 'https://feralfile.com/exhibitions/series/mock-series';
-    const dir = mkdtempSync(join(tmpdir(), 'ff-find-token-list-'));
-    const originalCwd = process.cwd();
-    const resolverCalls: Array<{ input: string; options: { limit: number } }> = [];
-    const promptQuestions: string[] = [];
-    const promptAnswers = ['yes', 's', 'yes', 's', 'yes', 's', 'yes', 's'];
-    const indexedBatches: unknown[][] = [];
-    const stdoutWrites: string[] = [];
-    const stderrWrites: string[] = [];
-    const resolverMissInputs = new Set<string>();
-    const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-    const originalStderrWrite = process.stderr.write.bind(process.stderr);
-    const originalExit = process.exit;
+describe('find command — links only the service can read', () => {
+  test('a series link builds the whole series, with no token to fall back on', async () => {
+    const link = 'https://feralfile.com/series/mock-series';
+    handler = (call) =>
+      call.path === '/work'
+        ? workCard({
+            series: true,
+            work: { title: 'Mock Series', seriesSlug: 'ff:mock-series', tokenId: '', show: 'all' },
+          })
+        : seriesPage(['21', '22']);
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Test Artist — Test Series/);
+    assert.match(result.stdout, /Build playlist with 2 tokens\?/);
+    assert.equal(serviceCalls[0].query.get('url'), link);
+    assert.equal(serviceCalls[1].query.get('slug'), 'ff:mock-series');
+  });
 
-    const sourceResolver = testRequire('@feralfile/source-resolver');
-    const originalResolveTokenInfos = Object.getOwnPropertyDescriptor(
-      sourceResolver,
-      'resolveTokenInfos'
+  test('the service not answering for a raster.art link says only it can resolve it', async () => {
+    refusal = UNAUTHORIZED;
+    const result = await runFind(['https://raster.art/artwork/some-slug']);
+    assert.equal(result.code, 1);
+    assert.match(
+      result.stderr,
+      /can only be resolved by the Feral File source resolver, which is not answering/
     );
-    const promptPath = testRequire.resolve('../src/commands/helpers/prompt');
-    const tokenSourcePath = testRequire.resolve('../src/utilities/token-source');
-    const playlistBuilderPath = testRequire.resolve('../src/utilities/playlist-builder');
-    const originalPromptCache = testRequire.cache[promptPath];
-    const originalTokenSourceCache = testRequire.cache[tokenSourcePath];
-    const originalPlaylistBuilderCache = testRequire.cache[playlistBuilderPath];
+    assert.match(result.stderr, /Unauthorized\./);
+  });
 
-    Object.defineProperty(sourceResolver, 'resolveTokenInfos', {
-      configurable: true,
-      value: async (input: string, options: { limit: number }) => {
-        resolverCalls.push({ input, options });
-        if (resolverMissInputs.has(input)) {
-          return {
-            kind: 'not-found',
-            reason: 'mock resolver miss',
-          };
-        }
-        // Series pages resolve to exactly the tokens the page describes —
-        // one here, mirroring a single-edition series (the case the old
-        // ff-marketplace→Raster path expanded to a sibling collection).
-        if (input === feralFileSeriesUrl) {
-          return {
-            kind: 'tokens',
-            title: 'Mock Feral File Series',
-            coords: [
-              {
-                chain: 'ethereum',
-                contract: '0x1234567890123456789012345678901234567890',
-                tokenId: '21',
-              },
-            ],
-            hasMore: false,
-          };
-        }
-        const isSuperRareCollection = input === superRareCollectionUrl;
-        const isFeralFileShow = input === feralFileShowUrl;
+  test('a collection page builds the tokens /tokens reads off it, capped by --limit', async () => {
+    const link = `https://objkt.com/collections/${VALID_TEZOS_CONTRACT}`;
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ work: { chain: 'other', contract: '', tokenId: '', series: '' } });
+      }
+      if (call.path === '/tokens') {
         return {
-          kind: 'tokens',
-          title: isSuperRareCollection
-            ? 'Mock SuperRare Collection'
-            : isFeralFileShow
-              ? 'Mock Feral File Show'
-              : 'Mock Objkt Collection',
-          coords: [
+          body: {
+            title: 'Mock Objkt Collection',
+            items: ['1', '2'].map((tokenId) => ({
+              provenance: { contract: { chain: 'tezos', address: VALID_TEZOS_CONTRACT, tokenId } },
+            })),
+          },
+        };
+      }
+      return rasterTokensFor(call);
+    };
+    const result = await runFind([link, '--limit', '1', '--output', 'collection.json'], {
+      env: { FF_TOKEN_SOURCE: 'raster' },
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Mock Objkt Collection/);
+    assert.match(result.stdout, /Resolving 1 token via Raster/);
+    assert.deepEqual(paths(), ['/work', '/tokens', '/raster/tokens']);
+    assert.equal(serviceCalls[1].query.get('url'), link);
+    assert.deepEqual(serviceCalls[2].body?.refs, [
+      { chain: 'tezos', contract: VALID_TEZOS_CONTRACT, tokenId: '1' },
+    ]);
+  });
+
+  test("a Verse series Raster does not index builds every work /tokens lists, not /work's representative", async () => {
+    const link = 'https://verse.works/series/mock-verse-series';
+    handler = (call) => {
+      if (call.path === '/work') {
+        // Raster has no series, so /work names the first edition alone.
+        return workCard({ work: { series: 'Mock Verse Series' } });
+      }
+      return {
+        body: {
+          title: 'Mock Verse Series',
+          items: ['1', '2'].map((tokenId) => ({
+            provenance: { contract: { chain: 'evm', address: VALID_ETH_CONTRACT, tokenId } },
+          })),
+        },
+      };
+    };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Mock Verse Series/);
+    assert.match(result.stdout, /Build playlist with 2 tokens\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
+  test('a Verse series /tokens cannot list falls back to the work /work named', async () => {
+    const link = 'https://verse.works/series/mock-verse-series';
+    handler = (call) =>
+      call.path === '/work'
+        ? workCard()
+        : {
+            status: 400,
+            body: { code: 'NOT_FOUND', message: 'Could not extract token information' },
+          };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
+  test('a collection holding one token builds that token alone, never its parent series', async () => {
+    const link = `https://objkt.com/collections/${VALID_TEZOS_CONTRACT}`;
+    handler = (call) => {
+      if (call.path === '/work') {
+        return workCard({ work: { chain: 'other', contract: '', tokenId: '', series: '' } });
+      }
+      return {
+        body: {
+          title: 'One-Token Collection',
+          items: [
             {
-              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
-              contract:
-                isSuperRareCollection || isFeralFileShow
-                  ? '0x1234567890123456789012345678901234567890'
-                  : 'KT1TokenListContract',
-              tokenId: isSuperRareCollection ? '7' : isFeralFileShow ? '11' : '1',
-            },
-            {
-              chain: isSuperRareCollection || isFeralFileShow ? 'ethereum' : 'tezos',
-              contract:
-                isSuperRareCollection || isFeralFileShow
-                  ? '0x1234567890123456789012345678901234567890'
-                  : 'KT1TokenListContract',
-              tokenId: isSuperRareCollection ? '8' : isFeralFileShow ? '12' : '2',
+              provenance: {
+                contract: { chain: 'tezos', address: VALID_TEZOS_CONTRACT, tokenId: '1' },
+              },
             },
           ],
-          hasMore: true,
-        };
-      },
-    });
-
-    testRequire.cache[promptPath] = {
-      id: promptPath,
-      filename: promptPath,
-      loaded: true,
-      exports: {
-        createPrompt: () => ({
-          ask: async (question: string) => {
-            promptQuestions.push(question);
-            return promptAnswers.shift() ?? 's';
-          },
-          close: () => undefined,
-        }),
-        promptYesNo: async (ask: (question: string) => Promise<string>, question: string) => {
-          const answer = await ask(`${question} [Y/n] `);
-          return answer === 'yes';
         },
-      },
+      };
     };
-    testRequire.cache[tokenSourcePath] = {
-      id: tokenSourcePath,
-      filename: tokenSourcePath,
-      loaded: true,
-      exports: {
-        getTokenSource: () => ({
-          name: 'raster',
-          resolveTokens: async (coords: unknown[]) => {
-            indexedBatches.push(coords);
-            return [
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /One-Token Collection/);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
+  test("a project page builds its representative token's series through /work", async () => {
+    const link = 'https://www.fxhash.xyz/generative/mock-project';
+    handler = (call) => {
+      if (call.path === '/tokens') {
+        return {
+          body: {
+            title: 'One',
+            items: [
               {
-                success: true,
-                coordinate: coords[0],
-                item: { title: 'Indexed token', source: 'https://example.com/token-1' },
-                still: '',
+                provenance: {
+                  contract: { chain: 'evm', address: VALID_ETH_CONTRACT, tokenId: '1' },
+                },
               },
-            ];
+            ],
           },
-        }),
-        itemsOf: (results: Array<{ success: boolean; item?: unknown }>) =>
-          results.filter((result) => result.success).map((result) => result.item),
-        failureMessages: () => [],
-      },
+        };
+      }
+      if (call.path === '/work' && call.query.get('url') === link) {
+        return workCard({ work: { chain: 'other', contract: '', tokenId: '', series: '' } });
+      }
+      return call.path === '/work' ? workCard({ series: true }) : seriesPage(['1', '2']);
     };
-    testRequire.cache[playlistBuilderPath] = {
-      id: playlistBuilderPath,
-      filename: playlistBuilderPath,
-      loaded: true,
-      exports: {
-        buildDP1Playlist: async ({ items, title }: { items: unknown[]; title: string }) => ({
-          slug: 'mock-objkt-collection',
-          title,
-          items,
-        }),
-        buildUrlItem: () => {
-          throw new Error('token-list flow should not build direct URL items');
-        },
-      },
-    };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Build playlist with 2 tokens\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens', '/work', '/series']);
+    assert.equal(serviceCalls[2].query.get('url'), TOKEN_INPUT);
+  });
 
-    try {
-      process.chdir(dir);
-      process.stdout.write = ((chunk: string | Uint8Array) => {
-        stdoutWrites.push(String(chunk));
-        return true;
-      }) as typeof process.stdout.write;
-      process.stderr.write = ((chunk: string | Uint8Array) => {
-        stderrWrites.push(String(chunk));
-        return true;
-      }) as typeof process.stderr.write;
-      process.exit = ((code?: string | number | null) => {
-        throw new Error(`process.exit(${code ?? 0})`);
-      }) as typeof process.exit;
-      const imported = await import('../src/commands/find');
-      const findCommand = imported.findCommand ?? imported.default.findCommand;
-
-      await findCommand.parseAsync(['node', 'find', objktCollectionUrl, '--limit', '1'], {
-        from: 'node',
-      });
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: objktCollectionUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.deepEqual(indexedBatches, [
-        [{ chain: 'tezos', contractAddress: 'KT1TokenListContract', tokenId: '1' }],
-      ]);
-      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
-      assert.match(promptQuestions[1], /^Next\? \[D\]isplay on FF1/);
-      assert.match(stdoutWrites.join(''), /Mock Objkt Collection/);
-      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
-      assert.ok(existsSync(join(dir, 'mock-objkt-collection.json')));
-      assert.equal(
-        JSON.parse(readFileSync(join(dir, 'mock-objkt-collection.json'), 'utf8')).title,
-        'Mock Objkt Collection'
-      );
-
-      resolverCalls.length = 0;
-      promptQuestions.length = 0;
-      indexedBatches.length = 0;
-      stdoutWrites.length = 0;
-
-      await findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
-        from: 'node',
-      });
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: superRareCollectionUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.deepEqual(indexedBatches, [
-        [
-          {
-            chain: 'ethereum',
-            contractAddress: '0x1234567890123456789012345678901234567890',
-            tokenId: '7',
-          },
-        ],
-      ]);
-      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
-      assert.match(stdoutWrites.join(''), /Mock SuperRare Collection/);
-      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
-
-      resolverCalls.length = 0;
-      stderrWrites.length = 0;
-      resolverMissInputs.add(superRareCollectionUrl);
-
-      await assert.rejects(
-        () =>
-          findCommand.parseAsync(['node', 'find', superRareCollectionUrl, '--limit', '1'], {
-            from: 'node',
-          }),
-        /process\.exit\(1\)/
-      );
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: superRareCollectionUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.match(stderrWrites.join(''), /SuperRare collection URLs/);
-      assert.match(stderrWrites.join(''), /Paste a specific token URL/);
-
-      resolverCalls.length = 0;
-      promptQuestions.length = 0;
-      indexedBatches.length = 0;
-      stdoutWrites.length = 0;
-      resolverMissInputs.delete(superRareCollectionUrl);
-
-      await findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
-        from: 'node',
-      });
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: feralFileShowUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.deepEqual(indexedBatches, [
-        [
-          {
-            chain: 'ethereum',
-            contractAddress: '0x1234567890123456789012345678901234567890',
-            tokenId: '11',
-          },
-        ],
-      ]);
-      assert.equal(promptQuestions[0], 'Build playlist with the first 1 token? [Y/n] ');
-      assert.match(stdoutWrites.join(''), /Mock Feral File Show/);
-      assert.match(stdoutWrites.join(''), /Resolving 1 token via Raster/);
-
-      resolverCalls.length = 0;
-      stderrWrites.length = 0;
-      resolverMissInputs.add(feralFileShowUrl);
-
-      await assert.rejects(
-        () =>
-          findCommand.parseAsync(['node', 'find', feralFileShowUrl, '--limit', '1'], {
-            from: 'node',
-          }),
-        /process\.exit\(1\)/
-      );
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: feralFileShowUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.match(
-        stderrWrites.join(''),
-        /Feral File: no supported tokens found for show "mock-show"/
-      );
-
-      // Series URLs route through the same resolver token-list path as shows
-      // (never ff-marketplace→Raster, which expanded a single-edition series
-      // to its parent artwork's full token list). The mock Raster server
-      // seeing zero traffic is asserted implicitly: a Raster call would hit
-      // this test's GraphQL handler and fail the deepEqual on indexedBatches.
-      resolverCalls.length = 0;
-      promptQuestions.length = 0;
-      indexedBatches.length = 0;
-      stdoutWrites.length = 0;
-      stderrWrites.length = 0;
-      resolverMissInputs.delete(feralFileShowUrl);
-
-      await findCommand.parseAsync(['node', 'find', feralFileSeriesUrl, '--limit', '1'], {
-        from: 'node',
-      });
-
-      assert.deepEqual(resolverCalls, [
-        {
-          input: feralFileSeriesUrl,
-          options: { limit: 1 },
-        },
-      ]);
-      assert.deepEqual(indexedBatches, [
-        [
-          {
-            chain: 'ethereum',
-            contractAddress: '0x1234567890123456789012345678901234567890',
-            tokenId: '21',
-          },
-        ],
-      ]);
-      assert.match(stdoutWrites.join(''), /Mock Feral File Series/);
-
-      resolverCalls.length = 0;
-      stderrWrites.length = 0;
-      resolverMissInputs.add(feralFileSeriesUrl);
-
-      await assert.rejects(
-        () =>
-          findCommand.parseAsync(['node', 'find', feralFileSeriesUrl, '--limit', '1'], {
-            from: 'node',
-          }),
-        /process\.exit\(1\)/
-      );
-
-      assert.match(
-        stderrWrites.join(''),
-        /Feral File: no supported tokens found for series "mock-series"/
-      );
-    } finally {
-      process.stdout.write = originalStdoutWrite;
-      process.stderr.write = originalStderrWrite;
-      process.exit = originalExit;
-      process.chdir(originalCwd);
-      rmSync(dir, { recursive: true, force: true });
-      if (originalResolveTokenInfos) {
-        Object.defineProperty(sourceResolver, 'resolveTokenInfos', originalResolveTokenInfos);
-      }
-      if (originalPromptCache) {
-        testRequire.cache[promptPath] = originalPromptCache;
-      } else {
-        delete testRequire.cache[promptPath];
-      }
-      if (originalTokenSourceCache) {
-        testRequire.cache[tokenSourcePath] = originalTokenSourceCache;
-      } else {
-        delete testRequire.cache[tokenSourcePath];
-      }
-      if (originalPlaylistBuilderCache) {
-        testRequire.cache[playlistBuilderPath] = originalPlaylistBuilderCache;
-      } else {
-        delete testRequire.cache[playlistBuilderPath];
-      }
-    }
+  test('a page with no token explains and points at display --web', async () => {
+    const link = 'https://superrare.com/collection/0x1234567890123456789012345678901234567890';
+    handler = (call) =>
+      call.path === '/work'
+        ? workCard({ work: { chain: 'other', contract: '', tokenId: '', series: '' } })
+        : {
+            status: 400,
+            body: { code: 'NOT_FOUND', message: 'Could not extract token information' },
+          };
+    const result = await runFind([link]);
+    assert.equal(result.code, 1);
+    assert.match(result.stderr, /SuperRare collection URLs/);
+    assert.match(result.stderr, /ff-cli display --web/);
   });
 });

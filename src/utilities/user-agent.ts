@@ -1,9 +1,9 @@
 /**
  * Outbound HTTP User-Agent for ff-cli.
  *
- * Set on every fetch to third-party APIs (Raster, Objkt, fxhash, AB, Feral
- * File, Neort) so partners can distinguish CLI traffic from their own
- * frontend/backend traffic in logs. Without it, all Node-side fetches blend
+ * Set on every outbound fetch (Feral File's source resolver, the indexer,
+ * Neort) so service owners and partners can distinguish CLI traffic from
+ * their own frontend/backend traffic in logs. Without it, all Node-side fetches blend
  * into a generic default UA and partners can't attribute load or behavior
  * back to the CLI when something looks unusual.
  *

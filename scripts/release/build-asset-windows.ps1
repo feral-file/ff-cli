@@ -84,6 +84,9 @@ try {
     Write-Host "Building ff-cli bundle..."
     Set-Location $ROOT_DIR
     npm ci
+    # Bakes FF_SOURCE_RESOLVER_API_KEY into the bundle when it is set; see
+    # scripts/write-source-resolver-key.js.
+    node scripts/write-source-resolver-key.js
     npm run bundle
 
     $PACKAGE_DIR = Join-Path $WORKDIR $ASSET_NAME

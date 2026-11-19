@@ -403,8 +403,10 @@ async function queryRequirement(requirement, duration, source = getTokenSource()
 
   if (type === 'feral_file_artwork') {
     console.log(chalk.cyan(`Resolving Feral File artwork ${artworkId}...`));
-    const { parseFeralFileArtworkId, resolveFeralFileArtwork } = require('./feral-file-artwork');
-    const coords = await resolveFeralFileArtwork(parseFeralFileArtworkId(artworkId));
+    // Feral File's record is read by ff-source-resolver-service, the one
+    // thing that talks to Feral File's and the marketplaces' APIs for ff-cli.
+    const { lookupFeralFileArtwork } = require('./source-resolver-lookups');
+    const coords = await lookupFeralFileArtwork(artworkId);
     const items = await resolveCoordinates([coords], duration, source);
     if (items.length > 0) {
       console.log(chalk.green(`✓ Got ${items.length} item(s)`));

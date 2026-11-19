@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import type { RasterToken } from '../src/utilities/raster-client';
 import {
+  type RasterToken,
   createRasterTokenSource,
   rasterTimingMime,
   rasterTokenName,
@@ -88,13 +88,25 @@ function mvp(): RasterToken {
   };
 }
 
-function mockRaster(handler: (variables: Record<string, unknown>) => unknown): FetchFn {
-  return (async (_input: string | URL | Request, init?: RequestInit) => {
-    const body = JSON.parse(String(init?.body ?? '{}')) as { variables?: Record<string, unknown> };
-    return new Response(JSON.stringify(handler(body.variables ?? {})), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+/** ServiceCall is one request the mock service saw. */
+interface ServiceCall {
+  path: string;
+  query: URLSearchParams;
+  body: { refs?: Array<{ chain: string; contract: string; tokenId: string }> } | null;
+}
+
+/**
+ * mockService answers ff-source-resolver-service routes from a handler that
+ * sees each request's path, query, and JSON body.
+ */
+function mockService(handler: (call: ServiceCall) => unknown): FetchFn {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const body = init?.body ? JSON.parse(String(init.body)) : null;
+    return new Response(
+      JSON.stringify(handler({ path: url.pathname, query: url.searchParams, body })),
+      { status: 200, headers: { 'Content-Type': 'application/json' } }
+    );
   }) as FetchFn;
 }
 
@@ -209,7 +221,11 @@ describe('createRasterTokenSource', () => {
   test('resolves one result per input in order, reporting misses and unsupported chains', async () => {
     const source = createRasterTokenSource(gateways);
     const progress: Array<[number, number]> = [];
-    const mock = mockRaster(() => ({ data: { t0: fidenza(), t1: null } }));
+    const calls: ServiceCall[] = [];
+    const mock = mockService((call) => {
+      calls.push(call);
+      return { tokens: [fidenza(), null] };
+    });
     const results = await withMockedFetch(mock, () =>
       source.resolveTokens(
         [
@@ -240,16 +256,27 @@ describe('createRasterTokenSource', () => {
     assert.ok(isFailed(results[2]));
     assert.match(results[2].error, /Unsupported chain "polygon"/);
     assert.deepEqual(progress, [[3, 3]]);
+    // The unsupported chain never reaches the service; the rest go in one POST.
+    assert.deepEqual(
+      calls.map((call) => call.path),
+      ['/raster/tokens']
+    );
+    assert.deepEqual(calls[0].body?.refs, [
+      {
+        chain: 'ethereum',
+        contract: '0xa7d8d9ef8D8Ce8992Df33D8b8CF4Aebabd5bD270',
+        tokenId: '78000629',
+      },
+      { chain: 'ethereum', contract: '0x0000000000000000000000000000000000000001', tokenId: '1' },
+    ]);
   });
 
   test('splits more than 40 coordinates into batches and reports progress per batch', async () => {
     const source = createRasterTokenSource(gateways);
     let requests = 0;
-    const mock = mockRaster((variables) => {
+    const mock = mockService((call) => {
       requests += 1;
-      const data: Record<string, unknown> = {};
-      Object.keys(variables).forEach((key) => (data[key.replace('r', 't')] = null));
-      return { data };
+      return { tokens: (call.body?.refs ?? []).map(() => null) };
     });
     const progress: number[] = [];
     const coords = Array.from({ length: 41 }, (_, i) => ({
@@ -265,12 +292,12 @@ describe('createRasterTokenSource', () => {
     assert.deepEqual(progress, [40, 41]);
   });
 
-  test('a non-decimal token id fails alone instead of poisoning its batch', async () => {
+  test('a non-decimal token id or malformed contract fails alone instead of poisoning its batch', async () => {
     const source = createRasterTokenSource(gateways);
-    const sent: Record<string, unknown>[] = [];
-    const mock = mockRaster((variables) => {
-      sent.push(variables);
-      return { data: { t0: fidenza() } };
+    const sent: ServiceCall[] = [];
+    const mock = mockService((call) => {
+      sent.push(call);
+      return { tokens: [fidenza()] };
     });
     const results = await withMockedFetch(mock, () =>
       source.resolveTokens([
@@ -278,6 +305,13 @@ describe('createRasterTokenSource', () => {
           chain: 'ethereum',
           contractAddress: '0x0000000000000000000000000000000000000001',
           tokenId: '0x1f',
+        },
+        { chain: 'ethereum', contractAddress: '0xshort', tokenId: '1' },
+        {
+          chain: 'ethereum',
+          contractAddress: '0x0000000000000000000000000000000000000001',
+          // One past uint256: the service would reject the whole batch for it.
+          tokenId: (2n ** 256n).toString(),
         },
         {
           chain: 'ethereum',
@@ -287,10 +321,13 @@ describe('createRasterTokenSource', () => {
       ])
     );
     assert.equal(sent.length, 1);
-    assert.deepEqual(Object.keys(sent[0]), ['r0']);
+    assert.equal(sent[0].body?.refs?.length, 1);
     assert.ok(isFailed(results[0]));
     assert.match(results[0].error, /Invalid token id "0x1f"/);
-    assert.ok(isResolved(results[1]));
+    assert.ok(isFailed(results[1]));
+    assert.match(results[1].error, /Invalid ethereum contract address or token id \(0xshort:1\)/);
+    assert.ok(isFailed(results[2]));
+    assert.ok(isResolved(results[3]));
   });
 
   test('a failed request fails every coordinate in its batch with the reason', async () => {
@@ -308,34 +345,32 @@ describe('createRasterTokenSource', () => {
       ])
     );
     assert.ok(isFailed(results[0]));
-    assert.match(results[0].error, /Raster API unreachable/);
+    assert.match(results[0].error, /Feral File source resolver unreachable/);
   });
 
   test('the wallet walk pages until the limit and skips unsupported chains', async () => {
     const source = createRasterTokenSource(gateways);
     const pages = [
       { tokens: [fidenza(), { ...mvp(), chainId: 'eip155:8453' }], next: 'p2' },
-      { tokens: [mvp(), fidenza()], next: null },
+      { tokens: [mvp(), fidenza()], next: '' },
     ];
-    let call = 0;
-    const mock = mockRaster(() => {
-      const page = pages[call++];
+    const calls: ServiceCall[] = [];
+    const mock = mockService((call) => {
+      const page = pages[calls.length];
+      calls.push(call);
       return {
-        data: {
-          address: {
-            tokensOwned: {
-              totalCount: 4,
-              nodes: page.tokens.map((token) => ({ token })),
-              pageInfo: { hasNextPage: page.next !== null, endCursor: page.next },
-            },
-          },
-        },
+        tokens: page.tokens.map((token) => ({ quantity: 1, lastAcquiredAt: null, token })),
+        next: page.next,
       };
     });
     const listing = await withMockedFetch(mock, () =>
       source.listTokensByOwner('0xOwner', { limit: 2 })
     );
-    assert.equal(call, 2);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].path, '/raster/tokens-owned');
+    assert.equal(calls[0].query.get('address'), '0xOwner');
+    assert.equal(calls[0].query.get('after'), null);
+    assert.equal(calls[1].query.get('after'), 'p2');
     assert.equal(listing.results.length, 2);
     assert.equal(listing.skippedUnsupported, 1);
     assert.ok(listing.results.every(isResolved));

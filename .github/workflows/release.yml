@@ -107,6 +107,16 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # ff-cli's own named key for ff-source-resolver-service, compiled into
+      # the package by the build `npm publish` runs (prepublishOnly). The key
+      # is public once published; it exists for attribution and rotation, so
+      # it lives in a repo secret rather than in git. --require fails the
+      # release when the secret is missing instead of shipping a keyless CLI.
+      - name: Write the source resolver client key
+        env:
+          FF_SOURCE_RESOLVER_API_KEY: ${{ secrets.FF_CLI_SOURCE_RESOLVER_KEY }}
+        run: node scripts/write-source-resolver-key.js --require
+
       - name: Publish to npm
         env:
           VERSION_INPUT: ${{ inputs.version }}

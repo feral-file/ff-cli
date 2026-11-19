@@ -1,33 +1,20 @@
 import { Command, Option } from 'commander';
 import chalk from 'chalk';
 import { promises as fs } from 'fs';
-import { parseFindInput, resolveTokenInfos } from '@feralfile/source-resolver';
-import type { TokenCoords } from '@feralfile/source-resolver';
+import { parseFindInput } from '@feralfile/source-resolver';
+import type { ParsedFindInput, TokenCoords } from '@feralfile/source-resolver';
 import type { Playlist } from '../types';
 import { createPrompt, promptYesNo } from './helpers/prompt';
 import { selectFeedServer } from './helpers/feed-server';
-import { resolveFeralFileToken } from '../utilities/ff-marketplace';
-import { resolveObjktAlias } from '../utilities/objkt-marketplace';
-import { resolveArtBlocksCollection } from '../utilities/ab-marketplace';
-import { resolveOpenSeaCollection } from '../utilities/opensea-marketplace';
-import { resolveFxhashIteration, resolveFxhashProject } from '../utilities/fxhash-marketplace';
+import {
+  FIND_NON_INTERACTIVE_HINT,
+  fetchSeriesTokens,
+  resolveFindTarget,
+  type DirectTarget,
+  type ResolvedTarget,
+} from './helpers/find-target';
 import { resolveNeortArt } from '../utilities/neort-marketplace';
 import type { NeortArt } from '../utilities/neort-marketplace';
-import { resolveVerseSeries } from '../utilities/verse-marketplace';
-import {
-  resolveTokenToArtwork,
-  resolveSlugToArtwork,
-  listArtworkTokens,
-  listArtistArtworks,
-  resolveAddressToArtist,
-  formatSummaryLine,
-  isRasterUnavailable,
-} from '../utilities/raster-client';
-import type {
-  RasterArtworkSummary,
-  RasterArtworkRow,
-  RasterToken,
-} from '../utilities/raster-client';
 import { castPlaylist } from '../utilities/playlist-cast';
 import {
   failureMessages,
@@ -36,8 +23,6 @@ import {
   type ResolvedToken,
   type TokenSource,
 } from '../utilities/token-source';
-import { itemsFromRasterTokens } from '../utilities/token-source-raster';
-import { getTokenSourceConfig } from '../config';
 
 // playlist-builder is still CommonJS; require keeps interop simple.
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -66,53 +51,6 @@ interface FindOptions {
 const DP1_MAX_ITEMS = 1024;
 
 type PostBuildAction = 'play' | 'publish' | 'skip';
-
-/**
- * What resolves out of a `find` input.
- *
- * `series` — Raster knows the artwork; we'll enumerate every token in it.
- * `single` — Raster doesn't index this token's series (returns 404), or Raster
- *   is unavailable (`rasterUnavailable`); fall back to a one-item playlist for
- *   the pasted token.
- * `token-list` — the source-resolver library returned concrete token
- *   coordinates for a collection-like page, so no Raster series lookup is
- *   needed before handing tokens to the token source.
- * `wallet` — no Raster artist claims the address, or Raster is unavailable;
- *   list its holdings.
- */
-type ResolvedTarget =
-  | {
-      kind: 'series';
-      summary: RasterArtworkSummary;
-      /**
-       * fallback is what the input itself can still build when Raster turns
-       * unavailable after naming the series (a later page refused, say): the
-       * pasted token, or the wallet behind an artist's address. A raster.art
-       * link has none, since only Raster knows its slug.
-       */
-      fallback?: Exclude<ResolvedTarget, { kind: 'series' }>;
-    }
-  | { kind: 'single'; coords: TokenCoords; rasterUnavailable: boolean }
-  | { kind: 'wallet'; address: string }
-  | { kind: 'token-list'; title: string; coords: TokenCoords[]; hasMore?: boolean };
-
-/**
- * A token to build into the playlist. `rasterToken` is the full Raster row
- * when a series page already returned it, so the Raster token source can
- * build the item without asking Raster again.
- */
-type BuildToken = TokenCoords & { rasterToken: RasterToken | null };
-
-const RASTER_PAGE_SIZE = 100;
-
-/**
- * FIND_NON_INTERACTIVE_HINT is what `find` tells a caller without a terminal
- * when one of its questions comes up. `-y` answers every question with its
- * default, and that default is to display, so the hint names `--no-display` in
- * the same breath for a caller that only wants the file.
- */
-const FIND_NON_INTERACTIVE_HINT =
-  'Re-run with -y to accept the defaults (it builds the playlist and displays it on your FF1); add --no-display to only save it.';
 
 /**
  * playAPageHint points a caller who handed `find` a page it cannot resolve to
@@ -197,27 +135,18 @@ export const findCommand = new Command('find')
         }
         process.exit(1);
       }
-      if (parsed.kind === 'unsupported') {
-        const resolved = await resolveTokenListInput(input, resolverLimitFromOption(options.limit));
-        if (resolved) {
-          await runResolvedTarget(resolved, options);
-          return;
-        }
-        console.error(chalk.red(parsed.reason));
-        // `display` sends unrecognized pages on these hosts here, so the way out
-        // of that loop has to be printed on this side too.
-        console.error(chalk.dim(playAPageHint(input)));
-        process.exit(1);
-      }
 
-      // Neort is off-chain; its items skip the token source entirely and
-      // build a DP-1 entry directly from Neort's API response.
+      // Neort is off-chain and the source resolver does not cover it; its
+      // items skip the token source and build a DP-1 entry from Neort's API.
       if (parsed.kind === 'neort-art') {
         await runNeortFind(parsed.id, options);
         return;
       }
 
-      const target = await resolveTarget(input, parsed, !!options.yes, options.limit);
+      const target = await resolveFindTarget(input, parsed, !!options.yes);
+      if (target === null) {
+        exitUnresolved(input, parsed);
+      }
       await runResolvedTarget(target, options);
     } catch (error) {
       console.error(chalk.red('\nError:'), (error as Error).message);
@@ -225,28 +154,86 @@ export const findCommand = new Command('find')
     }
   });
 
+/**
+ * exitUnresolved explains an input the source resolver found no token behind
+ * and exits 1. The parser's own reason leads when it had one (it names the
+ * URL shapes that do work), and `display --web` is offered either way, since
+ * `display` sends unrecognized pages on these hosts here and the way out of
+ * that loop has to be printed on this side too.
+ *
+ * @param input - The caller's input
+ * @param parsed - parseFindInput's reading of it
+ */
+function exitUnresolved(input: string, parsed: ParsedFindInput): never {
+  const reason =
+    parsed.kind === 'unsupported'
+      ? parsed.reason
+      : 'The source resolver found no token on Ethereum or Tezos behind this link.';
+  console.error(chalk.red(reason));
+  console.error(chalk.dim(playAPageHint(input)));
+  process.exit(1);
+}
+
+/**
+ * describeTarget prints the line that says what was found.
+ *
+ * A one-item fallback claims there is no series only when the service said
+ * so cleanly. When it was unavailable (already explained) or some source did
+ * not answer (its notes are shown), the series is unknown, not absent.
+ *
+ * @param target - A target other than a wallet
+ */
+function describeTarget(target: Exclude<ResolvedTarget, { kind: 'wallet' }>): void {
+  if (target.kind === 'series') {
+    console.log(chalk.cyan(`${target.artist || 'Unknown artist'} — ${target.title}`));
+  } else if (target.kind === 'token-list') {
+    console.log(chalk.cyan(target.title));
+  } else {
+    const { chain, contract, tokenId } = target.coords;
+    console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
+    for (const note of target.notes) {
+      console.log(chalk.dim(`  Source resolver note: ${note}`));
+    }
+    if (!target.degraded && target.notes.length === 0) {
+      console.log(
+        chalk.dim(
+          '  (No series of distinct works holds this token — building a one-item playlist.)'
+        )
+      );
+    }
+  }
+  console.log();
+}
+
+/**
+ * tokensToBuild lists the tokens a target builds, capped at `limit`, or
+ * returns null when a series could not be listed and its fallback builds
+ * instead.
+ *
+ * @param target - A target other than a wallet
+ * @param limit - Effective token cap for the playlist
+ * @returns The tokens and whether the source continues past them, or null
+ */
+async function tokensToBuild(
+  target: Exclude<ResolvedTarget, { kind: 'wallet' }>,
+  limit: number
+): Promise<{ tokens: TokenCoords[]; hasMore: boolean } | null> {
+  if (target.kind === 'series') {
+    return fetchSeriesTokens(target, limit);
+  }
+  if (target.kind === 'token-list') {
+    return { tokens: target.coords.slice(0, limit), hasMore: target.coords.length > limit };
+  }
+  return { tokens: [target.coords], hasMore: false };
+}
+
 /** runResolvedTarget builds the resolved artwork or wallet holdings into a playlist. */
 async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): Promise<void> {
   if (target.kind === 'wallet') {
     await runWalletFind(target.address, options);
     return;
   }
-  if (target.kind === 'series') {
-    console.log(chalk.cyan(formatSummaryLine(target.summary)));
-  } else if (target.kind === 'token-list') {
-    console.log(chalk.cyan(target.title));
-  } else {
-    const { chain, contract, tokenId } = target.coords;
-    console.log(chalk.cyan(`Single token — ${chain} ${contract}:${tokenId}`));
-    // Only claim Raster lacks the series when Raster said so; when it was
-    // unavailable, resolveCoords has already explained the one-item fallback.
-    if (!target.rasterUnavailable) {
-      console.log(
-        chalk.dim("  (Raster doesn't index this series — building a one-item playlist.)")
-      );
-    }
-  }
-  console.log();
+  describeTarget(target);
 
   const userLimit = parseLimitOption(options.limit);
   // Implicit cap: no --limit + series > 1024 → cap to DP-1 max with a
@@ -255,29 +242,15 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   // the user picked a value within spec.
   const limit = Math.min(userLimit, DP1_MAX_ITEMS);
 
-  // Raster's GraphQL API exposes no series token counts, so enumerate
-  // tokens first (up to the effective limit) and confirm with the real
-  // number afterward. `hasMore` means the series continues past `limit`.
-  let tokens: BuildToken[];
-  let seriesHasMore = false;
-  if (target.kind === 'series') {
-    const fetched = await fetchSeriesTokens(target, limit);
-    if (fetched === null) {
-      await runResolvedTarget(target.fallback!, options);
-      return;
-    }
-    tokens = fetched.tokens;
-    seriesHasMore = fetched.hasMore;
-  } else if (target.kind === 'token-list') {
-    const allTokens = target.coords.map((coords) => ({
-      ...coords,
-      rasterToken: null,
-    }));
-    tokens = allTokens.slice(0, limit);
-    seriesHasMore = allTokens.length > limit || !!target.hasMore;
-  } else {
-    tokens = [{ ...target.coords, rasterToken: null }];
+  // Tokens are enumerated first (up to the effective limit) so the prompt
+  // can name the real count. `hasMore` means the source continues past it.
+  const listed = await tokensToBuild(target, limit);
+  if (listed === null) {
+    // Only a series that carries a fallback answers null (fetchSeriesTokens).
+    await runResolvedTarget((target as { fallback: DirectTarget }).fallback, options);
+    return;
   }
+  const { tokens, hasMore } = listed;
 
   if (tokens.length === 0) {
     console.error(
@@ -286,7 +259,7 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
     process.exit(1);
   }
 
-  if (userLimit === Number.POSITIVE_INFINITY && seriesHasMore) {
+  if (userLimit === Number.POSITIVE_INFINITY && hasMore) {
     console.log(
       chalk.yellow(
         `Series has more than ${DP1_MAX_ITEMS} tokens; DP-1 caps playlists at ${DP1_MAX_ITEMS}. ` +
@@ -297,7 +270,7 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
   }
 
   const shouldBuild =
-    !!options.yes || !!options.output || (await confirmMakePlaylist(tokens.length, seriesHasMore));
+    !!options.yes || !!options.output || (await confirmMakePlaylist(tokens.length, hasMore));
   if (!shouldBuild) {
     console.log(chalk.dim('Cancelled.'));
     return;
@@ -340,7 +313,7 @@ async function runResolvedTarget(target: ResolvedTarget, options: FindOptions): 
 
 /** runWalletFind lists holdings through the configured token source without re-indexing them. */
 async function runWalletFind(address: string, options: FindOptions): Promise<void> {
-  const limit = resolverLimitFromOption(options.limit);
+  const limit = effectiveLimitFromOption(options.limit);
   const source = getTokenSource();
   console.log(chalk.cyan(`Looking up holdings for wallet ${address}...`));
   const listing = await source.listTokensByOwner(address, { limit });
@@ -386,240 +359,12 @@ async function saveFindPlaylist(
   }
 }
 
-async function resolveTarget(
-  input: string,
-  parsed: NonNullable<ReturnType<typeof parseFindInput>>,
-  skipPrompt: boolean,
-  limitOption: string | undefined
-): Promise<ResolvedTarget> {
-  if (parsed.kind === 'token') {
-    return resolveCoords(parsed.coords);
-  }
-  if (parsed.kind === 'ff-url') {
-    // Shows and series both resolve through the source-resolver's Feral File
-    // site module, which enumerates exactly the tokens the page describes
-    // (series slug → /api/series → /api/artworks?seriesID). The old series
-    // path resolved ONE token via ff-marketplace and then asked Raster, which
-    // expands to the token's parent artwork — so a single-edition series page
-    // (e.g. a Display Edition) surprisingly built the sibling collection's
-    // full token list. A series URL means the user pointed at a specific
-    // series; build exactly that. Artwork URLs keep the coords→Raster path:
-    // a single-token page carries no series intent to preserve.
-    if (parsed.urlKind === 'show' || parsed.urlKind === 'series') {
-      const label = parsed.urlKind === 'show' ? 'show' : 'series';
-      const target = await resolveTokenListInput(
-        input,
-        resolverLimitFromOption(limitOption),
-        `Feral File ${label} ${parsed.identifier}`
-      );
-      if (target === null) {
-        throw new Error(
-          `Feral File: no supported tokens found for ${label} "${parsed.identifier}".`
-        );
-      }
-      return target;
-    }
-    const coords = await resolveFeralFileToken(parsed);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'objkt-alias') {
-    const contract = await resolveObjktAlias(parsed.alias);
-    return resolveCoords({ chain: 'tezos', contract, tokenId: parsed.tokenId });
-  }
-  if (parsed.kind === 'objkt-collection') {
-    const target = await resolveTokenListInput(
-      input,
-      resolverLimitFromOption(limitOption),
-      `Objkt collection ${parsed.slug}`
-    );
-    if (target === null) {
-      throw new Error(`Objkt: no supported tokens found for collection "${parsed.slug}".`);
-    }
-    return target;
-  }
-  if (parsed.kind === 'ab-collection') {
-    const coords = await resolveArtBlocksCollection(parsed.slug);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'os-collection') {
-    const coords = await resolveOpenSeaCollection(parsed.slug);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'fxhash-iteration') {
-    const coords = await resolveFxhashIteration(parsed.slug);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'fxhash-project') {
-    const coords = await resolveFxhashProject(parsed.slug);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'verse-series') {
-    const target = await resolveTokenListInput(
-      input,
-      resolverLimitFromOption(limitOption),
-      `Verse series ${parsed.slug}`
-    );
-    if (target !== null) {
-      return target;
-    }
-    const coords = await resolveVerseSeries(parsed.slug);
-    return resolveCoords(coords);
-  }
-  if (parsed.kind === 'raster-artwork') {
-    const summary = await resolveRasterSlug(parsed.slug);
-    if (summary === null) {
-      throw new Error(
-        `No artwork found on Raster for slug "${parsed.slug}". ` +
-          'Check the URL — Raster artwork URLs are raster.art/artwork/{slug}.'
-      );
-    }
-    return { kind: 'series', summary };
-  }
-  if (parsed.kind === 'address') {
-    return resolveAddress(parsed.address, skipPrompt);
-  }
-  throw new Error(`Unsupported parse result: ${parsed.kind}`);
-}
-
 /**
- * resolveAddress turns a wallet address into a target: one work by the artist
- * Raster says owns the address, or the wallet's holdings when no artist claims
- * it.
- *
- * Raster being unavailable (unreachable, or refusing us as it has since its
- * API began requiring a key, feral-file#3612) falls back to the holdings
- * listing, which the token source answers without Raster by default. An
- * artist's address then yields what the wallet holds rather than the artist's
- * works: a narrower answer, but a playlist to display instead of an exit 1.
- *
- * @param address - Ethereum or Tezos address from the input
- * @param skipPrompt - true when --yes picks the first artwork unprompted
- * @returns The artist's chosen series, or the wallet target
+ * effectiveLimitFromOption returns the effective token cap for a wallet
+ * listing: the caller's --limit, never above the DP-1 maximum.
  */
-async function resolveAddress(address: string, skipPrompt: boolean): Promise<ResolvedTarget> {
-  let artist: Awaited<ReturnType<typeof resolveAddressToArtist>>;
-  try {
-    artist = await resolveAddressToArtist(address);
-  } catch (error) {
-    if (!isRasterUnavailable(error)) {
-      throw error;
-    }
-    console.log(chalk.yellow(`  ${(error as Error).message}`));
-    console.log(chalk.dim("  Continuing without Raster — listing the wallet's holdings."));
-    return { kind: 'wallet', address };
-  }
-  if (artist === null) {
-    return { kind: 'wallet', address };
-  }
-  let catalog: Awaited<ReturnType<typeof listArtistArtworks>>;
-  try {
-    catalog = await listArtistArtworks(artist.id);
-  } catch (error) {
-    if (!isRasterUnavailable(error)) {
-      throw error;
-    }
-    console.log(chalk.yellow(`  ${(error as Error).message}`));
-    console.log(chalk.dim("  Continuing without Raster — listing the wallet's holdings."));
-    return { kind: 'wallet', address };
-  }
-  if (catalog.length === 0) {
-    throw new Error('Artist has no artworks indexed on Raster.');
-  }
-  console.log(
-    chalk.dim(
-      'find on an address displays one work by the artist at that address. ' +
-        'For what the wallet owns, use build with a query_address requirement (ff-cli build --help).'
-    )
-  );
-  const picked = await pickFromCatalog(catalog, skipPrompt);
-  return {
-    kind: 'series',
-    summary: { artworkId: picked.artworkId, title: picked.title, artists: [artist] },
-    fallback: { kind: 'wallet', address },
-  };
-}
-
-/**
- * resolveRasterSlug looks up a raster.art artwork URL's slug. Only Raster
- * knows its own slugs, so there is no fallback; an unavailable Raster gets a
- * message that says so instead of a bare HTTP status.
- *
- * @param slug - The {slug} of raster.art/artwork/{slug}
- * @returns The artwork summary, or null when Raster has no such slug
- */
-async function resolveRasterSlug(slug: string): Promise<RasterArtworkSummary | null> {
-  try {
-    return await resolveSlugToArtwork(slug);
-  } catch (error) {
-    if (isRasterUnavailable(error)) {
-      throw new Error(
-        `raster.art links can only be resolved by Raster, which is not answering: ${(error as Error).message}`
-      );
-    }
-    throw error;
-  }
-}
-
-/**
- * resolverLimitFromOption returns the exact bound to give source-resolver
- * before any collection-like network fetch starts. The CLI still slices
- * locally in `runResolvedTarget`, but passing this value early keeps large
- * marketplace catalogs from being over-resolved when the user requested a
- * smaller playlist.
- */
-function resolverLimitFromOption(limitStr: string | undefined): number {
+function effectiveLimitFromOption(limitStr: string | undefined): number {
   return Math.min(parseLimitOption(limitStr), DP1_MAX_ITEMS);
-}
-
-/**
- * Resolve collection-like URLs through the source-resolver package when its
- * committed support goes beyond the synchronous parser marker. This keeps the
- * CLI aligned with the library without duplicating every marketplace API and
- * DOM extraction fallback locally.
- */
-async function resolveTokenListInput(
-  input: string,
-  limit: number,
-  fallbackTitle = 'Resolved source'
-): Promise<ResolvedTarget | null> {
-  const result = await resolveTokenInfos(input, { limit });
-  if (result.kind !== 'tokens') {
-    return null;
-  }
-  return {
-    kind: 'token-list',
-    title: result.title ?? fallbackTitle,
-    coords: result.coords,
-    hasMore: result.hasMore,
-  };
-}
-
-/**
- * Resolve on-chain coords to a target. If Raster doesn't index this token,
- * fall back to single-token mode so we still build something to display.
- *
- * Raster being unavailable gets the same fallback, whether unreachable (#97)
- * or refusing us (its API began requiring a key, feral-file#3612): it only
- * enriches the find (series enumeration, artist labels) — the coords in hand
- * are enough to build a single-token playlist to display, and one optional
- * dependency must not kill the whole command.
- */
-async function resolveCoords(coords: TokenCoords): Promise<ResolvedTarget> {
-  let summary: RasterArtworkSummary | null;
-  try {
-    summary = await resolveTokenToArtwork(coords.chain, coords.contract, coords.tokenId);
-  } catch (error) {
-    if (!isRasterUnavailable(error)) {
-      throw error;
-    }
-    console.log(chalk.yellow(`  ${(error as Error).message}`));
-    console.log(chalk.dim('  Continuing without Raster — building a one-item playlist.'));
-    return { kind: 'single', coords, rasterUnavailable: true };
-  }
-  if (summary === null) {
-    return { kind: 'single', coords, rasterUnavailable: false };
-  }
-  return { kind: 'series', summary, fallback: { kind: 'single', coords, rasterUnavailable: true } };
 }
 
 /**
@@ -632,8 +377,7 @@ function playlistTitleFor(
   items: Array<{ title?: string }>
 ): string {
   if (target.kind === 'series') {
-    const artistLabel = target.summary.artists.map((a) => a.name).join(', ') || 'Unknown artist';
-    return `${artistLabel} — ${target.summary.title}`;
+    return `${target.artist || 'Unknown artist'} — ${target.title}`;
   }
   if (target.kind === 'token-list') {
     return target.title;
@@ -642,22 +386,13 @@ function playlistTitleFor(
 }
 
 /**
- * resolveBuildTokens turns the tokens to build into results, one per token.
- *
- * When every token already carries its Raster row (a Raster series page) and
- * Raster is the token source, the rows are mapped directly: the page already
- * paid for every field, so asking again would double the requests. Any other
- * mix goes through the token source by coordinate.
+ * resolveBuildTokens turns the tokens to build into results, one per token,
+ * through the configured token source (one vendor per run).
  */
 async function resolveBuildTokens(
   source: TokenSource,
-  tokens: BuildToken[]
+  tokens: TokenCoords[]
 ): Promise<ResolvedToken[]> {
-  const rows = tokens.map((t) => t.rasterToken);
-  if (source.name === 'raster' && rows.every((row): row is RasterToken => row !== null)) {
-    const entries = tokens.map((t, i) => ({ token: rows[i], requested: coordinateOf(t) }));
-    return itemsFromRasterTokens(entries, getTokenSourceConfig().ipfsGateways);
-  }
   // Unconditional progress: the final N/N line IS the "resolution finished"
   // signal, including for a single-batch run.
   return source.resolveTokens(tokens.map(coordinateOf), {
@@ -668,7 +403,7 @@ async function resolveBuildTokens(
 }
 
 /** coordinateOf converts a find token to the token source's coordinate shape. */
-function coordinateOf(token: BuildToken): {
+function coordinateOf(token: TokenCoords): {
   chain: string;
   contractAddress: string;
   tokenId: string;
@@ -693,111 +428,6 @@ export function parseLimitOption(limitStr: string | undefined): number {
     );
   }
   return n;
-}
-
-/**
- * Enumerate series tokens from Raster up to `limit`. `hasMore` reports
- * whether the series continues past what was collected — the API exposes
- * no total counts, so this is all the size information the flow gets.
- */
-/**
- * fetchSeriesTokens enumerates a series, or returns null when Raster turned
- * unavailable mid-enumeration and the target carries a fallback to build
- * instead. Raster can answer the first lookup and refuse a later page (429 in
- * particular), and that must degrade the same way a refused first lookup does
- * (feral-file#3612). Without a fallback the error stands.
- *
- * @param target - The series target, with its optional fallback
- * @param limit - Effective token cap for the playlist
- * @returns The enumerated tokens, or null to build the fallback
- */
-async function fetchSeriesTokens(
-  target: Extract<ResolvedTarget, { kind: 'series' }>,
-  limit: number
-): Promise<{ tokens: BuildToken[]; hasMore: boolean } | null> {
-  try {
-    return await fetchTokens(target.summary, limit);
-  } catch (error) {
-    if (!isRasterUnavailable(error) || !target.fallback) {
-      throw error;
-    }
-    console.log(chalk.yellow(`  ${(error as Error).message}`));
-    console.log(chalk.dim('  Continuing without Raster — building from the input alone.'));
-    return null;
-  }
-}
-
-async function fetchTokens(
-  summary: RasterArtworkSummary,
-  limit: number
-): Promise<{ tokens: BuildToken[]; hasMore: boolean }> {
-  const collected: BuildToken[] = [];
-  let cursor: string | undefined;
-  let skipped = 0;
-  let hasMore = false;
-
-  for (;;) {
-    const page = await listArtworkTokens(summary.artworkId, {
-      cursor,
-      pageSize: RASTER_PAGE_SIZE,
-    });
-    skipped += page.skippedUnsupported;
-    for (const t of page.tokens) {
-      if (collected.length >= limit) {
-        hasMore = true;
-        break;
-      }
-      collected.push({
-        chain: t.chain,
-        contract: t.contractAddress,
-        tokenId: t.tokenId,
-        rasterToken: t.token,
-      });
-    }
-    if (hasMore || page.nextCursor === null) {
-      break;
-    }
-    if (collected.length >= limit) {
-      hasMore = true;
-      break;
-    }
-    cursor = page.nextCursor;
-  }
-
-  if (skipped > 0) {
-    console.log(
-      chalk.yellow(
-        `  Skipped ${skipped} token${skipped === 1 ? '' : 's'} on unsupported chains (ff-cli builds Ethereum and Tezos mainnet only).`
-      )
-    );
-  }
-
-  return { tokens: collected, hasMore };
-}
-
-async function pickFromCatalog(
-  catalog: RasterArtworkRow[],
-  skipPrompt: boolean
-): Promise<RasterArtworkRow> {
-  if (catalog.length === 1 || skipPrompt) {
-    return catalog[0];
-  }
-  console.log(chalk.cyan(`Found ${catalog.length} artworks for this artist:`));
-  catalog.forEach((row, i) => {
-    console.log(chalk.dim(`  ${i}: ${row.title}`));
-  });
-  console.log();
-  const prompt = createPrompt(FIND_NON_INTERACTIVE_HINT);
-  const answer = await prompt.ask(`Pick one (0-${catalog.length - 1}, default 0): `);
-  prompt.close();
-  console.log();
-  // Strict integer parse: Number.parseInt('5abc') silently returns 5; here we
-  // want '5abc' to be rejected outright. Same anti-pattern parseLimitOption fixes.
-  const index = answer ? Number(answer) : 0;
-  if (!Number.isInteger(index) || index < 0 || index >= catalog.length) {
-    throw new Error(`Invalid selection: "${answer}"`);
-  }
-  return catalog[index];
 }
 
 async function confirmMakePlaylist(count: number, hasMore: boolean): Promise<boolean> {
@@ -850,7 +480,7 @@ export async function decideActions(options: FindOptions): Promise<PostBuildActi
   return [await promptNextAction()];
 }
 
-export type { FindOptions, BuildToken, ResolvedTarget };
+export type { FindOptions, ResolvedTarget };
 
 /**
  * promptNextAction asks what to do with a saved playlist when no flag said so.

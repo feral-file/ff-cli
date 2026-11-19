@@ -153,3 +153,6 @@ playlist.json
 
 # Local workspace scratch or generated artifacts
 local/
+
+# ff-source-resolver-service client key, written at release (scripts/write-source-resolver-key.js)
+/src/generated/
