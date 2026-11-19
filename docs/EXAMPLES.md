@@ -318,6 +318,26 @@ npm run dev -- display "https://example.com/video.mp4"
 npm run dev -- display playlist.json --skip-verify
 ```
 
+### Keep a playlist for display with no network
+
+```bash
+# After displaying, keep the playlist on the device and wait until every item is held
+npm run dev -- download playlist.json -d "Living Room Display"
+
+# A playlist published to a feed: save it, then download the file (download takes a file, not a URL)
+npm run dev -- fetch <id-or-url> -o playlist.json
+npm run dev -- download playlist.json
+
+# Queue and return at once; run it again without --no-wait to check
+npm run dev -- download playlist.json --no-wait
+```
+
+Without `--no-wait`, `download` exits 0 only when every item is held with
+complete coverage, and 1 when an item failed, is incomplete, or was still
+downloading at `--timeout` (default 180 seconds). With `--no-wait` it exits 0
+as soon as the device has queued the playlist, before anything is known to be
+held.
+
 > **No feed server is required to cast.** A device can display any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli display "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply displaying your own playlists.
 
 ## Publish to Feed Server
