@@ -800,6 +800,44 @@ describe('find command — links only the service can read', () => {
     ]);
   });
 
+  test("a Verse series Raster does not index builds every work /tokens lists, not /work's representative", async () => {
+    const link = 'https://verse.works/series/mock-verse-series';
+    handler = (call) => {
+      if (call.path === '/work') {
+        // Raster has no series, so /work names the first edition alone.
+        return workCard({ work: { series: 'Mock Verse Series' } });
+      }
+      return {
+        body: {
+          title: 'Mock Verse Series',
+          items: ['1', '2'].map((tokenId) => ({
+            provenance: { contract: { chain: 'evm', address: VALID_ETH_CONTRACT, tokenId } },
+          })),
+        },
+      };
+    };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Mock Verse Series/);
+    assert.match(result.stdout, /Build playlist with 2 tokens\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
+  test('a Verse series /tokens cannot list falls back to the work /work named', async () => {
+    const link = 'https://verse.works/series/mock-verse-series';
+    handler = (call) =>
+      call.path === '/work'
+        ? workCard()
+        : {
+            status: 400,
+            body: { code: 'NOT_FOUND', message: 'Could not extract token information' },
+          };
+    const result = await runFind([link], { stdin: 'n\n' });
+    assert.equal(result.code, 0, result.stderr);
+    assert.match(result.stdout, /Build playlist with 1 token\?/);
+    assert.deepEqual(paths(), ['/work', '/tokens']);
+  });
+
   test('a collection holding one token builds that token alone, never its parent series', async () => {
     const link = `https://objkt.com/collections/${VALID_TEZOS_CONTRACT}`;
     handler = (call) => {

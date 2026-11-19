@@ -126,10 +126,45 @@ export async function resolveFindTarget(
     }
     return degradeOrFail(error as Error, local);
   }
-  return (
-    targetFromWork(work) ??
-    (local ? single(local, work.diag) : resolvePageTokens(input, parsed.kind))
-  );
+  const fromWork = targetFromWork(work);
+  if (isMembershipPage(input, parsed) && !namesWholeSeries(work)) {
+    return (await resolvePageTokens(input, parsed.kind)) ?? fromWork;
+  }
+  return fromWork ?? (local ? single(local, work.diag) : resolvePageTokens(input, parsed.kind));
+}
+
+/**
+ * isMembershipPage reports whether a link names a list of works whose exact
+ * membership the shared library enumerates: a Verse series, an objkt
+ * collection, a Feral File show or series. For these `/work` answers with one
+ * representative work, and that work's Raster series (when Raster has one) is
+ * not the page's list either, so membership is read from `/tokens`. A Verse
+ * link with `?itemId=` names one piece of the series and is not a list.
+ *
+ * @param input - The link as typed
+ * @param parsed - parseFindInput's reading of it
+ * @returns true when the page's own list is what the caller asked for
+ */
+function isMembershipPage(input: string, parsed: ParsedFindInput): boolean {
+  if (parsed.kind === 'verse-series') {
+    return !/[?&]itemId=/.test(input);
+  }
+  if (parsed.kind === 'ff-url') {
+    return parsed.urlKind === 'show' || parsed.urlKind === 'series';
+  }
+  return parsed.kind === 'objkt-collection';
+}
+
+/**
+ * namesWholeSeries reports whether `/work` said the link itself is a whole
+ * series it can list (`show: 'all'`): `/series` then holds exactly the
+ * page's works, so `/tokens` is not needed.
+ *
+ * @param result - The `/work` answer
+ * @returns true for a whole-series card with a slug
+ */
+function namesWholeSeries(result: WorkResult): boolean {
+  return result.work.show === 'all' && !!result.work.seriesSlug;
 }
 
 /**

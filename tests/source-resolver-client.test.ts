@@ -124,6 +124,35 @@ describe('serviceRequest error split', () => {
     );
   });
 
+  test('an error response whose body dies mid-stream is unavailability, whatever its status', async () => {
+    // A 400 "Unauthorized." envelope cut off in transit: the status alone
+    // would classify it as an input error and skip the degrade.
+    respondWith(() => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"kind":"error","code":"INVA'));
+          controller.error(new TypeError('terminated'));
+        },
+      });
+      return new Response(body, { status: 400, headers: { 'Content-Type': 'application/json' } });
+    });
+    await assert.rejects(
+      () => serviceRequest({ path: '/work' }),
+      (error: unknown) =>
+        isSourceResolverUnavailable(error) && /response body failed/.test((error as Error).message)
+    );
+  });
+
+  test('an error response whose body is complete but not JSON keeps its status', async () => {
+    respondWith(() => new Response('<html>bad request</html>', { status: 400 }));
+    await assert.rejects(
+      () => serviceRequest({ path: '/work' }),
+      (error: unknown) =>
+        !isSourceResolverUnavailable(error) &&
+        /^Feral File source resolver 400$/.test((error as Error).message)
+    );
+  });
+
   test('the service refusing the key (400 "Unauthorized.") is unavailability', async () => {
     respondWith(() =>
       json({ kind: 'error', code: 'INVALID_INPUT', message: 'Unauthorized.' }, 400)

@@ -269,8 +269,37 @@ export async function serviceRequest<T>(
   if (response.status === 404 && options.notFoundAsNull) {
     return null;
   }
-  // The envelope is best-effort context: a body that is not JSON must not
-  // mask the status, which alone decides the error type.
-  const body = (await response.json().catch(() => null)) as ServiceErrorBody | null;
-  throw failureFor(response.status, body);
+  throw failureFor(response.status, await readErrorEnvelope(response, url));
+}
+
+/**
+ * readErrorEnvelope reads an error response's envelope.
+ *
+ * A body that stalls or ends mid-stream is unavailability before it is
+ * anything else: a truncated 400 "Unauthorized." would otherwise be classed
+ * by its status as an input error and skip the degrade. A body that arrives
+ * whole but is not JSON is only missing context, and the status decides.
+ *
+ * @param response - The non-2xx response
+ * @param url - The request URL, for the message
+ * @returns The envelope, or null when the complete body is not JSON
+ * @throws SourceResolverUnavailableError when the body cannot be read
+ */
+async function readErrorEnvelope(
+  response: Response,
+  url: string
+): Promise<ServiceErrorBody | null> {
+  let text: string;
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw new SourceResolverUnavailableError(
+      `Feral File source resolver unreachable (${url}): response body failed: ${networkDetail(error)}`
+    );
+  }
+  try {
+    return JSON.parse(text) as ServiceErrorBody;
+  } catch {
+    return null;
+  }
 }
