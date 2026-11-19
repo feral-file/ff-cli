@@ -174,6 +174,88 @@ describe('relayer fallback', () => {
     assert.equal(relayerHttpFailure.transport, 'relayer');
     assert.match(relayerHttpFailure.error ?? '', /HTTP 503/);
   });
+
+  describe('relayer device-connection errors (ff-relayer 1003/1004)', () => {
+    // ff-relayer answers a topic cast with HTTP 400 and {error:{id}}: 1003 when
+    // no FF1 socket is on the topic, 1004 when the socket did not reply in 5 s
+    // (PortalRelayer.handleCast). Neither is about a key (ff-cli#125).
+    const relayerAnswer =
+      (status: number, body: unknown) => async (input: string | URL | Request) => {
+        if (isTestLanUrl(input)) {
+          throw new Error('fetch failed', { cause: { code: 'ENOTFOUND' } });
+        }
+        return new Response(JSON.stringify(body), {
+          status,
+          headers: { 'content-type': 'application/json' },
+        });
+      };
+
+    test('1003 says the FF1 is not on the relayer, not that a credential is wrong', async () => {
+      const result = await sendPlaylistToDevice(
+        { playlist },
+        {
+          fetchFn: relayerAnswer(400, { error: { id: 1003, message: 'not found' } }),
+          getTopicIdFn: () => 'topic-secret',
+          waitFn: async () => undefined,
+          noticeFn: () => undefined,
+        }
+      );
+
+      assert.equal(result.success, false);
+      assert.equal(result.transport, 'relayer');
+      assert.equal(result.error, 'FF1 "Office" is not connected to the relayer right now');
+      assert.match(result.details ?? '', /relayer error 1003/);
+      assert.match(result.details ?? '', /nothing was sent/);
+      assert.match(result.details ?? '', /not a key or credential problem/);
+      assert.match(result.details ?? '', /ff-cli device pair Office/);
+    });
+
+    test('1004 says the FF1 did not answer in time and may still have run the command', async () => {
+      const result = await sendPlaylistToDevice(
+        { playlist },
+        {
+          fetchFn: relayerAnswer(400, { error: { id: 1004, message: 'TV is not responding' } }),
+          getTopicIdFn: () => 'topic-secret',
+          waitFn: async () => undefined,
+          noticeFn: () => undefined,
+        }
+      );
+
+      assert.equal(result.success, false);
+      assert.equal(
+        result.error,
+        'FF1 "Office" did not answer through the relayer within 5 seconds'
+      );
+      assert.match(result.details ?? '', /relayer error 1004/);
+      assert.match(result.details ?? '', /may still have run/);
+    });
+
+    test('without a device label the message names the FF1 generically', async () => {
+      const result = await sendPlaylistViaRelayer({
+        baseUrl: 'https://relayer.example',
+        topicId: 'topic-secret',
+        playlist,
+        fetchFn: relayerAnswer(400, { error: { id: 1003, message: 'not found' } }),
+      });
+
+      assert.equal(result.error, 'The FF1 is not connected to the relayer right now');
+      assert.equal(result.relayerErrorId, 1003);
+      assert.match(result.details ?? '', /ff-cli device pair <name>/);
+    });
+
+    test('other relayer errors keep the HTTP status and raw body', async () => {
+      const result = await sendPlaylistViaRelayer({
+        baseUrl: 'https://relayer.example',
+        topicId: 'topic-secret',
+        playlist,
+        fetchFn: relayerAnswer(400, { error: { id: 1001, message: 'invalid data' } }),
+      });
+
+      assert.equal(result.error, 'FF1 relayer returned HTTP 400');
+      assert.equal(result.relayerErrorId, 1001);
+      assert.equal(result.details, '{"error":{"id":1001,"message":"invalid data"}}');
+    });
+  });
 });
 
 describe('relayer authentication failures', () => {

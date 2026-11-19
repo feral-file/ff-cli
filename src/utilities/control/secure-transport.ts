@@ -41,7 +41,7 @@ import * as logger from '../../logger';
 import { type FF1RelayerSettings, getFF1RelayerConfig } from '../../config';
 import type { FF1Device } from '../../types';
 import { getTopicId } from '../topic-store';
-import { sendCastViaRelayer } from '../ff1-relayer';
+import { RELAYER_NO_DEVICE_SOCKET, sendCastViaRelayer } from '../ff1-relayer';
 import {
   isConnectPhaseNetworkError,
   isTransientDeviceNetworkError,
@@ -155,6 +155,8 @@ export type SecureOutcome =
       unreachable?: boolean;
       /** HTTP status of the relayer's own non-2xx answer (see heldTopicGone). */
       relayerStatus?: number;
+      /** ff-relayer's numeric error id in that answer (see heldTopicGone). */
+      relayerErrorId?: number;
       /**
        * The LAN request hit its deadline: it may or may not have reached the
        * FF1, so only an idempotent request (the enroll poll) may treat it as
@@ -715,8 +717,6 @@ function noteV2Reply(
   }
 }
 
-/** RELAYER_NO_DEVICE_SOCKET is ff-relayer's `/api/cast` error id for "no device on this topic". */
-const RELAYER_NO_DEVICE_SOCKET = 1003;
 /** ff-relayer's 410 error strings for a retired legacy route. */
 const RELAYER_LEGACY_RETIRED = new Set(['legacy_controller_api_retired', 'legacy_api_retired']);
 
@@ -731,13 +731,20 @@ const RELAYER_LEGACY_RETIRED = new Set(['legacy_controller_api_retired', 'legacy
  * spoof its DNS could force it. A legacy host whose zone is removed answers
  * NXDOMAIN and so is never read as gone; a CLI release with the legacy
  * relayer off covers that case.
+ *
+ * The 1003 check reads the structured relayerErrorId, not details: details
+ * carries user copy for 1003 (ff1-relayer deviceConnectionFailure). The 410
+ * check still reads details, which stays the raw body for that answer.
  */
 function heldTopicGone(outcome: SecureOutcome): boolean {
   if (outcome.kind !== 'failed' || outcome.relayerStatus === undefined) {
     return false;
   }
-  if (outcome.relayerStatus === 404) {
+  if (outcome.relayerStatus === 404 || outcome.relayerErrorId === RELAYER_NO_DEVICE_SOCKET) {
     return true;
+  }
+  if (outcome.relayerStatus !== 410) {
+    return false;
   }
   let body: unknown;
   try {
@@ -746,14 +753,7 @@ function heldTopicGone(outcome: SecureOutcome): boolean {
     return false;
   }
   const error = (body as { error?: unknown } | null)?.error;
-  if (outcome.relayerStatus === 410) {
-    return typeof error === 'string' && RELAYER_LEGACY_RETIRED.has(error);
-  }
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    (error as { id?: unknown }).id === RELAYER_NO_DEVICE_SOCKET
-  );
+  return typeof error === 'string' && RELAYER_LEGACY_RETIRED.has(error);
 }
 
 /**
@@ -908,6 +908,7 @@ async function sendViaRelayer(
     ...relayer,
     topicId,
     body: envelopeCastBody(sealed.compact),
+    deviceLabel: request.device.name ?? request.device.id,
     fetchFn: deps.fetchFn,
   });
   if (!result.success) {
@@ -917,6 +918,7 @@ async function sendViaRelayer(
       details: result.details,
       transport: 'relayer',
       ...(result.status !== undefined ? { relayerStatus: result.status } : {}),
+      ...(result.relayerErrorId !== undefined ? { relayerErrorId: result.relayerErrorId } : {}),
     };
   }
   const answer = findEnvelopeAnswer(result.response);

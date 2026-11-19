@@ -439,6 +439,18 @@ need no additional key. Deployments that retain the cloud-edge compatibility
 gate may receive `ff1Relayer.apiKey` or `FF1_RELAYER_API_KEY`; ff-cli never
 bundles that shared key.
 
+Two relayer answers are about the FF1's connection, not about a key:
+
+- "FF1 "…" is not connected to the relayer right now" (relayer error 1003):
+  no connection from the FF1 is open on its topic, so nothing was sent. The
+  FF1 is off, offline, or still reconnecting (it does so by itself); try again
+  in a minute or run ff-cli on the FF1's network. If the FF1 was reset or set
+  up again since pairing, run `ff-cli device pair <name>`.
+- "FF1 "…" did not answer through the relayer within 5 seconds" (relayer error
+  1004): the command reached the FF1's relayer connection but no reply came in
+  time, often on a weak Wi-Fi link. It may still have run, so check the FF1
+  before running the command again.
+
 #### Relay v2
 
 Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
