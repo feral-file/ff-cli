@@ -580,6 +580,7 @@ async function fallbackToRelayer(input: {
     ...relayer,
     topicId,
     playlist: input.playlist,
+    deviceLabel: input.device.name ?? input.device.id,
     fetchFn: input.dependencies.fetchFn,
   });
   // A secured FF1 refuses a plaintext relayer cast it will not run

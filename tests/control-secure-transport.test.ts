@@ -527,6 +527,35 @@ describe('secure displayPlaylist', () => {
     assert.equal(device.seen.at(-1)!.ctr, 5);
   });
 
+  test('a topic with no FF1 on it (relayer 1003) and no relay v2 reads as not connected', async () => {
+    enrolledRecord('controller');
+    let relayed = 0;
+    const result = await sendPlaylistToDevice(
+      { playlist },
+      {
+        fetchFn: async (input) => {
+          if (new URL(input.toString()).origin === HOST) {
+            throw new Error('fetch failed', { cause: { code: 'EHOSTUNREACH' } });
+          }
+          relayed += 1;
+          return json(400, { error: { id: 1003, message: 'not found' } });
+        },
+        getTopicIdFn: () => 'topic-secret',
+        // No v2 endpoint: the dead topic is the last route.
+        getRelayerConfigFn: () => ({ baseUrl: 'https://relayer.example' }),
+        controllerStore: { dir: storeDir },
+        nowFn: () => NOW,
+        waitFn: async () => undefined,
+        noticeFn: () => undefined,
+      }
+    );
+    assert.equal(result.success, false);
+    assert.equal(result.transport, 'relayer');
+    assert.equal(relayed, 1);
+    assert.match(result.error!, /is not connected to the relayer right now/);
+    assert.match(result.details!, /not a key or credential problem/);
+  });
+
   test('a connection reset after the request was sent is never resent on any route', async () => {
     enrolledRecord('controller');
     const device = fakeDevice();
