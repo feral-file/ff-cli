@@ -567,7 +567,7 @@ async function waitForOwner(
           // owner, so say so instead of waiting silently.
           console.log(
             chalk.yellow(
-              `An owner added ff-cli to a different FF1 (${JSON.stringify(error.dev)}), not ${deviceLabel(device)} (${wantDev}). Still waiting for an answer for ${deviceLabel(device)}...`
+              `An owner added ff-cli to a different FF1 (${JSON.stringify(error.dev)}), not ${deviceLabel(device)} (${wantDev}). The saved device ID may be stale. Verify the ID in the app; if this is the intended FF1, stop this command and use device add with an explicit --id to correct the saved entry, then pair again. Still waiting for an answer for ${deviceLabel(device)}...`
             )
           );
         }
