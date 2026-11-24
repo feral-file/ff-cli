@@ -67,6 +67,17 @@ describe('display command', () => {
     assert.equal(runCli(['help', 'play']).stdout, display.stdout);
   });
 
+  test('display routes a capsule file through signer and option checks', () => {
+    const missingSigner = runCli(['display', 'work.dp1c']);
+    assert.equal(missingSigner.status, 1);
+    assert.match(missingSigner.stderr, /requires --signer/);
+    for (const flag of ['--web', '--skip-verify']) {
+      const rejected = runCli(['display', 'work.dp1c', flag]);
+      assert.equal(rejected.status, 1);
+      assert.match(rejected.stderr, /Capsule display does not accept/);
+    }
+  });
+
   test('play runs the display action', () => {
     const display = runCli(['display', WALLET]);
     const play = runCli(['play', WALLET]);

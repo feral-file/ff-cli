@@ -320,6 +320,18 @@ npm run dev -- display playlist.json --skip-verify
 
 > **No feed server is required to cast.** A device can display any static, signed DP-1 playlist hosted at a public URL — sign it (`sign`), upload the JSON anywhere that serves it over HTTPS (S3, Supabase Storage, a static host, etc.), then `ff-cli display "<url>"`. The DP-1 Feed server ([Publish to Feed Server](#publish-to-feed-server) below) adds discovery and curation, but is optional for simply displaying your own playlists.
 
+### Display a signed capsule
+
+```bash
+ff-cli display artwork.dp1c -d Office --signer 'did:key:z...'
+```
+
+Place the detached signature beside the archive as `artwork.dp1c.sig.json`
+and supply the expected signer DID. Use an owner-paired CLI on the FF1's LAN.
+The FF1 must support `displayCapsule` and have offline caching enabled. The
+archive limit is 1.5 MiB compressed. Controld validates the capsule and
+requests ordinary offline playback.
+
 ## Publish to Feed Server
 
 Publish validated playlists to a DP-1 feed server for sharing and discovery.

@@ -12,6 +12,7 @@ import {
   resolvePlaySource,
   type PlaySource,
 } from '../utilities/playlist-source';
+import { displayCapsule, isCapsuleFile } from '../utilities/capsule-cast';
 import { castPlaylist } from '../utilities/playlist-cast';
 import { validatePlaylist } from '../utilities/playlist-verifier';
 import {
@@ -164,8 +165,8 @@ async function resolveWebPageSource(source: string): Promise<PlaySource> {
 export const displayCommand = new Command('display')
   .alias('play')
   .configureHelp(hiddenAliasHelp)
-  .description('Display a playlist file, playlist URL, media URL, or web page on an FF1 device')
-  .argument('<source>', 'Playlist file, playlist URL, or any media or web page URL')
+  .description('Display a playlist, capsule file, media URL, or web page on an FF1 device')
+  .argument('<source>', 'Playlist file or URL, .dp1c capsule file, or media or web page URL')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
   .option(
     '--web',
@@ -175,9 +176,24 @@ export const displayCommand = new Command('display')
     '--skip-verify',
     'Skip signature verification and auto-sign gating before displaying; use only when you accept malformed envelopes'
   )
+  .option('--signer <did>', 'Expected signer for a local .dp1c capsule')
   .action(
-    async (source: string, options: { device?: string; skipVerify?: boolean; web?: boolean }) => {
+    async (
+      source: string,
+      options: { device?: string; skipVerify?: boolean; web?: boolean; signer?: string }
+    ) => {
       try {
+        if (isCapsuleFile(source)) {
+          if (options.web || options.skipVerify) {
+            throw new Error('Capsule display does not accept --web or --skip-verify.');
+          }
+          const device = await displayCapsule(source, options.signer, options.device);
+          console.log(chalk.green(`✓ Capsule accepted by ${device.name || device.host}`));
+          return;
+        }
+        if (options.signer !== undefined) {
+          throw new Error('--signer requires a local .dp1c capsule file.');
+        }
         const resolved = options.web
           ? await resolveWebPageSource(source)
           : await resolveDefaultSource(source, options.device);
