@@ -26,6 +26,10 @@
  * than polled through the relay. Both commands are controller tier on the
  * device, so a "Can display" grant is enough.
  *
+ * `--displayed` (downloadDisplayed) is the one input that needs no file: the
+ * device names the work by the source it actually queues, in its reply, and
+ * the wait follows that exact source, so it obeys the rule below.
+ *
  * The command exits 0 only for what it checked, so it takes only a playlist
  * whose items it can name exactly: a local file with a `source` on every
  * item, no inline (`data:`) source and no dynamic query. The device stores an
@@ -323,6 +327,146 @@ async function runDownload(
   }
   const waited = await waitForItems(target, source.tracked, params, overrides);
   return { ...waited, ...counts, ...base };
+}
+
+/** DownloadDisplayedParams are the inputs of one `download --displayed` run. */
+export interface DownloadDisplayedParams {
+  deviceName?: string;
+  /** Position in the FF1's list; defaults to the work on screen. */
+  index?: number;
+  wait: boolean;
+  timeoutSeconds?: number;
+  onItemState?: (item: DownloadItemReport) => void;
+}
+
+/**
+ * downloadDisplayed asks an FF1 to keep a work it is displaying, including
+ * one this CLI did not send (feral-file/feral-file#3633). It needs no
+ * playlist file:
+ *
+ * 1. `checkStatus` reads the list the FF1 is showing and its position.
+ * 2. `downloadPlaylistItem { displayed: { index, id } }` names the work by
+ *    position. The FF1 checks the id against that position, so a display that
+ *    changed in between queues nothing, and it answers with the work's
+ *    source.
+ * 3. The wait follows that one source, like `downloadPlaylist`.
+ *
+ * A work with no DP-1 id is refused. Without the id the FF1 cannot tell a
+ * changed display from the one read here, and could keep a different work.
+ * Use a playlist file for such a work. An inline (`data:`) work is not
+ * reported as held, for the same reason the file path refuses it.
+ *
+ * @param {DownloadDisplayedParams} params - Device, position and wait settings
+ * @param {DownloadDependencies} [overrides] - Test seams
+ * @returns {Promise<DownloadResult>} Result object; never throws
+ */
+export async function downloadDisplayed(
+  params: DownloadDisplayedParams,
+  overrides: DownloadDependencies = {}
+): Promise<DownloadResult> {
+  try {
+    const target = resolveTarget(params.deviceName, overrides);
+    if ('failure' in target) {
+      return { success: false, waited: false, ...target.failure };
+    }
+    const base = { device: target.device.host, deviceName: target.label };
+    const fail = (error: string, details?: string): DownloadResult => ({
+      success: false,
+      waited: false,
+      error,
+      details,
+      ...base,
+    });
+
+    const status = await sendDeviceCommand(target, 'checkStatus', {});
+    if ('failure' in status) {
+      // The shared copy speaks of the download command; this was the read.
+      // The device's own sentence and its follow-up (pairing, clock, network)
+      // are kept: they are the only next step the user gets.
+      return fail(
+        `Could not read what ${target.label} is displaying: ${status.failure.error}`,
+        status.failure.details
+      );
+    }
+    const items = Array.isArray(status.body.items) ? (status.body.items as unknown[]) : undefined;
+    const index = params.index ?? numberField(status.body.index);
+    if (!items || items.length === 0 || index === undefined) {
+      return fail(`${target.label} is not displaying a playlist.`);
+    }
+    if (!Number.isInteger(index) || index < 0 || index >= items.length) {
+      return fail(
+        `${target.label} shows ${items.length} works; there is no work at --index ${index}.`
+      );
+    }
+    const work = items[index];
+    const title = itemLabel(work, index);
+    // The device refuses an item it has no source for in the same words as a
+    // changed display; catching it here keeps "run it again" honest.
+    if (!sourceOf(work)) {
+      return fail(`${title} has no source on ${target.label}, so there is nothing to keep.`);
+    }
+    const id = (work as { id?: unknown } | null)?.id;
+    if (typeof id !== 'string' || !id) {
+      return fail(
+        `${title} has no id, so the FF1 cannot confirm it is still the work on screen.`,
+        'Save the playlist to a file and run "ff-cli download <file>" instead.'
+      );
+    }
+
+    const kept = await sendDeviceCommand(target, 'downloadPlaylistItem', {
+      displayed: { index, id },
+    });
+    if ('failure' in kept) {
+      return fail(...describeDisplayedFailure(kept.failure, target.label));
+    }
+    const source = typeof kept.body.source === 'string' ? kept.body.source : '';
+    if (kept.body.status === 'not_queued_inline') {
+      return fail(
+        `${title} is an inline work: its bytes travel with it, and the FF1 reports nothing about what it loads, so it is not reported as held.`
+      );
+    }
+    if (!source) {
+      return fail(`${target.label} queued ${title} but did not say which source it keeps.`);
+    }
+    if (!params.wait) {
+      return { success: true, waited: false, total: 1, queuedCount: 1, ...base };
+    }
+    const waited = await waitForItems(target, [{ title, source }], params, overrides);
+    return { ...waited, total: 1, ...base };
+  } catch (error) {
+    return { success: false, waited: false, error: redactUrls((error as Error).message) };
+  }
+}
+
+/**
+ * describeDisplayedFailure turns the two answers that mean something
+ * specific to `--displayed` into their own copy:
+ * - `not_found`: the work is no longer where the status said.
+ * - `invalid_request` with "source is required": an FF OS that predates the
+ *   selector, read as a plain downloadPlaylistItem with no source.
+ * Everything else keeps the shared offline-cache copy.
+ *
+ * @param failure - Device failure
+ * @param label - Device name
+ * @returns Error and details
+ */
+function describeDisplayedFailure(failure: DeviceFailure, label: string): [string, string?] {
+  const details = failure.details ?? '';
+  // Both device paths answer not_found when the work is no longer where the
+  // status put it: "not on display" (an inline cast) and "source not found in
+  // playlist" (a URL cast whose live document no longer holds it).
+  if (/not on display|not found in playlist/i.test(details)) {
+    return [
+      `${label} moved on to another work before it could keep this one. Run the command again.`,
+    ];
+  }
+  if (/source is required/i.test(details)) {
+    return [
+      `${label} cannot keep a work it is displaying: its FF OS is too old.`,
+      'Update the FF1, or save the playlist to a file and run "ff-cli download <file>".',
+    ];
+  }
+  return [failure.error, failure.details];
 }
 
 /**
@@ -714,7 +858,11 @@ async function sendOnRoute(
     const reply = target.record
       ? await sendSecurely(target, target.record, command, request)
       : await sendPlaintext(target, command, request);
-    return 'failure' in reply ? reply : interpretBody(reply.body, target.label);
+    // Unwrapped on both routes: a command the router forwards to the player
+    // (checkStatus) answers with the player's `{ message: { ok, ... } }`
+    // envelope on the secure route too, where `res` is that reply as is.
+    // The offline-cache handlers answer bare, so this leaves them unchanged.
+    return 'failure' in reply ? reply : interpretBody(unwrapCastBody(reply.body), target.label);
   } catch (error) {
     logger.debug(`${command} failed: ${(error as Error).message}`);
     return {
@@ -758,7 +906,9 @@ async function sendSecurely(
       cmd: command,
       req: request,
       relayerFallback: false,
-      retry: command === 'downloadPlaylist',
+      // downloadPlaylistItem is idempotent on the device (an already queued
+      // source is not queued twice), so it may use the retry budget too.
+      retry: command === 'downloadPlaylist' || command === 'downloadPlaylistItem',
     },
     { ...target.secureDeps, fetchFn: target.fetchFn as typeof fetch }
   );
@@ -947,7 +1097,7 @@ function offlineErrorHeadline(code: string, label: string): string {
 async function waitForItems(
   target: DeviceTarget,
   tracked: TrackedItem[],
-  params: DownloadParams,
+  params: Pick<DownloadParams, 'timeoutSeconds' | 'onItemState'>,
   overrides: DownloadDependencies
 ): Promise<DownloadResult> {
   const clockMsFn = overrides.clockMsFn ?? Date.now;

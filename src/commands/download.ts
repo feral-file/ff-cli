@@ -4,6 +4,7 @@ import {
   DEFAULT_DOWNLOAD_TIMEOUT_SECONDS,
   type DownloadItemReport,
   type DownloadResult,
+  downloadDisplayed,
   downloadPlaylist,
 } from '../utilities/offline-download';
 
@@ -23,6 +24,24 @@ export function parseTimeoutSeconds(value?: string): number {
     throw new Error(`--timeout takes a positive whole number of seconds; got "${value}".`);
   }
   return seconds;
+}
+
+/**
+ * parseIndex reads `--index` as a zero-based position in the FF1's list.
+ *
+ * @param {string} [value] - The option as typed
+ * @returns {number | undefined} The index, or undefined for the work on screen
+ * @throws {Error} When the value is not a whole number of zero or more
+ */
+export function parseIndex(value?: string): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const index = Number(value);
+  if (!Number.isInteger(index) || index < 0) {
+    throw new Error(`--index takes a whole number of zero or more; got "${value}".`);
+  }
+  return index;
 }
 
 /**
@@ -95,48 +114,84 @@ function printFailure(result: DownloadResult): void {
  * item is held with complete coverage (or, with `--no-wait`, when the FF1
  * queued the playlist), 1 for anything else, including a timeout.
  *
- * It takes a playlist file only; offline-download.ts says why a URL or a
- * dynamic playlist is refused.
+ * It takes a playlist file, or `--displayed` for a work the FF1 is showing,
+ * including one this CLI did not send. offline-download.ts says why a URL or a
+ * dynamic playlist is refused, and why `--displayed` refuses a work with no id.
  */
 export const downloadCommand = new Command('download')
-  .description('Keep a playlist on an FF1 device so it displays with no network')
-  .argument('<file>', 'Playlist file')
+  .description('Keep a playlist, or the work on display, on an FF1 so it displays with no network')
+  .argument('[file]', 'Playlist file (omit with --displayed)')
   .option('-d, --device <name>', 'Device name (uses first device if not specified)')
+  .option('--displayed', 'Keep the work the FF1 is displaying instead of a playlist file')
+  .option(
+    '--index <n>',
+    "With --displayed: the position in the FF1's list (default: the work on screen)"
+  )
   .option('--no-wait', 'Queue the download and exit without waiting for the items')
   .option(
     '--timeout <seconds>',
     `Seconds to wait for every item (default ${DEFAULT_DOWNLOAD_TIMEOUT_SECONDS})`
   )
-  .action(async (file: string, options: { device?: string; wait: boolean; timeout?: string }) => {
-    try {
-      const timeoutSeconds = parseTimeoutSeconds(options.timeout);
-      console.log(chalk.blue('\nDownload to FF1\n'));
-      const result = await downloadPlaylist({
-        source: file,
-        deviceName: options.device,
-        wait: options.wait,
-        timeoutSeconds,
-        onItemState: (item) => console.log(chalk.dim(`  ${item.state}: ${item.title}`)),
-      });
-      if (!result.success) {
-        printFailure(result);
+  .action(
+    async (
+      file: string | undefined,
+      options: {
+        device?: string;
+        displayed?: boolean;
+        index?: string;
+        wait: boolean;
+        timeout?: string;
+      }
+    ) => {
+      try {
+        const timeoutSeconds = parseTimeoutSeconds(options.timeout);
+        if (options.displayed ? file !== undefined : file === undefined) {
+          throw new Error(
+            'Give a playlist file, or --displayed for the work on display, not both.'
+          );
+        }
+        if (options.index !== undefined && !options.displayed) {
+          throw new Error('--index works only with --displayed.');
+        }
+        const index = parseIndex(options.index);
+        console.log(chalk.blue('\nDownload to FF1\n'));
+        const onItemState = (item: DownloadItemReport) =>
+          console.log(chalk.dim(`  ${item.state}: ${item.title}`));
+        const result = options.displayed
+          ? await downloadDisplayed({
+              deviceName: options.device,
+              index,
+              wait: options.wait,
+              timeoutSeconds,
+              onItemState,
+            })
+          : await downloadPlaylist({
+              source: file as string,
+              deviceName: options.device,
+              wait: options.wait,
+              timeoutSeconds,
+              onItemState,
+            });
+        if (!result.success) {
+          printFailure(result);
+          process.exit(1);
+        }
+        if (!result.waited) {
+          printQueued(result);
+          return;
+        }
+        const items = result.items ?? [];
+        console.log();
+        printItems(items);
+        console.log(
+          chalk.green(
+            `\n✓ ${items.length} of ${items.length} items held on ${result.deviceName}; they display with no network`
+          )
+        );
+        console.log();
+      } catch (error) {
+        console.error(chalk.red('\nError:'), (error as Error).message);
         process.exit(1);
       }
-      if (!result.waited) {
-        printQueued(result);
-        return;
-      }
-      const items = result.items ?? [];
-      console.log();
-      printItems(items);
-      console.log(
-        chalk.green(
-          `\n✓ ${items.length} of ${items.length} items held on ${result.deviceName}; they display with no network`
-        )
-      );
-      console.log();
-    } catch (error) {
-      console.error(chalk.red('\nError:'), (error as Error).message);
-      process.exit(1);
     }
-  });
+  );
