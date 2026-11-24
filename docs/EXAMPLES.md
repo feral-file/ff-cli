@@ -330,6 +330,9 @@ npm run dev -- download playlist.json
 
 # Queue and return at once; run it again without --no-wait to check
 npm run dev -- download playlist.json --no-wait
+
+# Keep the work the FF1 is displaying, with no playlist file (even one another phone sent)
+npm run dev -- download --displayed -d "Living Room Display"
 ```
 
 Without `--no-wait`, `download` exits 0 only when every item is held with

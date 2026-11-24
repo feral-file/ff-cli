@@ -133,6 +133,7 @@ Both paths run the same deterministic pipeline: fetch metadata, assemble a DP-1 
   - By default it waits until every item is held, printing one line per item (title, state, bytes, and whether coverage is complete), then a summary
   - When it waits (the default), it exits 0 only when every item is `ready` with complete coverage, and 1 when any item failed, is held incompletely, was not queued by the device, or was still downloading at the timeout; the message counts each. With `--no-wait` it prints the queued count and exits 0 once the device has queued the playlist: that exit 0 says nothing about what is held
   - Options: `-d, --device <name>`, `--no-wait` (queue and exit), `--timeout <seconds>` (default 180)
+  - `download --displayed [--index <n>]` keeps the work the FF1 is displaying, with no playlist file. This includes a work another phone or the default playlist put there. It reads the FF1's list (`checkStatus`), names the work on screen (or the one at `--index`, zero-based) by its position and DP-1 id, and waits for it like a file download. A work with no id is refused, because without one the FF1 cannot confirm the display did not change in between. So is an inline `data:` work. It needs FF OS with the `displayed` selector (ffos-user#483); an older FF OS answers that it is too old
   - Runs over the local network only. With secure control a controller ("Can display") grant is enough. A device with offline display turned off answers that it cannot keep works
 - `find <input>` – Resolve a marketplace URL, raw `chain:contract:tokenId`, or wallet address into a DP-1 playlist ready to display
   - Sources: Art Blocks, Objkt, fxhash, OpenSea, SuperRare, Feral File, Neort, Verse, raw on-chain coordinates, and wallet addresses
@@ -321,6 +322,12 @@ ff-cli download playlist.json --no-wait
 
 # Allow a large playlist ten minutes
 ff-cli download playlist.json --timeout 600
+
+# Keep the work on display, even one this computer did not send
+ff-cli download --displayed -d "Living Room Display"
+
+# The third work in the FF1's list instead (zero-based)
+ff-cli download --displayed --index 2
 ```
 
 Without `--no-wait`, `download` exits 0 only when every item is held with

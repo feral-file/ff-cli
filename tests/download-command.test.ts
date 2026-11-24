@@ -17,6 +17,7 @@ import { parsePrivateJwk } from '../src/utilities/control/jwk';
 import { type ControllerRecord, saveController } from '../src/utilities/control/controller-store';
 import {
   type DownloadDependencies,
+  downloadDisplayed,
   downloadPlaylist,
   loadDownloadSource,
   redactReason,
@@ -1012,5 +1013,47 @@ describe('download: command output', () => {
       }),
       '  ✗ Work 2: partial, 900 bytes, coverage incomplete (fetch_failed:https://cdn.example/x)'
     );
+  });
+});
+
+// `--displayed` on the secure route (feral-file/feral-file#3633): checkStatus is
+// forwarded to the player, so its `res` is the player's `{ message: {...} }`
+// envelope, while the offline-cache answers are bare.
+describe('download --displayed: secure control', () => {
+  test('reads the nested checkStatus reply, keeps the work by index and id, and waits on its source', async () => {
+    const { d, device, cleanup } = secureDeps((claims) => {
+      switch (claims.cmd) {
+        case 'checkStatus':
+          return {
+            ok: true as const,
+            res: {
+              message: {
+                ok: true,
+                castCommand: 'displayPlaylist',
+                index: 0,
+                items: [{ id: 'id-a', title: 'Work A', source: A }],
+              },
+            },
+          };
+        case 'downloadPlaylistItem':
+          return { ok: true as const, res: { ok: true, status: 'queued', source: A } };
+        default:
+          return READY_A;
+      }
+    }, playlistOf(A));
+    try {
+      const result = await downloadDisplayed({ wait: true }, d);
+      assert.equal(result.success, true, result.error);
+      assert.deepEqual(
+        device.seen.map((claims) => [claims.cmd, claims.req]),
+        [
+          ['checkStatus', {}],
+          ['downloadPlaylistItem', { displayed: { index: 0, id: 'id-a' } }],
+          ['getOfflineCacheStatus', { sources: [A] }],
+        ]
+      );
+    } finally {
+      cleanup();
+    }
   });
 });
