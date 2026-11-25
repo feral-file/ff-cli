@@ -10,7 +10,7 @@ import { after, before, describe, test } from 'node:test';
 const projectRoot = resolve(__dirname, '..');
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
-const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const fixturePath = join(__dirname, 'fixtures/playlists/unsigned-draft-open-v11.json');
 
 function runCli(
   cwd: string,

@@ -31,7 +31,7 @@ import { replacePlaylist } from '../src/utilities/playlist-publisher';
 import { signPlaylist, signPlaylistFile } from '../src/utilities/playlist-signer';
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
-const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const fixturePath = join(__dirname, 'fixtures/playlists/unsigned-draft-open-v11.json');
 
 const projectRoot = resolve(__dirname, '..');
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim limitations in spawnSync.

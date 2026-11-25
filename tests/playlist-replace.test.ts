@@ -21,7 +21,7 @@ import { replacePlaylist } from '../src/utilities/playlist-publisher';
 import { signPlaylist } from '../src/utilities/playlist-signer';
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
-const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const fixturePath = join(__dirname, 'fixtures/playlists/unsigned-draft-open-v11.json');
 
 function makeTempDir(): string {
   return mkdtempSync(join(tmpdir(), 'ff1-replace-'));
