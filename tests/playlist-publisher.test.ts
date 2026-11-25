@@ -109,7 +109,7 @@ describe('publishPlaylist validation contract', () => {
       const result = await publishPlaylist(path, `http://127.0.0.1:${port}`);
 
       assert.equal(result.success, false);
-      assert.match(result.error ?? '', /signature verification failed/i);
+      assert.match(result.error ?? '', /validation failed/i);
     } finally {
       server.close();
       rmSync(dir, { recursive: true, force: true });
