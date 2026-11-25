@@ -247,7 +247,7 @@ describe('resolvePlaySource', () => {
     });
 
     assert.equal(result.valid, false);
-    assert.match(result.error ?? '', /items/i);
+    assert.match(JSON.stringify(result.details ?? []), /items/i);
   });
 });
 
