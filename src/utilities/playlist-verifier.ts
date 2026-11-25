@@ -36,6 +36,7 @@ export async function verifyPlaylist(
   details?: Array<{ path: string; message: string }>;
 }> {
   try {
+    // Verification needs signatures, so the default (signatures required) applies.
     const result = await parseDp1Playlist(playlist);
 
     if (result && 'error' in result && result.error) {
@@ -109,7 +110,12 @@ export async function validatePlaylist(playlist: unknown): Promise<{
   details?: Array<{ path: string; message: string }>;
 }> {
   try {
-    const result = await parseDp1Playlist(playlist);
+    // dp1-js 2.7.0 schema-validates parse helpers and requires signatures by
+    // default; structure-only validation must opt out so unsigned drafts keep
+    // passing `validate` and can be promoted by `sign`.
+    const result = await parseDp1Playlist(withoutEmptySignatures(playlist), {
+      requireSignatures: false,
+    });
 
     if (result && 'error' in result && result.error) {
       return {
@@ -128,15 +134,45 @@ export async function validatePlaylist(playlist: unknown): Promise<{
   }
 }
 
-async function parseDp1Playlist(playlist: unknown): Promise<{
+/**
+ * withoutEmptySignatures returns a shallow copy of the playlist without an empty
+ * `signatures` array. dp1-js 2.7.0 enforces the schema's `minItems: 1` on that
+ * member even when signatures are optional, but an empty array is how an
+ * unsigned draft reaches `sign`; structure-only validation must keep treating it
+ * as unsigned. `verifyPlaylist` does not use this, so an empty array still fails
+ * verification as the schema requires.
+ */
+export function withoutEmptySignatures(playlist: unknown): unknown {
+  if (
+    playlist &&
+    typeof playlist === 'object' &&
+    Array.isArray((playlist as { signatures?: unknown }).signatures) &&
+    (playlist as { signatures: unknown[] }).signatures.length === 0
+  ) {
+    const { signatures: _empty, ...rest } = playlist as Record<string, unknown>;
+    return rest;
+  }
+  return playlist;
+}
+
+async function parseDp1Playlist(
+  playlist: unknown,
+  options?: { requireSignatures?: boolean }
+): Promise<{
   error?: { message: string; details?: Array<{ path: string; message: string }> };
 }> {
   const module = (await loadDp1()) as {
-    parseDP1Playlist?: (input: unknown) => {
+    parseDP1Playlist?: (
+      input: unknown,
+      options?: { requireSignatures?: boolean }
+    ) => {
       error?: { message: string; details?: Array<{ path: string; message: string }> };
     };
     default?: {
-      parseDP1Playlist?: (input: unknown) => {
+      parseDP1Playlist?: (
+        input: unknown,
+        options?: { requireSignatures?: boolean }
+      ) => {
         error?: { message: string; details?: Array<{ path: string; message: string }> };
       };
     };
@@ -147,7 +183,7 @@ async function parseDp1Playlist(playlist: unknown): Promise<{
     throw new Error('dp1-js does not expose parseDP1Playlist');
   }
 
-  return parseFn(playlist);
+  return parseFn(playlist, options);
 }
 
 /**

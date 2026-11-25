@@ -25,7 +25,7 @@
   "defaults": {
     "display": {
       "scaling": "fit",
-      "background": "#111",
+      "background": "#111111",
       "margin": 0
     },
     "license": "token",

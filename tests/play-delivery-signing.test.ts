@@ -111,7 +111,7 @@ describe('display delivery signing contract', () => {
     const result = await runCli(dir, ['display', playlistPath]);
 
     assert.notEqual(result.status, 0);
-    assert.match(result.stdout + result.stderr, /Playlist signature verification failed/i);
+    assert.match(result.stdout + result.stderr, /must have required property 'signatures'/);
     assert.doesNotMatch(result.stdout + result.stderr, /Could not reach device/i);
   });
 
