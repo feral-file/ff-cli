@@ -572,6 +572,15 @@ describe('download: what it takes', () => {
     assert.equal(d.casts.length, 0);
   });
 
+  test('an unsigned playlist is refused: the schema requires a signature', async () => {
+    const unsigned = { ...playlistOf(A), signatures: undefined } as unknown as Playlist;
+    const d = deps(() => QUEUED, unsigned);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /is not a valid DP-1 playlist/);
+    assert.equal(d.casts.length, 0);
+  });
+
   test('a member with an unrelated name in any letter case is not refused', async () => {
     const d = deps(
       () => QUEUED,

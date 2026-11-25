@@ -55,7 +55,6 @@ import * as logger from '../logger';
 import { resolveConfiguredDevice } from './ff1-compatibility';
 import { publicControlCode } from './ff1-device';
 import { type LoadedPlaylist, isPlaylistSourceUrl, loadPlaylistSource } from './playlist-source';
-import { validatePlaylist } from './playlist-verifier';
 import type { FF1Device, FF1DeviceConfig } from '../types';
 import type { ControllerRecord, ControllerStoreOptions } from './control/controller-store';
 import { describeControlCode } from './control/control-errors';
@@ -528,27 +527,37 @@ export async function loadDownloadSource(
 }
 
 /**
- * refuseNonConformant runs the DP-1 schema check on the playlist before it is
- * sent. `dp1_call` hands the document to the FF1 verbatim, so a document that
- * fails the schema (or carries no signature) would otherwise only be refused
- * by the device after the request. This is the parse-only path: it does not
- * verify signatures, which stay the device's job. Unlike `display`, `download`
- * has no `--skip-verify` escape hatch, so the check is unconditional.
+ * refuseNonConformant runs the full DP-1 schema check, signatures required,
+ * on the playlist before it is sent. `dp1_call` hands the document to the FF1
+ * verbatim, so a document that fails the schema or carries no signature would
+ * otherwise only be refused by the device after the request.
+ *
+ * It calls dp1-js `ValidatePlaylist` and not `validatePlaylist` from
+ * playlist-verifier: that wrapper goes through dp1-js `parseDP1Playlist`,
+ * which only checks the top-level shape (string `dpVersion` and `title`,
+ * array `items`, string item `source`) and accepts an unsigned document. Do
+ * not swap it back. Signatures are required to be present, not verified:
+ * cryptographic verification stays the device's job. Unlike `display`,
+ * `download` has no `--skip-verify` escape hatch, so the check is unconditional.
  *
  * @param source - Playlist path, for the message
  * @param playlist - Parsed playlist
  * @throws {Error} When the document does not satisfy the DP-1 playlist schema
  */
 async function refuseNonConformant(source: string, playlist: unknown): Promise<void> {
-  const result = await validatePlaylist(playlist);
-  if (result.valid) {
-    return;
+  const { ValidatePlaylist } = await import('dp1-js');
+  try {
+    ValidatePlaylist(playlist as never, { requireSignatures: true });
+  } catch (error) {
+    const raw = (error as { details?: Array<{ path?: unknown; message?: unknown }> }).details;
+    const details = (Array.isArray(raw) ? raw : [])
+      .map((d) => `  • ${String(d?.path || '/')}: ${String(d?.message || 'validation failed')}`)
+      .join('\n');
+    throw refusal(
+      `${source} is not a valid DP-1 playlist: ${(error as Error).message}${details ? `\n${details}` : ''}`,
+      'Fix the document, or sign it with ff-cli sign if it only lacks a signature.'
+    );
   }
-  const details = (result.details ?? []).map((d) => `  • ${d.path}: ${d.message}`).join('\n');
-  throw refusal(
-    `${source} is not a valid DP-1 playlist: ${result.error}${details ? `\n${details}` : ''}`,
-    'Fix the document (ff-cli validate <file> shows the same errors), or sign it with ff-cli sign.'
-  );
 }
 
 /**
