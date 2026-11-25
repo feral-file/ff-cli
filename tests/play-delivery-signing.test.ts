@@ -235,6 +235,17 @@ describe('display delivery signing contract', () => {
     assert.doesNotMatch(out, /Cannot read properties|This playlist is unsigned|ff-cli sign/);
   });
 
+  test('sign keeps the validation diagnosis for a null JSON playlist', async () => {
+    const playlistPath = join(dir, 'null-sign.json');
+    writeFileSync(playlistPath, 'null');
+
+    const result = await runCli(dir, ['sign', '--', playlistPath]);
+    const out = result.stdout + result.stderr;
+    assert.equal(result.status, 1, out);
+    assert.match(out, /Playlist validation failed/);
+    assert.doesNotMatch(out, /Cannot read properties/);
+  });
+
   test('uses the resolved environment key for the hint, but ignores an unset template key', async () => {
     const isolatedDir = mkdtempSync(join(tmpdir(), 'ff-cli-play-sign-hint-'));
     try {

@@ -578,7 +578,10 @@ async function validatePlaylistForSigning(playlist) {
   // Signing starts from an unsigned document, and dp1-js 2.7.0 requires signatures by default.
   // An empty signatures[] marks an unsigned draft, which the schema's minItems rejects.
   const draft =
-    Array.isArray(playlist.signatures) && playlist.signatures.length === 0
+    playlist &&
+    typeof playlist === 'object' &&
+    Array.isArray(playlist.signatures) &&
+    playlist.signatures.length === 0
       ? Object.fromEntries(Object.entries(playlist).filter(([key]) => key !== 'signatures'))
       : playlist;
   const result = parseFn(draft, { requireSignatures: false });
