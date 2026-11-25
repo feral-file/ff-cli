@@ -26,18 +26,58 @@ import {
 import type { FF1Device, Playlist } from '../src/types';
 import { type FakeAnswer, FakeFF1, type Jwk } from './helpers/control-device';
 
+import sample from '../examples/sample-playlist-v11.json';
+
+const sampleSignatures = sample.signatures;
 const HOST = 'http://10.0.0.2:1111';
 const kitchen: FF1Device = { name: 'Kitchen', host: HOST };
 
 const A = 'https://cdn.example/a/index.html';
 const B = 'https://cdn.example/b.mp4';
 
+/**
+ * playlistOf builds a playlist that satisfies the DP-1 schema (download runs the
+ * parse-only check before sending). The signature is borrowed from a checked-in
+ * example: parsing checks its shape, not its validity, and download leaves
+ * verification to the device.
+ */
 function playlistOf(...sources: string[]): Playlist {
   return {
     dpVersion: '1.1.0',
-    id: 'p1',
+    id: 'd2d4f9b0-7f01-4c26-9c10-1c4d7477f5de',
     title: 'Two works',
-    items: sources.map((source, index) => ({ title: `Work ${index + 1}`, source })),
+    created: '2026-02-06T00:00:00.000Z',
+    items: sources.map((source, index) => ({
+      id: `ad5de50a-6a0d-4b61-8ef9-7b0f0d1d5e9${index % 10}`,
+      title: `Work ${index + 1}`,
+      source,
+      duration: 10,
+      license: 'open',
+      created: '2026-02-06T00:00:00.000Z',
+    })),
+    signatures: sampleSignatures,
+  } as unknown as Playlist;
+}
+
+/**
+ * conformant fills in what the DP-1 schema requires around a minimal test
+ * document, leaving every field the test sets (and its odd casing) untouched.
+ */
+function conformant(doc: Record<string, unknown>): Playlist {
+  const items = (doc.items as Record<string, unknown>[]).map((it, i) => ({
+    id: `ad5de50a-6a0d-4b61-8ef9-7b0f0d1d5e9${i % 10}`,
+    duration: 10,
+    license: 'open',
+    created: '2026-02-06T00:00:00.000Z',
+    ...it,
+  }));
+  return {
+    id: 'd2d4f9b0-7f01-4c26-9c10-1c4d7477f5de',
+    title: 'Test',
+    created: '2026-02-06T00:00:00.000Z',
+    signatures: sampleSignatures,
+    ...doc,
+    items,
   } as unknown as Playlist;
 }
 
@@ -523,35 +563,50 @@ describe('download: what it takes', () => {
     });
   }
 
+  test('a document that fails the DP-1 schema is refused before anything is sent', async () => {
+    const bad = { ...playlistOf(A), title: 7 } as unknown as Playlist;
+    const d = deps(() => QUEUED, bad);
+    const result = await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
+    assert.equal(result.success, false);
+    assert.match(result.error ?? '', /is not a valid DP-1 playlist/);
+    assert.equal(d.casts.length, 0);
+  });
+
   test('a member with an unrelated name in any letter case is not refused', async () => {
-    const d = deps(() => QUEUED, {
-      dpVersion: '1.1.0',
-      Note: 'x',
-      items: [{ title: 'A', source: A, Artist: 'someone', display: { Scaling: 'fit' } }],
-    } as unknown as Playlist);
+    const d = deps(
+      () => QUEUED,
+      conformant({
+        dpVersion: '1.1.0',
+        Note: 'x',
+        items: [{ title: 'A', source: A, Artist: 'someone', display: { Scaling: 'fit' } }],
+      })
+    );
     await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
     assert.equal(d.casts.length, 1);
   });
 
   test('a series edition named by tokenId is downloaded like any other item', async () => {
-    const d = deps(() => QUEUED, {
-      dpVersion: '1.1.0',
-      items: [
-        {
-          title: 'Edition',
-          source: A,
-          provenance: {
-            type: 'seriesRegistry',
-            contract: { chain: 'evm', seriesId: 12, tokenId: '12000007' },
+    const d = deps(
+      () => QUEUED,
+      conformant({
+        dpVersion: '1.1.0',
+        items: [
+          {
+            title: 'Edition',
+            source: A,
+            provenance: {
+              type: 'seriesRegistry',
+              contract: { chain: 'evm', seriesId: 12, tokenId: '12000007' },
+            },
           },
-        },
-        {
-          title: 'Token',
-          source: B,
-          provenance: { type: 'onChain', contract: { chain: 'evm', tokenId: '5' } },
-        },
-      ],
-    } as unknown as Playlist);
+          {
+            title: 'Token',
+            source: B,
+            provenance: { type: 'onChain', contract: { chain: 'evm', tokenId: '5' } },
+          },
+        ],
+      })
+    );
     await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
     assert.equal(d.casts.length, 1);
   });
@@ -644,7 +699,7 @@ describe('download: nothing secret reaches the terminal', () => {
   });
 
   test('an untitled item, a device reason, and a device error are redacted; requests are exact', async () => {
-    const playlist = { dpVersion: '1.1.0', items: [{ source: SIGNED }] } as unknown as Playlist;
+    const playlist = conformant({ dpVersion: '1.1.0', items: [{ source: SIGNED }] });
     const seen: string[] = [];
     const d = deps(
       (cast) =>

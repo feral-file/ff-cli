@@ -29,8 +29,8 @@ type RunResult = { status: number | null; stdout: string; stderr: string };
 const playlistFixtures = {
   validSignedV10: 'valid-signed-v10.json',
   validSignedV11: 'valid-signed-v11.json',
-  validUnsignedV10: 'valid-unsigned-v10.json',
-  validUnsignedOpenV11: 'valid-unsigned-open-v11.json',
+  validUnsignedV10: 'unsigned-draft-v10.json',
+  validUnsignedOpenV11: 'unsigned-draft-open-v11.json',
   invalidMissingTitleV10: 'invalid-missing-title-v10.json',
   invalidDisplayAndSourceV10: 'invalid-display-and-source-v10.json',
   invalidMissingItems: 'invalid-playlist-missing-items.json',

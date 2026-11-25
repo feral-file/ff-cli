@@ -33,7 +33,7 @@ import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 const projectRoot = resolve(__dirname, '..');
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
-const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const fixturePath = join(__dirname, 'fixtures/playlists/unsigned-draft-open-v11.json');
 
 /** An Ed25519 key in every encoding the signing paths accept, all of one key. */
 interface TestKey {

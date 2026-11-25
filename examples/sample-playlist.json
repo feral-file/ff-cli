@@ -48,5 +48,15 @@
     "license": "token",
     "duration": 10
   },
-  "slug": "sample-nft-collection"
+  "slug": "sample-nft-collection",
+  "signatures": [
+    {
+      "alg": "ed25519",
+      "kid": "did:key:z6MkjWmRcAznrfJG5VGMztx42KFLib1PQjaE91ZgovjPMQE4",
+      "ts": "2026-11-25T07:36:38Z",
+      "payload_hash": "sha256:3c8bf8a070dde8958a7313cd5ca7e6e3536a5208e69ae36a2e40ab42a81ce51d",
+      "role": "curator",
+      "sig": "BKtqKzGM_NNXpDrLvQiESJ_GldgmbXh1T5FETplg7Do_ws_ZDibNKMSuuAD8_V1noJ1OmM04lb4i5l44wvfqDA"
+    }
+  ]
 }

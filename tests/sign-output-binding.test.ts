@@ -29,7 +29,7 @@ import { join } from 'node:path';
 import { signPlaylist, signPlaylistFile } from '../src/utilities/playlist-signer';
 import { playlistSigningDidKey } from '../src/utilities/signing-identity';
 
-const fixturePath = join(__dirname, 'fixtures/playlists/valid-unsigned-open-v11.json');
+const fixturePath = join(__dirname, 'fixtures/playlists/unsigned-draft-open-v11.json');
 const isWindows = process.platform === 'win32';
 
 function makeTempDir(): string {
