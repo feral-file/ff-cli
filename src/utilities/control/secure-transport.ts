@@ -17,7 +17,7 @@
  * - The relayer is used only after LAN reachability is exhausted, never after
  *   an HTTP or protocol answer, exactly like the legacy fallback. With a
  *   configured v2 endpoint, or for an FF1 whose verified status advertised
- *   relay v2, the v2 device channel is tried first; the legacy topic follows
+ *   relay v2, the FF1's keyed v2 channel is tried first; the legacy topic follows
  *   only when v2 proves the command undelivered (§10). One exception: a
  *   registration enroll tries a topic held from before the pairing first,
  *   and moves on only on the relayer's 1003, 410 or 404 (sendOnce). And an
@@ -74,6 +74,7 @@ import {
   unpairCommand,
   unverifiedReplyFailure,
 } from './control-errors';
+import { thumbprint } from './jwk';
 
 const RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 750;
@@ -108,7 +109,7 @@ export interface SecureTransportDeps {
    */
   v2TimeoutMs?: number;
   /** Creates the relay v2 client; tests drive replies through a fake. */
-  relayClientFn?: (endpoint: string, deviceId: string) => V2Client;
+  relayClientFn?: (endpoint: string, channelId: string) => V2Client;
 }
 
 /** V2Client is the part of RelayClient that sendViaV2 uses. */
@@ -181,7 +182,7 @@ function resolveDeps(deps: SecureTransportDeps): ResolvedDeps {
     controllerStore: deps.controllerStore ?? {},
     v2TimeoutMs: deps.v2TimeoutMs,
     relayClientFn:
-      deps.relayClientFn ?? ((endpoint, deviceId) => new RelayClient(endpoint, deviceId)),
+      deps.relayClientFn ?? ((endpoint, channelId) => new RelayClient(endpoint, channelId)),
   };
 }
 
@@ -580,7 +581,7 @@ async function fallbackOrUnreachable(
     const relay = deps.getRelayerConfigFn();
     v2Endpoint = relay.v2Endpoint;
     // A derived endpoint is used only for an FF1 whose verified status
-    // advertised relay v2; otherwise a stranger's ACK on the device channel
+    // advertised relay v2; otherwise a stranger's ACK on the keyed channel
     // could strand a command the topic would have delivered (config.ts).
     // The flag changes only with a verified status or a verified v2 reply
     // (noteV2Reply), never on a failed send: one ambiguous v2 failure must
@@ -762,11 +763,14 @@ function heldTopicGone(outcome: SecureOutcome): boolean {
  * An enroll goes there only without `inv` and only when the profile was
  * pinned from an owner's verified §5.6 registration result (record.registration):
  * that result is sealed under `ps`, so the profile is the owner's verified view
- * of the FF1, and a stranger on the public device channel cannot answer under
+ * of the FF1, and a stranger on the keyed channel cannot answer under
  * it. Such an enroll is tried on v2 even before any status has advertised
  * relayV2, since a newcomer has never read one; an ambiguous outcome is safe
  * because enroll is idempotent (§5.3). A first-owner enroll with `inv` never
- * goes over v2 (the FF1 refuses it there, §5.1).
+ * goes over v2. That is ff-cli's own rule, not the FF1's: the FF1 admits it
+ * there (§5.1), but ff-cli is not a first-owner client (it has no path that
+ * reads the profile off the claim QR), so it keeps the invitation off the
+ * relay.
  */
 function v2Allowed(request: SecureRequest, record: ControllerRecord, explicit: boolean): boolean {
   if (request.op === 'cmd') {
@@ -776,8 +780,11 @@ function v2Allowed(request: SecureRequest, record: ControllerRecord, explicit: b
 }
 
 /**
- * sendViaV2 carries one freshly sealed command on the relay v2 device channel
- * (§10). The relay client fans the first envelope out and accepts only a reply
+ * sendViaV2 carries one freshly sealed command on the FF1's keyed relay v2
+ * channel (§10): thumb(devSig) of the pinned profile, the only channel ff-cli
+ * dials for envelopes. The device ID is not a channel here and there is no
+ * fallback to it; an FF1 on firmware that does not dial the keyed channel is
+ * reached on the LAN only. The relay client fans the first envelope out and accepts only a reply
  * that verifies under the pinned profile, so neither a stranger's reply nor a
  * receipt can answer it. It is not followed by a status probe: notifications
  * are not consumed here, and a probe would cost a ctr and a round trip.
@@ -794,7 +801,7 @@ async function sendViaV2(
 ): Promise<SecureOutcome> {
   let client: V2Client;
   try {
-    client = deps.relayClientFn(endpoint, record.profile.dev);
+    client = deps.relayClientFn(endpoint, thumbprint(record.profile.sig));
   } catch (error) {
     return { kind: 'failed', unreachable: true, error: (error as Error).message };
   }

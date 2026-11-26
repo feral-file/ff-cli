@@ -61,6 +61,24 @@ function replaceRetiredFeedUrl(url: string): string {
   return replaced;
 }
 
+/**
+ * DEFAULT_REMOTE_CONFIG_URL is the base of the remote config document
+ * (`<base>/ff-app.json`) that the Feral File app reads for its forced update.
+ * ff-cli reads one key of it, `cli_update.required_version`
+ * (utilities/required-version.ts).
+ */
+const DEFAULT_REMOTE_CONFIG_URL = 'https://ff-app-docs.pages.dev';
+
+/**
+ * getRemoteConfigUrl returns the remote config base URL: REMOTE_CONFIG_URL
+ * (the app's name for the same setting) when set, otherwise the default. The
+ * override exists so tests and a staging document never touch production; it
+ * is deliberately not a config.json key.
+ */
+export function getRemoteConfigUrl(): string {
+  return process.env.REMOTE_CONFIG_URL || DEFAULT_REMOTE_CONFIG_URL;
+}
+
 export function getConfigPaths(): { localPath: string; userPath: string } {
   const localPath = path.join(process.cwd(), 'config.json');
   const configBase = process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config');
@@ -532,7 +550,7 @@ function normalizeIpfsGateway(value: string, label: string): string {
  * configured.
  *
  * The derived default is only a pairing default for commands: during the
- * rollout most FF1s are not on v2, and a stranger's ACK on the device channel
+ * rollout most FF1s are not on v2, and a stranger's ACK on the FF1's v2 channel
  * would turn a command that the legacy topic could have delivered into an
  * ambiguous one. secure-transport therefore sends commands on a derived
  * endpoint only to an FF1 that advertised `relayV2` in a verified status.

@@ -82,7 +82,7 @@ const tick = () => new Promise((resolve) => setImmediate(resolve));
 const genuine = async (value: Record<string, unknown>) =>
   (value.message as { genuine?: boolean }).genuine === true;
 
-test('routes by device ID and rejects credential-bearing endpoints', () => {
+test('routes by channel ID and rejects credential-bearing endpoints', () => {
   assert.equal(
     relayURL('https://relay.example', 'FF1-TEST'),
     'wss://relay.example/v2/channels/FF1-TEST/connections'
@@ -93,6 +93,9 @@ test('routes by device ID and rejects credential-bearing endpoints', () => {
     'https://relay.example/api/connection',
   ]) {
     assert.throws(() => relayURL(endpoint, 'FF1-TEST'));
+  }
+  for (const channel of ['', 'a/b', 'a b', 'x'.repeat(129)]) {
+    assert.throws(() => relayURL('https://relay.example', channel), /Invalid channel ID/);
   }
 });
 

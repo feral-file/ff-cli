@@ -78,6 +78,7 @@ function deviceConnectionFailure(
         'This is not a key or credential problem: the relayer route needs no key. ' +
         'Check that the FF1 is on and online; it reconnects to the relayer by itself, so try again in a minute, ' +
         "or run ff-cli on the FF1's own network. " +
+        'An FF1 on older FF OS is not on the relay channel this ff-cli uses: update it, or reach it on its own network. ' +
         `If the FF1 was reset or set up again since pairing, run \`${pair}\`.`,
     };
   }

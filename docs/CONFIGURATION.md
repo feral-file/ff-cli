@@ -304,6 +304,44 @@ FF_SOURCE_RESOLVER_API_KEY=your-client-key
 SOURCE_RESOLVER_URL=https://ff-source-resolver-service.feral-file.workers.dev
 ```
 
+## Required version
+
+Commands that contact an FF1 check that this ff-cli is still supported:
+`display`, `download`, `ssh`, `report`, and `device pair`, `controllers`,
+`revoke`, `lan`, `unpair` and `add`. Commands that work on files, feeds or
+config.json only (`validate`, `sign`, `build`, `find`, `publish`, `status`,
+`setup`, `device list`, …) are never checked.
+
+When the installed version is below the required one, the command prints
+
+```
+ff-cli <installed> is no longer supported. Update: npm i -g @feralfile/cli
+```
+
+on stderr and exits with status 1 before it does anything, on the FF1's own
+network too. Scripts and agents see the non-zero exit.
+
+How the required version is read:
+
+- It is `cli_update.required_version` in the remote config document the Feral
+  File app also reads, `<base>/ff-app.json`. The base is
+  `https://ff-app-docs.pages.dev`; `REMOTE_CONFIG_URL` in the environment
+  replaces it (there is no config.json key).
+- ff-cli tries to read it at most once a day, failed attempts included, with
+  a 2 second limit, and keeps the result in `required-version.json` next to
+  the user config (`~/.config/ff-cli/`, or `$XDG_CONFIG_HOME/ff-cli/`). The
+  kept value applies until the next read, so the check costs no network on
+  most commands.
+- A read that succeeds always replaces the kept value. A document with no
+  such key, or a value that is not a plain `major.minor.patch`, means no
+  required version.
+- When nothing has been read yet, or the read failed and nothing is kept, or
+  the installed version is not a plain `major.minor.patch` (a beta), the
+  command runs.
+
+This is a compatibility check, not a security control: it tells an install
+that can no longer talk to current FF1 software to update.
+
 ## ff1Devices
 
 Configure devices you want to display art on.
@@ -453,9 +491,15 @@ Two relayer answers are about the FF1's connection, not about a key:
 
 #### Relay v2
 
-Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
-carries only sealed envelopes: a reply counts only when it verifies under the
-FF1 profile pinned at pairing. `device pair` uses it for its pairing channel.
+Relay v2 routes by channel instead of a topic. ff-cli reaches a paired FF1 on
+its keyed channel only: the channel ID is the thumbprint of the FF1's signing
+key from the profile pinned at pairing, never the device ID. The relay
+authenticates no one, so the channel carries only sealed envelopes and a reply
+counts only when it verifies under that pinned profile. An FF1 on firmware
+that does not join the keyed channel has no relay v2 route from ff-cli; it is
+still reached on the LAN, and it joins once it has taken its update.
+`device pair` uses relay v2 for its pairing channel, which is a separate,
+one-time channel.
 
 With the default relayer, the v2 endpoint is the production relay v2 Worker,
 `wss://relayer.feralfile.io`, which keeps working after the legacy relayer is
@@ -499,7 +543,7 @@ the topic relayer.
   credential vault cannot be read, whether a topic is held is unknown, so the
   enroll uses the LAN only, never relay v2. Relay v2 lets a
   controller be added remotely: the FF1 profile comes from the owner's sealed
-  pairing result, so a reply on the public device channel has to verify under
+  pairing result, so a reply on the keyed channel has to verify under
   it. A first-owner enroll with a screen invitation never uses relay v2.
 - A command that reaches the relayer topic only to hear that the topic leads
   nowhere (the same 1003, 410 or 404) also tries relay v2, even before a
