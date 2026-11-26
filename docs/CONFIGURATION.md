@@ -453,9 +453,15 @@ Two relayer answers are about the FF1's connection, not about a key:
 
 #### Relay v2
 
-Relay v2 routes by FF1 device ID instead of a topic, on a public channel that
-carries only sealed envelopes: a reply counts only when it verifies under the
-FF1 profile pinned at pairing. `device pair` uses it for its pairing channel.
+Relay v2 routes by channel instead of a topic. ff-cli reaches a paired FF1 on
+its keyed channel only: the channel ID is the thumbprint of the FF1's signing
+key from the profile pinned at pairing, never the device ID. The relay
+authenticates no one, so the channel carries only sealed envelopes and a reply
+counts only when it verifies under that pinned profile. An FF1 on firmware
+that does not join the keyed channel has no relay v2 route from ff-cli; it is
+still reached on the LAN, and it joins once it has taken its update.
+`device pair` uses relay v2 for its pairing channel, which is a separate,
+one-time channel.
 
 With the default relayer, the v2 endpoint is the production relay v2 Worker,
 `wss://relayer.feralfile.io`, which keeps working after the legacy relayer is
@@ -499,7 +505,7 @@ the topic relayer.
   credential vault cannot be read, whether a topic is held is unknown, so the
   enroll uses the LAN only, never relay v2. Relay v2 lets a
   controller be added remotely: the FF1 profile comes from the owner's sealed
-  pairing result, so a reply on the public device channel has to verify under
+  pairing result, so a reply on the keyed channel has to verify under
   it. A first-owner enroll with a screen invitation never uses relay v2.
 - A command that reaches the relayer topic only to hear that the topic leads
   nowhere (the same 1003, 410 or 404) also tries relay v2, even before a

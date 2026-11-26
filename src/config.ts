@@ -532,7 +532,7 @@ function normalizeIpfsGateway(value: string, label: string): string {
  * configured.
  *
  * The derived default is only a pairing default for commands: during the
- * rollout most FF1s are not on v2, and a stranger's ACK on the device channel
+ * rollout most FF1s are not on v2, and a stranger's ACK on the FF1's v2 channel
  * would turn a command that the legacy topic could have delivered into an
  * ambiguous one. secure-transport therefore sends commands on a derived
  * endpoint only to an FF1 that advertised `relayV2` in a verified status.

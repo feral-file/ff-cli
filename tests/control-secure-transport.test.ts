@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { encodeRelayFrame } from '../src/utilities/relay-client';
 import { sendSecureRequest } from '../src/utilities/control/secure-transport';
 import { parseProfile } from '../src/utilities/control/codec';
-import { parsePrivateJwk, publicOf } from '../src/utilities/control/jwk';
+import { parsePrivateJwk, publicOf, thumbprint } from '../src/utilities/control/jwk';
 import {
   type ControllerRecord,
   controllerFilePath,
@@ -974,16 +974,18 @@ describe('secure generic carrier integration', () => {
   type Mode = 'verified' | 'empty-channel' | 'never-admitted' | 'lost-command-reply' | 'no-receipt';
 
   /**
-   * carrierSocket is a relay with a stranger and the FF1 on the device
+   * carrierSocket is a relay with a stranger and the FF1 on the keyed
    * channel. The stranger ACKs everything and answers with a forgery.
    */
-  function carrierSocket(device: FakeFF1, mode: Mode, sent: string[]) {
+  function carrierSocket(device: FakeFF1, mode: Mode, sent: string[], channel: string) {
     return class Socket extends EventTarget {
       binaryType = '';
       constructor(url: string, protocol: string) {
         super();
         assert.equal(protocol, 'ff-relay.v2');
-        assert.match(url, /\/v2\/channels\//);
+        // The keyed channel only: thumb(devSig) of the pinned profile, never
+        // the device ID (no fallback dial).
+        assert.equal(url, `wss://v2.test/v2/channels/${channel}/connections`);
         queueMicrotask(() => {
           if (mode === 'never-admitted') {
             this.dispatchEvent(new Event('error'));
@@ -1067,7 +1069,15 @@ describe('secure generic carrier integration', () => {
     const previous = globalThis.WebSocket;
     const sent: string[] = [];
     let legacyCalls = 0;
-    globalThis.WebSocket = carrierSocket(device, mode, sent) as unknown as typeof WebSocket;
+    const channel = thumbprint(record.profile.sig);
+    assert.equal(channel.length, 43);
+    assert.notEqual(channel, DEVICE_ID);
+    globalThis.WebSocket = carrierSocket(
+      device,
+      mode,
+      sent,
+      channel
+    ) as unknown as typeof WebSocket;
     try {
       const outcome = await sendSecureRequest(
         shape.enroll

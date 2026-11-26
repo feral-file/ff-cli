@@ -12,8 +12,8 @@ const CHUNK_SIZE = 32768;
 const RECEIPT_TIMEOUT_MS = 5000;
 /**
  * FANOUT_GRACE_MS is how long a fan-out frame keeps waiting for the other
- * peers once one peer has acknowledged it. A silent stranger on the public
- * channel then costs about a second per chunk, not the whole receipt timeout.
+ * peers once one peer has acknowledged it. A silent stranger on the
+ * channel (the relay authenticates no one) then costs about a second per chunk, not the whole receipt timeout.
  */
 const FANOUT_GRACE_MS = 1000;
 /**
@@ -109,10 +109,14 @@ export class RelayAmbiguousError extends Error {
   }
 }
 
-/** relayURL selects the public device channel without credentials. */
-export function relayURL(baseUrl: string, deviceId: string): string {
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(deviceId)) {
-    throw new Error('Invalid device ID');
+/**
+ * relayURL is the relay v2 connection URL of one channel, without
+ * credentials. The channel ID is the caller's: thumb(devSig) for an FF1's
+ * envelope channel (RelayClient), a random ID for a pairing channel.
+ */
+export function relayURL(baseUrl: string, channelId: string): string {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(channelId)) {
+    throw new Error('Invalid channel ID');
   }
   const url = new URL(baseUrl);
   if (
@@ -126,7 +130,7 @@ export function relayURL(baseUrl: string, deviceId: string): string {
     throw new Error('Invalid relayer endpoint');
   }
   url.protocol = ['https:', 'wss:'].includes(url.protocol) ? 'wss:' : 'ws:';
-  url.pathname = `/v2/channels/${deviceId}/connections`;
+  url.pathname = `/v2/channels/${channelId}/connections`;
   return url.toString();
 }
 
@@ -167,6 +171,10 @@ export function decodeRelayFrame(frame: ArrayBuffer): { header: Header; payload:
 /**
  * RelayClient carries protected JSON commands over relay v2 (§10).
  *
+ * It connects to the FF1's keyed channel, thumb(devSig) of the pinned
+ * profile, which the caller passes as `channelId`. The device ID is never a
+ * channel here: anyone can derive it, and there is no fallback to it.
+ *
  * The first send of a request fans out to `to:"peers"`, and the client pins
  * the peer whose reply the caller's validator accepts (the reply verifies
  * under the enrolled profile). Peers that join later, or that the relay
@@ -199,7 +207,7 @@ export class RelayClient {
   /** Create a controller connection; requests wait for the relay's hello. */
   constructor(
     baseUrl: string,
-    deviceId: string,
+    channelId: string,
     private readonly socketFactory = (url: string) => new WebSocket(url, 'ff-relay.v2')
   ) {
     this.ready = new Promise((resolve, reject) => {
@@ -208,7 +216,7 @@ export class RelayClient {
     // Connection errors may precede the first request; retain rejection without
     // producing an unhandled promise while the caller prepares its command.
     void this.ready.catch(() => undefined);
-    this.url = relayURL(baseUrl, deviceId);
+    this.url = relayURL(baseUrl, channelId);
     this.connect(0);
   }
 
@@ -600,8 +608,8 @@ export class RelayClient {
 
   /**
    * verifyReply settles a request with a reply its validator accepts, and
-   * pins that peer. An unverified reply settles nothing: on the public
-   * channel a forgery costs availability only.
+   * pins that peer. An unverified reply settles nothing: on the
+   * unauthenticated channel a forgery costs availability only.
    */
   private verifyReply(from: string, message: Record<string, unknown>): void {
     // messageID comes from an untrusted frame and selects a validator, so it
