@@ -135,6 +135,38 @@ export async function validatePlaylist(playlist: unknown): Promise<{
 }
 
 /**
+ * checkReceivedPlaylist holds a document this CLI takes in whole to the DP-1
+ * playlist schema its fields require, signatures required. It returns one line
+ * per failure, or null when the document conforms.
+ *
+ * The check goes through dp1-js `parseDP1Playlist` and not `ValidatePlaylist`:
+ * the latter is the core schema only, which leaves extension members (such as
+ * `visibility` or an item's `contentRating`) unchecked. `parseDP1Playlist`
+ * adds the extension schemas for the fields the document carries.
+ *
+ * Unlike {@link validatePlaylist} it does not treat an empty `signatures` array
+ * as an unsigned draft: a draft is not a finished document. Signatures are
+ * checked for presence and shape, not verified.
+ *
+ * @param playlist - Parsed document
+ * @returns The failure lines (`path: message`), or null
+ */
+export async function checkReceivedPlaylist(
+  playlist: unknown
+): Promise<{ message: string; details: string[] } | null> {
+  const { error } = await parseDp1Playlist(playlist, { requireSignatures: true });
+  if (!error) {
+    return null;
+  }
+  return {
+    message: error.message,
+    details: (error.details ?? []).map(
+      (detail) => `${detail.path || '/'}: ${detail.message || 'validation failed'}`
+    ),
+  };
+}
+
+/**
  * withoutEmptySignatures returns a shallow copy of the playlist without an empty
  * `signatures` array. dp1-js 2.7.0 enforces the schema's `minItems: 1` on that
  * member even when signatures are optional, but an empty array is how an
