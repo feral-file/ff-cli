@@ -572,6 +572,25 @@ describe('download: what it takes', () => {
     assert.equal(d.casts.length, 0);
   });
 
+  // The core schema leaves extension members open, so each of these passes it. The schema the
+  // document's fields require does not.
+  for (const [name, bad] of [
+    ['a playlists-extension member', { ...playlistOf(A), visibility: 5 }],
+    [
+      'a content-rating item member',
+      { ...playlistOf(A), items: [{ ...playlistOf(A).items![0], contentRating: 5 }] },
+    ],
+  ] as const) {
+    test(`${name} of the wrong type is refused before anything is sent`, async () => {
+      const d = deps(() => QUEUED, bad as unknown as Playlist);
+      const result = await downloadPlaylist({ source: 'playlist.json', wait: false }, d);
+      assert.equal(result.success, false);
+      assert.match(result.error ?? '', /is not a valid DP-1 playlist/);
+      assert.match(result.error ?? '', /visibility|contentRating/);
+      assert.equal(d.casts.length, 0);
+    });
+  }
+
   test('an unsigned playlist is refused: the schema requires a signature', async () => {
     const unsigned = { ...playlistOf(A), signatures: undefined } as unknown as Playlist;
     const d = deps(() => QUEUED, unsigned);

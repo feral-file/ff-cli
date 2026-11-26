@@ -19,6 +19,9 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 const projectRoot = resolve(__dirname, '..');
+const CONFORMANT = JSON.parse(
+  readFileSync(resolve(projectRoot, 'examples/sample-playlist-v11.json'), 'utf-8')
+) as Record<string, unknown>;
 // Spawn node directly with tsx's JS entry to avoid Windows .cmd shim limitations in spawnSync.
 const tsxCli = resolve(projectRoot, 'node_modules/tsx/dist/cli.mjs');
 const cliEntry = resolve(projectRoot, 'index.ts');
@@ -34,8 +37,11 @@ const STORED = {
   signatures: [{ alg: 'ed25519', kid: 'did:key:z6MkTestOwnerKey', role: 'curator' }],
 };
 
-/** Start a loopback feed that serves STORED on GET, or 404s when `found` is false. */
-async function startFeed(found = true): Promise<{ baseUrl: string; close: () => void }> {
+/** Start a loopback feed that serves `document` on GET, or 404s when `found` is false. */
+async function startFeed(
+  found = true,
+  document: unknown = STORED
+): Promise<{ baseUrl: string; close: () => void }> {
   const server: Server = createServer((req, res) => {
     req.resume();
     req.on('end', () => {
@@ -45,7 +51,7 @@ async function startFeed(found = true): Promise<{ baseUrl: string; close: () => 
         return;
       }
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(STORED));
+      res.end(JSON.stringify(document));
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -170,6 +176,50 @@ describe('ff-cli fetch', () => {
       assert.throws(() => readFileSync(join(run.dir, 'playlist.json'), 'utf-8'));
       // Nothing may reach stdout on failure, or a redirect would capture a truncated file.
       assert.equal(run.stdout, '');
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('says nothing about the schema when the served document satisfies it', async () => {
+    const feed = await startFeed(true, CONFORMANT);
+    const run = await runCli(feed.baseUrl, ['fetch', 'sample', '-o', 'playlist.json']);
+    try {
+      assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+      // Not /Warning/ alone: Node prints its own deprecation warnings on stderr.
+      assert.doesNotMatch(run.stderr, /not a valid DP-1 playlist/);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('saves a non-conformant document as served and names what fails', async () => {
+    // Refusing would leave no way to get the file that has to be repaired. `visibility: 5` passes the
+    // core schema, so this also pins that the check follows the fields the document carries.
+    const bad = { ...CONFORMANT, visibility: 5 };
+    const feed = await startFeed(true, bad);
+    const run = await runCli(feed.baseUrl, ['fetch', 'sample', '-o', 'playlist.json']);
+    try {
+      assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+      assert.deepEqual(JSON.parse(readFileSync(join(run.dir, 'playlist.json'), 'utf-8')), bad);
+      assert.match(run.stderr, /Warning: .*not a valid DP-1 playlist/);
+      assert.match(run.stderr, /\/visibility/);
+    } finally {
+      run.cleanup();
+      feed.close();
+    }
+  });
+
+  test('keeps the warning off stdout when the document is piped', async () => {
+    const bad = { ...CONFORMANT, signatures: undefined, signature: undefined };
+    const feed = await startFeed(true, bad);
+    const run = await runCli(feed.baseUrl, ['fetch', 'sample']);
+    try {
+      assert.equal(run.status, 0, `${run.stdout}${run.stderr}`);
+      assert.deepEqual(JSON.parse(run.stdout), JSON.parse(JSON.stringify(bad)));
+      assert.match(run.stderr, /not a valid DP-1 playlist/);
     } finally {
       run.cleanup();
       feed.close();
