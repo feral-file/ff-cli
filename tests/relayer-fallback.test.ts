@@ -205,6 +205,8 @@ describe('relayer fallback', () => {
       assert.equal(result.transport, 'relayer');
       assert.equal(result.error, 'FF1 "Office" is not connected to the relayer right now');
       assert.match(result.details ?? '', /relayer error 1003/);
+      // An FF1 on FF OS from before the keyed relay channel ends here too.
+      assert.match(result.details ?? '', /older FF OS is not on the relay channel/);
       assert.match(result.details ?? '', /nothing was sent/);
       assert.match(result.details ?? '', /not a key or credential problem/);
       assert.match(result.details ?? '', /ff-cli device pair Office/);
