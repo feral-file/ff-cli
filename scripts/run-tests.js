@@ -44,6 +44,10 @@ const tsxCli = join(root, 'node_modules/tsx/dist/cli.mjs');
 const result = spawnSync(process.execPath, [tsxCli, '--test', ...files], {
   stdio: 'inherit',
   cwd: root,
+  // Tests spawn the CLI with gated commands; the required-version read must
+  // never leave the machine. A refused loopback port fails at once and the
+  // check fails open (src/utilities/required-version.ts).
+  env: { REMOTE_CONFIG_URL: 'http://127.0.0.1:1', ...process.env },
 });
 
 process.exit(result.status === null ? 1 : result.status);

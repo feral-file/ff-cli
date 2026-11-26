@@ -66,6 +66,29 @@ GitHub Release text (and any user-facing summary you publish with the version) s
 
 Later releases only need to repeat this block if the engine floor changes again.
 
+### Required version (forcing an update)
+
+ff-cli reads `cli_update.required_version` from the remote config document
+the Feral File app uses (`https://ff-app-docs.pages.dev/ff-app.json`; see
+[Required version](./CONFIGURATION.md#required-version)). Installs below it
+refuse every command that contacts an FF1.
+
+- Raising it is an operator step on that document, done after the release
+  that users must move to is on npm. Set it to a plain `major.minor.patch`.
+- **Say it in the release notes**: below the required version, FF1 commands
+  print "ff-cli <installed> is no longer supported. Update: npm i -g
+  @feralfile/cli" and exit with status 1, on the FF1's own network too.
+  Scripts, CI jobs and agents that call ff-cli will see that non-zero exit
+  until they update.
+- An install picks a change up within a day (one read attempt a day). To
+  withdraw a wrong value, remove the key or lower it: the next successful
+  read replaces what each install kept.
+- It is a compatibility lever, not a security control. Deleting
+  `required-version.json` from the config directory and blocking the config
+  host bypasses it; never rely on it to keep an old client away from an FF1.
+- Releases older than the first one with this check never read the key.
+  Those installs are told by hand.
+
 ## Troubleshooting
 
 ### `404 Not Found - PUT https://registry.npmjs.org/@feralfile%2fcli`

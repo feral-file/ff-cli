@@ -304,6 +304,44 @@ FF_SOURCE_RESOLVER_API_KEY=your-client-key
 SOURCE_RESOLVER_URL=https://ff-source-resolver-service.feral-file.workers.dev
 ```
 
+## Required version
+
+Commands that contact an FF1 check that this ff-cli is still supported:
+`display`, `download`, `ssh`, `report`, and `device pair`, `controllers`,
+`revoke`, `lan`, `unpair` and `add`. Commands that work on files, feeds or
+config.json only (`validate`, `sign`, `build`, `find`, `publish`, `status`,
+`setup`, `device list`, …) are never checked.
+
+When the installed version is below the required one, the command prints
+
+```
+ff-cli <installed> is no longer supported. Update: npm i -g @feralfile/cli
+```
+
+on stderr and exits with status 1 before it does anything, on the FF1's own
+network too. Scripts and agents see the non-zero exit.
+
+How the required version is read:
+
+- It is `cli_update.required_version` in the remote config document the Feral
+  File app also reads, `<base>/ff-app.json`. The base is
+  `https://ff-app-docs.pages.dev`; `REMOTE_CONFIG_URL` in the environment
+  replaces it (there is no config.json key).
+- ff-cli tries to read it at most once a day, failed attempts included, with
+  a 2 second limit, and keeps the result in `required-version.json` next to
+  the user config (`~/.config/ff-cli/`, or `$XDG_CONFIG_HOME/ff-cli/`). The
+  kept value applies until the next read, so the check costs no network on
+  most commands.
+- A read that succeeds always replaces the kept value. A document with no
+  such key, or a value that is not a plain `major.minor.patch`, means no
+  required version.
+- When nothing has been read yet, or the read failed and nothing is kept, or
+  the installed version is not a plain `major.minor.patch` (a beta), the
+  command runs.
+
+This is a compatibility check, not a security control: it tells an install
+that can no longer talk to current FF1 software to update.
+
 ## ff1Devices
 
 Configure devices you want to display art on.

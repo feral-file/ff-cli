@@ -39,6 +39,7 @@ import { deviceCommand } from './src/commands/device';
 import { reportCommand } from './src/commands/report';
 import { hiddenAliasHelp } from './src/commands/helpers/hidden-alias-help';
 import { installRelayPairingChannel } from './src/utilities/control/relay-pairing-channel';
+import { enforceRequiredVersion } from './src/utilities/required-version';
 
 // Load version from package.json. Try the built location first
 // (dist/index.js -> ../package.json) and fall back to dev (./package.json).
@@ -86,4 +87,11 @@ program.addCommand(reportCommand);
 // `device pair` joins its pairing channel on relay v2 when an endpoint is set.
 installRelayPairingChannel();
 
-program.parse();
+// The required-version floor runs before the action of every command that
+// contacts an FF1 (required-version.ts lists them). The hook is async, hence
+// parseAsync: with parse() the action would not wait for it.
+program.hook('preAction', (_program, actionCommand) =>
+  enforceRequiredVersion(actionCommand, packageVersion)
+);
+
+void program.parseAsync();
