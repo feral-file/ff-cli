@@ -767,7 +767,10 @@ function heldTopicGone(outcome: SecureOutcome): boolean {
  * it. Such an enroll is tried on v2 even before any status has advertised
  * relayV2, since a newcomer has never read one; an ambiguous outcome is safe
  * because enroll is idempotent (§5.3). A first-owner enroll with `inv` never
- * goes over v2 (the FF1 refuses it there, §5.1).
+ * goes over v2. That is ff-cli's own rule, not the FF1's: the FF1 admits it
+ * there (§5.1), but ff-cli is not a first-owner client (it has no path that
+ * reads the profile off the claim QR), so it keeps the invitation off the
+ * relay.
  */
 function v2Allowed(request: SecureRequest, record: ControllerRecord, explicit: boolean): boolean {
   if (request.op === 'cmd') {
