@@ -229,6 +229,12 @@ function failureFor(status: number, body: ServiceErrorBody | null): Error {
   return new Error(described);
 }
 
+/** ServiceResponse is a 2xx body with the headers it came with. */
+export interface ServiceResponse<T> {
+  body: T | null;
+  headers: Headers | null;
+}
+
 /**
  * serviceRequest makes one call and returns the parsed 2xx body.
  *
@@ -244,6 +250,25 @@ export async function serviceRequest<T>(
   request: ServiceRequest,
   options: { notFoundAsNull?: boolean } = {}
 ): Promise<T | null> {
+  return (await serviceResponse<T>(request, options)).body;
+}
+
+/**
+ * serviceResponse makes one call and returns the parsed 2xx body with its
+ * response headers, for a route that says something outside the body:
+ * `/tokens` reports the tokens a partial playlist still leaves out in
+ * `X-Tokens-Pending`, which sits outside the signed playlist on purpose.
+ *
+ * @param request - The call to make
+ * @param options - `notFoundAsNull` for routes whose 404 means "no such thing"
+ * @returns The parsed body and headers; body and headers are null for a 404
+ *   when asked
+ * @throws SourceResolverUnavailableError or Error, see failureFor
+ */
+export async function serviceResponse<T>(
+  request: ServiceRequest,
+  options: { notFoundAsNull?: boolean } = {}
+): Promise<ServiceResponse<T>> {
   const url = requestUrl(request);
   const hasBody = request.body !== undefined;
   logger.debug(`[source-resolver] ${hasBody ? 'POST' : 'GET'} ${url}`);
@@ -264,10 +289,10 @@ export async function serviceRequest<T>(
     );
   }
   if (response.ok) {
-    return (await readJson(response, url)) as T;
+    return { body: (await readJson(response, url)) as T, headers: response.headers };
   }
   if (response.status === 404 && options.notFoundAsNull) {
-    return null;
+    return { body: null, headers: null };
   }
   throw failureFor(response.status, await readErrorEnvelope(response, url));
 }
