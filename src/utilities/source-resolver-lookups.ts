@@ -8,7 +8,8 @@
  * Raster's own field names, into items (token-source-raster.ts).
  */
 
-import { TOKENS_TIMEOUT_MS, serviceRequest } from './source-resolver-client';
+import { TOKENS_TIMEOUT_MS, serviceRequest, serviceResponse } from './source-resolver-client';
+import * as logger from '../logger';
 import type { RasterToken } from './token-source-raster';
 
 /** The chains a service record can name. Only the first two are buildable. */
@@ -209,6 +210,30 @@ interface PlaylistItemProvenance {
   provenance?: { contract?: { chain?: string; address?: string; tokenId?: string } };
 }
 
+/** TokensPlaylist is the part of a `/tokens` playlist this module reads. */
+interface TokensPlaylist {
+  title?: string;
+  items?: PlaylistItemProvenance[];
+}
+
+/** PageAnswer is one `/tokens` answer: what it lists and what it still leaves out. */
+interface PageAnswer {
+  page: PageTokens;
+  pending: number;
+}
+
+/**
+ * MAX_PAGE_TOKENS_REQUESTS bounds the `/tokens` requests one page lookup
+ * sends while the service still reports tokens pending.
+ *
+ * The service reads at most 120 tokens from Raster per request for a client
+ * outside its `RATE_LIMIT_SERVER_CLIENTS` (`RASTER_TOKENS_MAX_BATCHES`, 3
+ * batches of 40), so 10 requests cover a 1,200-work page. The cap keeps one
+ * `find` from holding the service's shared Raster budget for an unbounded
+ * page; each request is still bounded by TOKENS_TIMEOUT_MS.
+ */
+export const MAX_PAGE_TOKENS_REQUESTS = 10;
+
 /**
  * lookupPageTokens asks the service which tokens a marketplace page shows,
  * for the pages `/work` cannot express as one work or one series: a
@@ -224,16 +249,80 @@ interface PlaylistItemProvenance {
  * are not reused. DP-1 names Ethereum `evm`; the service builds Ethereum and Tezos only, so
  * `evm` is mapped back to Ethereum here.
  *
+ * A long page also arrives in parts: the service reads a capped number of
+ * tokens per request, leaves the unread ones out, and says how many in
+ * `X-Tokens-Pending`, keeping its progress for the next request. This asks
+ * again while that count falls, up to MAX_PAGE_TOKENS_REQUESTS requests, and
+ * returns the longest answer read, because the service's progress lives in a
+ * shared cache a concurrent request can overwrite, so a later answer can be
+ * shorter. A follow-up that does not lower the count ends the loop (the
+ * service waits out a failing token for 30 s, so an immediate retry only
+ * spends its Raster budget), and so does a follow-up that fails: the first
+ * answer was a usable page, and a later 429 must not cost it.
+ *
  * @param input - The page URL
  * @returns The playlist title and the coordinates on Ethereum and Tezos
  * @throws Error with the service's message when it cannot resolve the page
  */
 export async function lookupPageTokens(input: string): Promise<PageTokens> {
-  const playlist = await serviceRequest<{ title?: string; items?: PlaylistItemProvenance[] }>({
+  let latest = await requestPageTokens(input);
+  let best = latest;
+  let requests = 1;
+  while (latest.pending > 0 && requests < MAX_PAGE_TOKENS_REQUESTS) {
+    let next: PageAnswer;
+    try {
+      next = await requestPageTokens(input);
+    } catch (error) {
+      logger.debug(
+        `[source-resolver] /tokens follow-up failed; keeping ${best.page.coords.length} tokens: ${(error as Error).message}`
+      );
+      break;
+    }
+    requests++;
+    const progressed = next.pending < latest.pending;
+    latest = next;
+    if (next.page.coords.length >= best.page.coords.length) {
+      best = next;
+    }
+    if (!progressed) {
+      break;
+    }
+  }
+  if (best.pending > 0) {
+    logger.debug(
+      `[source-resolver] /tokens left ${best.pending} tokens pending after ${requests} request(s)`
+    );
+  }
+  return best.page;
+}
+
+/**
+ * requestPageTokens makes one `GET /tokens` call for a page.
+ *
+ * @param input - The page URL
+ * @returns The coordinates it lists and the tokens it says are still pending
+ * @throws Error with the service's message when it cannot resolve the page
+ */
+async function requestPageTokens(input: string): Promise<PageAnswer> {
+  const { body, headers } = await serviceResponse<TokensPlaylist>({
     path: '/tokens',
     query: { url: input },
     timeoutMs: TOKENS_TIMEOUT_MS,
   });
+  return {
+    page: { title: body?.title ?? '', coords: playlistCoords(body) },
+    pending: tokensPending(headers),
+  };
+}
+
+/**
+ * playlistCoords reads each item's `provenance.contract` as Ethereum or Tezos
+ * coordinates, skipping items on other chains or without a full contract.
+ *
+ * @param playlist - The `/tokens` playlist
+ * @returns The coordinates, in item order
+ */
+function playlistCoords(playlist: TokensPlaylist | null): TokenRef[] {
   const coords: TokenRef[] = [];
   for (const item of playlist?.items ?? []) {
     const contract = item.provenance?.contract;
@@ -242,7 +331,19 @@ export async function lookupPageTokens(input: string): Promise<PageTokens> {
       coords.push({ chain, contract: contract.address, tokenId: contract.tokenId });
     }
   }
-  return { title: playlist?.title ?? '', coords };
+  return coords;
+}
+
+/**
+ * tokensPending reads `X-Tokens-Pending`. A missing, negative or unreadable
+ * header is 0: nothing is promised beyond what the playlist already lists.
+ *
+ * @param headers - The response headers
+ * @returns How many tokens the playlist still leaves out
+ */
+function tokensPending(headers: Headers | null): number {
+  const value = Number.parseInt(headers?.get('x-tokens-pending')?.trim() ?? '', 10);
+  return Number.isFinite(value) && value > 0 ? value : 0;
 }
 
 /** FeralFileArtworkCoords is a Feral File artwork's token, in the token source's vocabulary. */

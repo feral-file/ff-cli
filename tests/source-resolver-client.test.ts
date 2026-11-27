@@ -17,6 +17,7 @@ import {
   sourceResolverUrl,
 } from '../src/utilities/source-resolver-client';
 import {
+  MAX_PAGE_TOKENS_REQUESTS,
   feralFileArtworkLink,
   lookupFeralFileArtwork,
   lookupPageTokens,
@@ -258,6 +259,92 @@ describe('route wrappers', () => {
       ],
     });
     assert.equal(seen[0].url.pathname, '/tokens');
+  });
+});
+
+describe('lookupPageTokens follows X-Tokens-Pending', () => {
+  /** page builds a /tokens playlist of `count` Tezos tokens with a pending header. */
+  function page(count: number, pending?: string, status = 200): Response {
+    if (status !== 200) {
+      return json({ code: 'RATE_LIMITED', message: 'Try later' }, status);
+    }
+    const items = Array.from({ length: count }, (_, i) => ({
+      provenance: { contract: { chain: 'tezos', address: 'KT1x', tokenId: String(i) } },
+    }));
+    return new Response(JSON.stringify({ title: 'Long', items }), {
+      status,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(pending === undefined ? {} : { 'X-Tokens-Pending': pending }),
+      },
+    });
+  }
+
+  /** answers replies with one scripted response per request, in order. */
+  function answers(...responses: Array<() => Response>): void {
+    respondWith(() => responses[seen.length - 1]());
+  }
+
+  const URL_ = 'https://objkt.com/collections/KT1x';
+
+  test('asks again until the header is gone', async () => {
+    answers(
+      () => page(120, '240'),
+      () => page(240, '120'),
+      () => page(360)
+    );
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 360);
+    assert.equal(seen.length, 3);
+  });
+
+  test('sends one request when nothing is pending', async () => {
+    answers(() => page(5));
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 5);
+    assert.equal(seen.length, 1);
+  });
+
+  test('stops when a follow-up does not lower the count', async () => {
+    answers(
+      () => page(120, '40'),
+      () => page(120, '40'),
+      () => page(999)
+    );
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 120);
+    assert.equal(seen.length, 2);
+  });
+
+  test('keeps the longest answer when a follow-up is shorter', async () => {
+    answers(
+      () => page(240, '120'),
+      () => page(120, '240')
+    );
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 240);
+    assert.equal(seen.length, 2);
+  });
+
+  test('keeps the partial page when a follow-up fails', async () => {
+    answers(
+      () => page(120, '40'),
+      () => page(0, undefined, 429)
+    );
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 120);
+    assert.equal(seen.length, 2);
+  });
+
+  test('sends at most MAX_PAGE_TOKENS_REQUESTS requests', async () => {
+    let n = 0;
+    respondWith(() => {
+      n++;
+      return page(n * 10, String(1000 - n));
+    });
+    assert.equal((await lookupPageTokens(URL_)).coords.length, MAX_PAGE_TOKENS_REQUESTS * 10);
+    assert.equal(seen.length, MAX_PAGE_TOKENS_REQUESTS);
+  });
+
+  test('treats an unreadable header as nothing pending', async () => {
+    answers(() => page(7, 'soon'));
+    assert.equal((await lookupPageTokens(URL_)).coords.length, 7);
+    assert.equal(seen.length, 1);
   });
 });
 

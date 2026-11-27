@@ -293,6 +293,8 @@ FF_SUPPORT_LOGS_URL=https://support-logs.feralfile.com
 
 `find` asks Feral File's source resolver (ff-source-resolver-service) which work a link or coordinate names, which tokens a series or collection page holds, and whether an address belongs to an artist. It is the only thing ff-cli talks to for Raster and the marketplaces, and it holds Raster's API key. With `tokenSource: "raster"`, `build` and `enrich` read Raster's token records through it too. A `feral_file_artwork` requirement in `build` is resolved by it as well. Neort links are the one exception: Neort is off-chain and the service does not cover it, so `find` reads Neort's API directly.
 
+The service reads a long collection or show page from Raster in parts (at most 120 tokens per request for most clients) and says how many it has not read yet. `find` asks again while that number falls, up to 10 requests (about 1,200 works), and builds from the longest answer it got. A page still partial after that is built from what was read.
+
 Published releases carry ff-cli's own client key for the service; no configuration is needed. When the service refuses, fails, or cannot be reached, `find` says so and continues without it: a token link or coordinate builds a one-item playlist, and a wallet address lists the wallet's holdings through the indexer. A link only the service can read (a series page, a collection, a `raster.art/artwork/…` link) fails with a message saying so.
 
 ```env
