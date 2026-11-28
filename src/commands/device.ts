@@ -22,6 +22,7 @@ import {
 import { persistDeviceRemoval } from './helpers/device-removal';
 import { fetchWithTimeout } from '../utilities/http';
 import { readDeviceStatus } from '../utilities/support-report';
+import { normalizeDeviceId } from '../utilities/control/controller-store';
 import { lanReadTimeoutMs } from '../utilities/control/pairing';
 
 /** DEVICE_ID_STATUS_TIMEOUT_MS bounds the status read that names a manually added FF1 at an
@@ -191,9 +192,11 @@ deviceCommand
 
       let hostValue = '';
       let discoveredName = '';
-      const suppliedId = options.id?.trim().toUpperCase();
-      if (suppliedId && !/^FF1-[A-Z0-9]{4,}$/.test(suppliedId)) {
-        throw new Error('Device ID must use the FF1-XXXXXXXX format');
+      const suppliedId = options.id ? normalizeDeviceId(options.id) : undefined;
+      if (suppliedId && !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(suppliedId)) {
+        throw new Error(
+          'Device ID must contain 1-64 letters, digits, underscores or hyphens, starting with a letter or digit'
+        );
       }
       if (suppliedId && !options.host) {
         throw new Error('--id is only needed with --host; discovered devices provide their ID');
@@ -314,40 +317,36 @@ deviceCommand
         }
       }
 
-      // A manual host has no discovered ID, and pairing needs one: without it
-      // `device pair` sent the user back here, which stored none again. The
-      // LAN status names the device; like an mDNS record it is unauthenticated
-      // and only labels the entry. It never replaces a stored ID: the rows this
-      // update can land on (the matched one, else upsertDevice's same-host or
-      // same-name row) are left alone when one already has an ID, and an ID
-      // another row already holds is not recorded here (that would merge the
-      // two rows or orphan a controller record keyed by the old ID).
+      // LAN status is only an address/identity hint. Never replace a stored
+      // identity from it: refuse conflicts so an explicit --id is required.
+      // Check even existing rows, since DHCP can reuse their address.
       if (options.host && !discoveredId) {
         const targets =
           existingIndex !== -1
             ? [existingDevices[existingIndex]]
             : existingDevices.filter((d) => d.host === hostValue || d.name === deviceName);
-        if (!targets.some((d) => d.id)) {
-          const { device: status } = await readDeviceStatus(
-            { name: deviceName, host: hostValue, apiKey: targets[0]?.apiKey },
-            (input, init) =>
-              fetchWithTimeout(
-                input,
-                init ?? {},
-                lanReadTimeoutMs(hostValue, DEVICE_ID_STATUS_TIMEOUT_MS)
-              )
-          );
-          const statusId = status.device_id?.trim().toUpperCase();
-          const holder = statusId
-            ? existingDevices.find(
-                (d) => !targets.includes(d) && d.id?.trim().toUpperCase() === statusId
-              )
-            : undefined;
-          if (!statusId || !/^FF1-[A-Z0-9]{4,}$/.test(statusId)) {
-            console.log(
-              chalk.dim('Could not read a device ID from the FF1; pairing needs --id FF1-XXXXXXXX.')
+        const { device: status } = await readDeviceStatus(
+          { name: deviceName, host: hostValue, apiKey: targets[0]?.apiKey },
+          (input, init) =>
+            fetchWithTimeout(
+              input,
+              init ?? {},
+              lanReadTimeoutMs(hostValue, DEVICE_ID_STATUS_TIMEOUT_MS)
+            )
+        );
+        const statusId = status.device_id ? normalizeDeviceId(status.device_id) : undefined;
+        if (statusId && /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(statusId)) {
+          const conflict = targets.find((d) => d.id && normalizeDeviceId(d.id) !== statusId);
+          if (conflict) {
+            throw new Error(
+              `The FF1 at ${hostValue} reports ${JSON.stringify(statusId)}, but the saved entry has ID ${JSON.stringify(conflict.id)}. ` +
+                `Verify the device in the app, then repeat device add with --id ${JSON.stringify(statusId)} if this is the intended device. No changes made.`
             );
-          } else if (holder) {
+          }
+          const holder = existingDevices.find(
+            (d) => !targets.includes(d) && d.id && normalizeDeviceId(d.id) === statusId
+          );
+          if (holder) {
             console.log(
               chalk.yellow(
                 `The FF1 at ${hostValue} reports ${statusId}, which is already configured as "${holder.name || holder.host}". ` +
@@ -358,6 +357,10 @@ deviceCommand
             discoveredId = statusId;
             console.log(chalk.dim(`Device ID ${statusId} from the FF1's LAN status.`));
           }
+        } else if (!targets.some((d) => d.id)) {
+          console.log(
+            chalk.dim('Could not read a device ID from the FF1; pairing needs --id <device-id>.')
+          );
         }
       }
 

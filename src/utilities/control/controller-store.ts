@@ -146,7 +146,7 @@ export function controllerFilePath(deviceId: string, options: ControllerStoreOpt
 
 /**
  * normalizeDeviceId is the one spelling of a device ID the store uses: trimmed
- * and upper case, matching the topic store and the device's own hostname
+ * and upper case for FF1-prefixed IDs, matching the device's own hostname
  * (FF1-XXXXXXXX). A hand-edited config.json may carry `ff1-abc`; without this
  * the file written under the profile's upper-case `dev` would not be found.
  *
@@ -154,7 +154,10 @@ export function controllerFilePath(deviceId: string, options: ControllerStoreOpt
  * @returns Normalized ID
  */
 export function normalizeDeviceId(deviceId: string): string {
-  return deviceId.trim().toUpperCase();
+  const trimmed = deviceId.trim();
+  // Custom FF OS IDs are protocol strings, not hardware serial numbers.
+  // Changing their case makes the owner's profile fail the exact dev check.
+  return /^ff1-/i.test(trimmed) ? trimmed.toUpperCase() : trimmed;
 }
 
 /**

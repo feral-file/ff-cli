@@ -1,3 +1,4 @@
+import { normalizeDeviceId } from './control/controller-store';
 import { Entry } from '@napi-rs/keyring';
 
 const TOPIC_STORE_SERVICE = 'com.feralfile.ff-cli.topic';
@@ -15,7 +16,7 @@ const defaultEntryFactory: KeyringEntryFactory = (service, account) => new Entry
 
 /** Normalize a physical FF1 identifier into its one keyring account name. */
 export function topicStoreAccount(deviceId: string): string {
-  const normalized = deviceId.trim().toUpperCase();
+  const normalized = normalizeDeviceId(deviceId);
   if (!normalized) {
     throw new Error('FF1 device ID is required for secure topic storage');
   }

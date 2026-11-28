@@ -43,6 +43,17 @@ describe('topic store', () => {
     assert.equal(getTopicId('FF1-SKYZ2E3A', factory), null);
   });
 
+  test('custom device IDs use separate credential entries with their exact case', () => {
+    const values = new Map<string, string>();
+    const factory: KeyringEntryFactory = (service, account) =>
+      new MemoryEntry(values, `${service}:${account}`);
+    storeTopicId('studio-display', 'lower-topic', factory);
+    storeTopicId('Studio-Display', 'mixed-topic', factory);
+    assert.equal(getTopicId('studio-display', factory), 'lower-topic');
+    assert.equal(getTopicId('Studio-Display', factory), 'mixed-topic');
+    assert.equal(values.size, 2);
+  });
+
   test('rejects empty device and topic identifiers', () => {
     const factory: KeyringEntryFactory = () => new MemoryEntry(new Map(), 'unused');
     assert.throws(() => storeTopicId('', 'topic', factory), /device ID is required/);

@@ -1,3 +1,5 @@
+import { normalizeDeviceId } from './control/controller-store';
+
 export interface DeviceEntry {
   host: string;
   name?: string;
@@ -85,7 +87,7 @@ export function upsertDevice(
   const devices = [...existingDevices];
   const normalizedNewDevice = {
     ...newDevice,
-    id: newDevice.id?.trim().toUpperCase(),
+    id: newDevice.id ? normalizeDeviceId(newDevice.id) : undefined,
   };
   const patch = withoutUndefined(normalizedNewDevice);
 
@@ -99,7 +101,7 @@ export function upsertDevice(
   // Case 1: same mDNS device ID — update in-place even when host changed.
   if (normalizedNewDevice.id) {
     const sameIdIndex = devices.findIndex(
-      (d) => d.id?.trim().toUpperCase() === normalizedNewDevice.id
+      (d) => d.id && normalizeDeviceId(d.id) === normalizedNewDevice.id
     );
     if (sameIdIndex !== -1) {
       const isSameHost = devices[sameIdIndex].host === newDevice.host;
